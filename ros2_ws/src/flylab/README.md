@@ -47,6 +47,8 @@ ros2 launch flylab sim_fly.launch.py
 ros2 launch flylab depth_mapping.launch.py
 ```
 
+> **AirSim 端配置**：不同场景需要不同的传感器配置，见 `configs/` 目录。把对应 json 复制为 Windows 端 `Documents\AirSim\settings.json` 后**重启 UE**（AirSim 只在启动时读取一次该文件）。
+
 launch 内容（`sim_fly` = 仿真飞行基础场景，对应原课程 lesson3）：`airsim_node`（借用 airsim_ros_pkgs 原包）+ `move_velocity` + 两个 rviz（深度点云 / 相机+雷达）。
 
 ## launch 一览（按功能域分目录）
@@ -107,6 +109,10 @@ ros2 topic pub -r 10 /flylab/cmd_vel geometry_msgs/msg/Twist "{linear: {z: -6.0}
 flylab/
 ├── CMakeLists.txt
 ├── package.xml
+├── configs/            # AirSim 端 settings.json（按场景，使用时需重启 UE 加载）
+│   ├── fly.json        #   sim_fly 用：全套相机+雷达
+│   ├── mapping.json    #   建图链路用：仅 CameraDepth 深度相机
+│   └── settings.json   #   双目基础配置（left_cam/right_cam）
 ├── src/                # C++ 节点
 │   └── move_velocity.cpp
 ├── launch/             # 按功能域分目录（ros2 launch 会递归搜索）

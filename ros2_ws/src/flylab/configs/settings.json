@@ -1,0 +1,148 @@
+{
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor",
+  "ClockType": "SteppableClock",
+  "ClockSpeed": 1,
+  "ViewMode": "",
+  "RpcEnabled": true,
+  "ApiServerPort": 41451,
+  "LogMessagesVisible": true,
+  "EngineSound": false,
+  "OriginGeopoint": {
+    "Latitude": 47.641468,
+    "Longitude": -122.140165,
+    "Altitude": 122
+  },
+  "TimeOfDay": {
+    "Enabled": false,
+    "StartDateTime": "",
+    "CelestialClockSpeed": 1,
+    "StartDateTimeDst": false,
+    "UpdateIntervalSecs": 60
+  },
+  "CameraDefaults": {
+    "CaptureSettings": [
+      {
+        "ImageType": 0,
+        "Width": 640,
+        "Height": 480,
+        "FOV_Degrees": 90,
+        "TargetGamma": 1.0,
+        "MotionBlurAmount": 0,
+        "AutoExposureMethod": 0,
+        "AutoExposureCompensation": 0
+      }
+    ],
+    "NoiseSettings": [
+      {
+        "Enabled": false,
+        "ImageType": 0
+      }
+    ]
+  },
+  "Vehicles": {
+    "PX4": {
+      "VehicleType": "PX4Multirotor",
+      "DefaultVehicleState": "Disarmed",
+      "AllowAPIAlways": true,
+      "UseSerial": false,
+      "LockStep": true,
+      "UseTcp": true,
+      "TcpPort": 4560,
+      "UdpPort": 14560,
+      "ControlIp": "172.26.53.153",
+      "ControlPortLocal": 14540,
+      "ControlPortRemote": 14580,
+      "UdpIp": "172.26.53.153",
+      "LocalHostIp": "0.0.0.0",
+      "LogViewerHostIp": "127.0.0.1",
+      "LogViewerPort": 14388,
+      "QgcHostIp": "127.0.0.1",
+      "QgcPort": 14550,
+      "OffboardSysID": 134,
+      "OffboardCompID": 1,
+      "VehicleSysID": 135,
+      "VehicleCompID": 1,
+      "SimSysID": 142,
+      "SimCompID": 42,
+      "Sensors": {
+        "Imu": {
+          "SensorType": 2,
+          "Enabled": true,
+          "RotationalVariance": 0.0002,
+          "LinearAccelerationVariance": 0.0015,
+          "LinearAccelerationBiasStd": 0.0003,
+          "AngularRandomWalk": 0.008,
+          "VelocityRandomWalk": 0.008
+        },
+        "Gps": {
+          "SensorType": 3,
+          "Enabled": true,
+          "EphTimeConstantSec": 0.9,
+          "EphInitialStdev": 1.0,
+          "EphDriftStdev": 0.02,
+          "EphFinalStdev": 0.0001,
+          "EphMin3d": 3.0,
+          "EphMin2d": 2.0,
+          "UpdateRateHz": 50
+        },
+        "Barometer": {
+          "SensorType": 1,
+          "Enabled": true,
+          "PressureFactorSigma": 0.0001825,
+          "PressureFactorTau": 3600
+        },
+        "Magnetometer": {
+          "SensorType": 4,
+          "Enabled": true
+        }
+      },
+      "Cameras": {
+        "left_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "TargetGamma": 1.0,
+              "MotionBlurAmount": 0
+            }
+          ],
+          "X": 0.1,
+          "Y": -0.05,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0
+        },
+        "right_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "TargetGamma": 1.0,
+              "MotionBlurAmount": 0
+            }
+          ],
+          "X": 0.1,
+          "Y": 0.05,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0
+        }
+      },
+      "Parameters": {
+        "NAV_RCL_ACT": 0,
+        "NAV_DLL_ACT": 0,
+        "COM_OBL_ACT": 1,
+        "COM_OBL_RC_ACT": 0,
+        "LPE_LAT": 47.641468,
+        "LPE_LON": -122.140165
+      }
+    }
+  }
+}

@@ -1,0 +1,266 @@
+{
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor",
+  "ClockType": "SteppableClock",
+  "ClockSpeed": 1,
+  "ViewMode": "",
+  "RpcEnabled": true,
+  "ApiServerPort": 41451,
+  "LogMessagesVisible": true,
+  "EngineSound": false,
+  "OriginGeopoint": {
+    "Latitude": 47.641468,
+    "Longitude": -122.140165,
+    "Altitude": 122
+  },
+  "TimeOfDay": {
+    "Enabled": false,
+    "StartDateTime": "",
+    "CelestialClockSpeed": 1,
+    "StartDateTimeDst": false,
+    "UpdateIntervalSecs": 60
+  },
+  "CameraDefaults": {
+    "CaptureSettings": [
+      {
+        "ImageType": 0,
+        "Width": 640,
+        "Height": 480,
+        "FOV_Degrees": 90,
+        "TargetGamma": 1.0,
+        "MotionBlurAmount": 0,
+        "AutoExposureMethod": 0,
+        "AutoExposureCompensation": 0
+      }
+    ],
+    "NoiseSettings": [
+      {
+        "Enabled": false,
+        "ImageType": 0
+      }
+    ]
+  },
+  "Vehicles": {
+    "PX4": {
+      "VehicleType": "PX4Multirotor",
+      "DefaultVehicleState": "Disarmed",
+      "AllowAPIAlways": true,
+      "UseSerial": false,
+      "LockStep": true,
+      "UseTcp": true,
+      "TcpPort": 4560,
+      "UdpPort": 14560,
+      "ControlIp": "172.26.53.153",
+      "ControlPortLocal": 14540,
+      "ControlPortRemote": 14580,
+      "UdpIp": "172.26.53.153",
+      "LocalHostIp": "0.0.0.0",
+      "LogViewerHostIp": "127.0.0.1",
+      "LogViewerPort": 14388,
+      "QgcHostIp": "127.0.0.1",
+      "QgcPort": 14550,
+      "OffboardSysID": 134,
+      "OffboardCompID": 1,
+      "VehicleSysID": 135,
+      "VehicleCompID": 1,
+      "SimSysID": 142,
+      "SimCompID": 42,
+      "Sensors": {
+        "Magnetometer": {
+          "SensorType": 4,
+          "Enabled": true
+        },
+        "Barometer": {
+          "SensorType": 1,
+          "Enabled": true,
+          "PressureFactorSigma": 0.0001825
+        },
+        "Imu": {
+          "SensorType": 2,
+          "Enabled": true,
+          "AngularRandomWalk": 0.3,
+          "GyroBiasStabilityTau": 500,
+          "GyroBiasStability": 4.6,
+          "VelocityRandomWalk": 0.24,
+          "AccelBiasStabilityTau": 800,
+          "AccelBiasStability": 36
+        },
+        "Gps": {
+          "SensorType": 3,
+          "Enabled": true,
+          "EphTimeConstant": 0.9,
+          "EpvTimeConstant": 0.9,
+          "EphInitial": 25,
+          "EpvInitial": 25,
+          "EphFinal": 0.1,
+          "EpvFinal": 0.1,
+          "EphMin3d": 3,
+          "EphMin2d": 4,
+          "UpdateLatency": 0.2,
+          "UpdateFrequency": 50,
+          "StartupDelay": 1
+        },
+        "Lidar": {
+          "SensorType": 6,
+          "Enabled": true,
+          "NumberOfChannels": 16,
+          "RotationsPerSecond": 10,
+          "PointsPerSecond": 100000,
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0,
+          "VerticalFOVUpper": 10,
+          "VerticalFOVLower": -10,
+          "HorizontalFOVStart": -20,
+          "HorizontalFOVEnd": 20,
+          "DrawDebugPoints": true,
+          "DataFrame": "SensorLocalFrame"
+        },
+        "DistanceDown": {
+          "SensorType": 5,
+          "Enabled": true,
+          "MinDistance": 0.1,
+          "MaxDistance": 40,
+          "X": 0,
+          "Y": 0,
+          "Z": -0.5,
+          "Yaw": 0,
+          "Pitch": -90,
+          "Roll": 0,
+          "DrawDebugPoints": true,
+          "ExternalController": true
+        }
+      },
+      "Cameras": {
+        "CameraDepth": {
+          "CaptureSettings": [
+            {
+              "ImageType": 2,
+              "Width": 800,
+              "Height": 600,
+              "FOV_Degrees": 120,
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0,
+              "AutoExposureMaxBrightness": 0.64,
+              "AutoExposureMinBrightness": 0.03,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0,
+              "ProjectionMode": "",
+              "OrthoWidth": 5.12
+            }
+          ],
+          "NoiseSettings": [
+            {
+              "Enabled": false,
+              "ImageType": 0,
+              "RandContrib": 0.2,
+              "RandSpeed": 100000.0,
+              "RandSize": 500.0,
+              "RandDensity": 2,
+              "HorzWaveContrib": 0.03,
+              "HorzWaveStrength": 0.08,
+              "HorzWaveVertSize": 1.0,
+              "HorzWaveScreenSize": 1.0,
+              "HorzNoiseLinesContrib": 1.0,
+              "HorzNoiseLinesDensityY": 0.01,
+              "HorzNoiseLinesDensityXY": 0.5,
+              "HorzDistortionContrib": 1.0,
+              "HorzDistortionStrength": 0.002
+            }
+          ],
+          "Gimbal": {
+            "Stabilization": 0,
+            "Pitch": 0,
+            "Roll": 0,
+            "Yaw": 0
+          },
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "Pitch": 0,
+          "Roll": 0,
+          "Yaw": 0,
+          "UnrealEngine": {
+            "PixelFormatOverride": [
+              {
+                "ImageType": 0,
+                "PixelFormat": 0
+              }
+            ]
+          }
+        },
+        "CameraImage": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 800,
+              "Height": 600,
+              "FOV_Degrees": 120,
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0,
+              "AutoExposureMaxBrightness": 0.64,
+              "AutoExposureMinBrightness": 0.03,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0,
+              "ProjectionMode": "",
+              "OrthoWidth": 5.12
+            }
+          ],
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "Pitch": 0,
+          "Roll": 0,
+          "Yaw": 0
+        },
+        "left_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "TargetGamma": 1.0,
+              "MotionBlurAmount": 0
+            }
+          ],
+          "X": 0.1,
+          "Y": -0.05,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0
+        },
+        "right_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "TargetGamma": 1.0,
+              "MotionBlurAmount": 0
+            }
+          ],
+          "X": 0.1,
+          "Y": 0.05,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0
+        }
+      },
+      "Parameters": {
+        "NAV_RCL_ACT": 0,
+        "NAV_DLL_ACT": 0,
+        "COM_OBL_ACT": 1,
+        "COM_OBL_RC_ACT": 0,
+        "LPE_LAT": 47.641468,
+        "LPE_LON": -122.140165
+      }
+    }
+  }
+}
