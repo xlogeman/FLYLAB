@@ -63,7 +63,7 @@ def generate_launch_description():
             output='screen')
 
     # 启动 vins_estimator 原始数据（绿色轨迹）
-    config_path = "/home/hw/sitl/hw-ros2/ros2/src/vins/config/ytjy/lesson8_extrinsics.yaml"
+    config_path = "/root/fucker/ros2_ws/src/vins/config/ytjy/lesson8_extrinsics.yaml"
     vins_estimator_node = launch_ros.actions.Node(
             package='vins',
             executable='vins_node',
@@ -105,13 +105,13 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     # Create the launch description and populate
-    #ld.add_action(airsim_node_launch)
-    #ld.add_action(gps_throttle_node)
+    ld.add_action(airsim_node_launch)
+    ld.add_action(gps_throttle_node)
     ld.add_action(static_tf_map_to_world)
     ld.add_action(lesson8_rviz_node)
-    #ld.add_action(vins_estimator_node)
-    #ld.add_action(loop_fusion_node)
-    #ld.add_action(global_fusion_node)
+    ld.add_action(vins_estimator_node)
+    ld.add_action(loop_fusion_node)
+    ld.add_action(global_fusion_node)
     ld.add_action(hw_vins_switch_node)
     
     return ld

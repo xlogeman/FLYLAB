@@ -82,19 +82,29 @@ def generate_launch_description():
 
     # 启动 global_fusion GPS融合（白色轨迹）
     global_fusion_node = launch_ros.actions.Node(
-            package='global_fusion',
-            executable='global_fusion_node',
-            name='global_fusion',
-            namespace='global_fusion',
-            output='screen',
-            parameters=[
-                {'gps_type': 0}  # 0: GPS数据是经纬度(NavSatFix), 1: 已经是XY坐标
-            ],
-            remappings=[
-                ('/gps', '/airsim_node/PX4/gps/gps_throttled')
-            ]
+        package='global_fusion',
+        executable='global_fusion_node',
+        name='global_fusion',
+        namespace='global_fusion',
+        output='screen',
+        parameters=[
+            {'gps_type': 0}  # 0: GPS数据是经纬度(NavSatFix), 1: 已经是XY坐标
+        ],
+        remappings=[
+            ('/gps', '/airsim_node/PX4/gps/gps_throttled')
+        ]
     )
-  
+
+    # VINS 起飞联动开关: 监听 arming 状态, 起飞时开 IMU/相机并重启 VINS, 降落时关闭
+    # use_stereo=False → 单目模式, 起飞时相机开关发 false(=单目左相机), 不会被误切到双目
+    vins_switch_node = Node(
+        package='flylab',
+        executable='vins_arming_switch',
+        name='vins_arming_switch',
+        output='screen',
+        parameters=[{'use_stereo': False}]
+    )
+
     # Create the launch description and populate
     ld = LaunchDescription()
 
@@ -106,6 +116,6 @@ def generate_launch_description():
     ld.add_action(vins_estimator_node)
     ld.add_action(loop_fusion_node)
     ld.add_action(global_fusion_node)
+    ld.add_action(vins_switch_node)
     
     return ld
-

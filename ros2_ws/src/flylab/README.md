@@ -25,7 +25,7 @@ PX4 + AirSim SITL 无人机仿真工具包。从 [ytjy-sitl] 课程体系（hw_i
 source /opt/ros/humble/setup.bash
 export MAKEFLAGS=-j2                        # WSL 下必须限制并行度
 cd <workspace>                              # colcon 工作空间根目录
-colcon build --packages-select flylab --parallel-workers 2
+colcon build --parallel-workers 2
 source install/setup.bash
 ```
 
@@ -63,8 +63,10 @@ launch/
 │   ├── cloud_to_map.launch.py
 │   ├── dynamic_mapping.launch.py
 │   └── colored_mapping.launch.py
-└── vins_mono/    # 视觉惯性里程计类
-    └── vins_mono.launch.py
+├── vins_mono/    # 视觉惯性里程计类
+│   └── vins_mono.launch.py
+└── vins_stereo/  # 视觉惯性里程计类（双目）
+    └── vins_stereo.launch.py
 ```
 
 | launch | 用途 |
@@ -76,6 +78,7 @@ launch/
 | `mapping/dynamic_mapping.launch.py` | 完整建图 + `octomap_dynamic` 动态清理节点 |
 | `mapping/colored_mapping.launch.py` | 彩色点云（xyzrgb）版建图 |
 | `vins_mono/vins_mono.launch.py` | 单目 VIO + GPS 全局融合（原课程 lesson7），见下文 |
+| `vins_stereo/vins_stereo.launch.py` | 双目 VIO + GPS 全局融合（原课程 lesson8），见下文 |
 
 > `ros2 launch flylab <文件名>` 会递归搜索子目录，调用时**不需要带目录前缀**。
 
@@ -89,7 +92,7 @@ VINS-Fusion 单目+IMU 里程计，`loop_fusion` 回环，`global_fusion` 融合
 ros2 launch flylab vins_mono.launch.py
 ```
 
-**launch 内容**：`airsim_node`（借用 airsim_ros_pkgs）+ `topic_tools/throttle`（GPS 100Hz→5Hz）+ 静态 TF（world→map、map→PX4_odom、world_ned→world）+ `vins_node` / `loop_fusion_node` / `global_fusion_node` + rviz。
+**launch 内容**：`airsim_node`（借用 airsim_ros_pkgs）+ `topic_tools/throttle`（GPS 100Hz→5Hz）+ 静态 TF（world→map、map→PX4_odom、world_ned→world）+ `vins_node` / `loop_fusion_node` / `global_fusion_node` + `vins_arming_switch`（起飞联动，`use_stereo:=False` 单目模式，见 vins_stereo 小节）+ rviz。
 
 **包内配置**（`configs/vins_mono/`，随包分发、自包含）：
 
@@ -105,6 +108,34 @@ ros2 launch flylab vins_mono.launch.py
 - 外参 `body_T_cam0`：平移 前 0.4m / 左 0.08m，旋转含 36.87° 下俯（sin=0.6, cos=0.8），NED 体坐标系
 - `estimate_extrinsic: 0`（外参锁定）。若轨迹异常，可改为 `1` 让 VINS 在线微调外参兜底
 - VIO 输出日志在 `flylab/log/`（`vio.csv`、`pose_graph/`），目录需已存在
+
+### vins_stereo —— 双目 VIO + GPS 全局融合（原课程 lesson8）
+
+VINS-Fusion 双目+IMU 里程计，`loop_fusion` 回环，`global_fusion` 融合 GPS，三色轨迹（绿=VIO / 红=回环 / 白=GPS 融合），比 vins_mono 多一个 `vins_arming_switch` 联动节点。
+
+**前置条件**：与 vins_mono 相同（UE 场景、PX4 SITL、飞机起飞后有移动激励）。
+
+```bash
+ros2 launch flylab vins_stereo.launch.py
+```
+
+**launch 内容**：`airsim_node` + `topic_tools/throttle`（GPS→1Hz）+ 静态 TF（world_enu→world）+ `vins_node` / `loop_fusion_node` / `global_fusion_node` + `vins_arming_switch`（C++ 节点，见下）+ rviz。
+
+**vins_arming_switch**：起飞/降落联动开关。监听 `/fmu/out/vehicle_status`，解锁时向 VINS 发送"开 IMU + 开相机 + 重启"，降落时发送"关 IMU + 关相机 + 重置"，保证 VINS 工作区间与飞行区间对齐、初始化状态干净。参数 `use_stereo` 控制起飞时相机开关的值（双目 true / 单目 false）。
+
+**包内配置**（`configs/vins_stereo/`，随包分发、自包含）：
+
+| 文件 | 用途 |
+|---|---|
+| `stereo_extrinsics.yaml` | VINS 参数：话题、IMU 噪声、双目外参（内参文件须与其同目录） |
+| `stereo_intrinsics.yaml` | left_cam/right_cam 共用内参（PINHOLE，fx=fy=200，400x300 FOV90） |
+
+双目端 AirSim 参数沿用 `configs/settings.json`（left_cam/right_cam 双目基础配置），复制到 Windows 端后重启 UE。
+
+**关键参数（已按实际装机校准）**：
+
+- 图像订阅 `/airsim_node/PX4/left_cam/Scene` 与 `/airsim_node/PX4/right_cam/Scene`
+- 双目基线 0.16m（Y=∓0.08m），外参与 AirSim 端相机位姿（Pitch -36.87°）严格对应，`estimate_extrinsic: 0` 锁定
 
 ## 节点说明
 
@@ -139,22 +170,26 @@ ros2 topic pub -r 10 /flylab/cmd_vel geometry_msgs/msg/Twist "{linear: {z: -6.0}
 flylab/
 ├── CMakeLists.txt
 ├── package.xml
-├── configs/            # AirSim 端 settings.json（按场景，使用时需重启 UE 加载）
+├── configs/            # AirSim 端 settings.json
 │   ├── fly.json        #   sim_fly 用：全套相机+雷达
 │   ├── mapping.json    #   建图链路用：仅 CameraDepth 深度相机
 │   ├── settings.json   #   双目基础配置（left_cam/right_cam）
-│   └── vins_mono/      #   vins_mono 用：AirSim settings.json + VINS 参数 + 相机内参 + 日志目录约定
+│   ├── vins_mono/      #   vins_mono 用：AirSim settings.json + VINS 参数 + 相机内参
+│   └── vins_stereo/    #   vins_stereo 用：VINS 双目外参 + 内参
 ├── src/                # C++ 节点
 │   ├── move_velocity.cpp
-│   └── octomap_dynamic.cpp
+│   ├── octomap_dynamic.cpp
+│   └── vins_arming_switch.cpp
 ├── log/                # VINS 运行输出（vio.csv / pose_graph/），不入库
 ├── launch/             # 按功能域分目录（ros2 launch 会递归搜索）
 │   ├── fly/            #   飞行控制类
 │   │   └── sim_fly.launch.py
 │   ├── mapping/        #   感知建图类
 │   │   └── depth_mapping.launch.py 等 5 个
-│   └── vins_mono/      #   视觉惯性里程计类
-│       └── vins_mono.launch.py
+│   ├── vins_mono/      #   视觉惯性里程计类（单目）
+│   │   └── vins_mono.launch.py
+│   └── vins_stereo/    #   视觉惯性里程计类（双目）
+│       └── vins_stereo.launch.py
 └── rviz/               # 与 launch/ 分目录对应
     ├── fly/
     │   ├── depth_cloud.rviz
@@ -162,8 +197,10 @@ flylab/
     ├── mapping/
     │   ├── depth_mapping.rviz
     │   └── colored_mapping.rviz
-    └── vins_mono/
-        └── vins_mono.rviz
+    ├── vins_mono/
+    │   └── vins_mono.rviz
+    └── vins_stereo/
+        └── vins_stereo.rviz
 ```
 
 ## 话题接口约定（提前冻结）
@@ -194,7 +231,7 @@ flylab/
 | lesson4 感知链路 (octomap_dynamic 等) | `src/octomap_dynamic.cpp` + `launch/depth_mapping.launch.py` 等 5 个 + `rviz/depth_mapping.rviz` 等 | ✅ |
 | lesson7 VINS+GPS 融合 | `launch/vins_mono/` + `rviz/vins_mono/` + `configs/vins_mono/`（VINS 配置随包分发，外参按实际装机校准） | ✅ |
 | lesson5 多机 (multi_move_velocity) | 待定 | ⬜ |
-| 双目 VINS (vins_stereo) | `launch/vins_stereo/` 等（沿用 vins_mono 目录结构，settings.json 双目模式） | ⬜ |
+| 双目 VINS (vins_stereo) | `launch/vins_stereo/` + `rviz/vins_stereo/` + `configs/vins_stereo/` + `src/vins_arming_switch.cpp`（settings.json 双目模式） | ✅ |
 | lesson12/13 EGO 跟踪器 | `src/ego_tracker.cpp`（待建，按上方接口约定实现） | ⬜ |
 | airsim_node (C++) | 暂不移植，include airsim_ros_pkgs | ⬜ |
 

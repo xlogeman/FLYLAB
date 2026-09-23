@@ -33,9 +33,19 @@ ament_target_dependencies(octomap_dynamic
 add_executable(move_velocity src/move_velocity.cpp)
 ament_target_dependencies(move_velocity ${FLYLAB_DEPENDENCIES})
 
+# VINS 起飞联动开关: 监听 /fmu/out/vehicle_status,
+# 在 arming/disarming 时开关 VINS 的 IMU/相机并重启估计器 (mono/stereo 共用)
+add_executable(vins_arming_switch src/vins_arming_switch.cpp)
+ament_target_dependencies(vins_arming_switch
+  rclcpp
+  px4_msgs
+  std_msgs
+)
+
 install(TARGETS
   move_velocity
   octomap_dynamic
+  vins_arming_switch
   DESTINATION lib/${PROJECT_NAME}
 )
 
