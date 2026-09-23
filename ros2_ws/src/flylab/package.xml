@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>flylab</name>
+  <version>0.2.0</version>
+  <description>PX4 + AirSim SITL course toolkit: C++ offboard control nodes, launch files and rviz configs, refactored from the ytjy-sitl lessons for sharing.</description>
+  <maintainer email="xlogeman@gmail.com">xlogeman</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>px4_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>octomap_msgs</depend>
+
+  <!-- lesson4 感知链路运行时依赖（外部节点，launch 中使用） -->
+  <exec_depend>depth_image_proc</exec_depend>
+  <exec_depend>octomap_server</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
