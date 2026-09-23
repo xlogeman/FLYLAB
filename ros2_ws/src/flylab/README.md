@@ -35,7 +35,7 @@ source install/setup.bash
 #先启动 UE/AirSim 场景
 
 # 运行 px4
-bash /root/fucker/scripts/bare/run-px4.sh
+bash /root/fucker/scripts/bare/fucker-run-px4.sh
 # 或
 make px4_sitl_default none_iris
 
@@ -57,12 +57,14 @@ launch 内容（`sim_fly` = 仿真飞行基础场景，对应原课程 lesson3�
 launch/
 ├── fly/          # 飞行控制类
 │   └── sim_fly.launch.py
-└── mapping/      # 感知建图类
-    ├── depth_mapping.launch.py
-    ├── depth_to_cloud.launch.py
-    ├── cloud_to_map.launch.py
-    ├── dynamic_mapping.launch.py
-    └── colored_mapping.launch.py
+├── mapping/      # 感知建图类
+│   ├── depth_mapping.launch.py
+│   ├── depth_to_cloud.launch.py
+│   ├── cloud_to_map.launch.py
+│   ├── dynamic_mapping.launch.py
+│   └── colored_mapping.launch.py
+└── vins_mono/    # 视觉惯性里程计类
+    └── vins_mono.launch.py
 ```
 
 | launch | 用途 |
@@ -73,8 +75,36 @@ launch/
 | `mapping/cloud_to_map.launch.py` | 分段调试：仅 点云→占据地图 |
 | `mapping/dynamic_mapping.launch.py` | 完整建图 + `octomap_dynamic` 动态清理节点 |
 | `mapping/colored_mapping.launch.py` | 彩色点云（xyzrgb）版建图 |
+| `vins_mono/vins_mono.launch.py` | 单目 VIO + GPS 全局融合（原课程 lesson7），见下文 |
 
 > `ros2 launch flylab <文件名>` 会递归搜索子目录，调用时**不需要带目录前缀**。
+
+### vins_mono —— 单目 VIO + GPS 全局融合（原课程 lesson7）
+
+VINS-Fusion 单目+IMU 里程计，`loop_fusion` 回环，`global_fusion` 融合降频 GPS，三色轨迹（绿=VIO / 红=回环 / 白=GPS 融合）。
+
+**前置条件**：UE 场景已启动、PX4 SITL 已运行（`fucker-run-px4.sh`）、飞机起飞并有移动激励（VIO 初始化需要加速度激励，悬停不运动不初始化）。
+
+```bash
+ros2 launch flylab vins_mono.launch.py
+```
+
+**launch 内容**：`airsim_node`（借用 airsim_ros_pkgs）+ `topic_tools/throttle`（GPS 100Hz→5Hz）+ 静态 TF（world→map、map→PX4_odom、world_ned→world）+ `vins_node` / `loop_fusion_node` / `global_fusion_node` + rviz。
+
+**包内配置**（`configs/vins_mono/`，随包分发、自包含）：
+
+| 文件 | 用途 |
+|---|---|
+| `euroc_mono_imu_config.yaml` | VINS 参数：话题、IMU 噪声、外参等 |
+| `cam0_mei.yaml` | left_cam 内参（Mei 模型，400x300 FOV90） |
+| `settings.json` | AirSim 端参数（双目相机定义 + IMU/GPS 传感器），**用本链路时复制到 Windows 端 `Documents\AirSim\` 后重启 UE** |
+
+**关键参数（已按实际装机校准）**：
+
+- 图像订阅 `/airsim_node/PX4/left_cam/Scene`（相机实际名是 `left_cam`，不是 `CameraImage`）
+- 外参 `body_T_cam0`：平移 前 0.4m / 左 0.08m，旋转含 36.87° 下俯（sin=0.6, cos=0.8），NED 体坐标系
+- `estimate_extrinsic: 0`（外参锁定）。若轨迹异常，可改为 `1` 让 VINS 在线微调外参兜底
+- VIO 输出日志在 `flylab/log/`（`vio.csv`、`pose_graph/`），目录需已存在
 
 ## 节点说明
 
@@ -112,21 +142,28 @@ flylab/
 ├── configs/            # AirSim 端 settings.json（按场景，使用时需重启 UE 加载）
 │   ├── fly.json        #   sim_fly 用：全套相机+雷达
 │   ├── mapping.json    #   建图链路用：仅 CameraDepth 深度相机
-│   └── settings.json   #   双目基础配置（left_cam/right_cam）
+│   ├── settings.json   #   双目基础配置（left_cam/right_cam）
+│   └── vins_mono/      #   vins_mono 用：AirSim settings.json + VINS 参数 + 相机内参 + 日志目录约定
 ├── src/                # C++ 节点
-│   └── move_velocity.cpp
+│   ├── move_velocity.cpp
+│   └── octomap_dynamic.cpp
+├── log/                # VINS 运行输出（vio.csv / pose_graph/），不入库
 ├── launch/             # 按功能域分目录（ros2 launch 会递归搜索）
 │   ├── fly/            #   飞行控制类
 │   │   └── sim_fly.launch.py
-│   └── mapping/        #   感知建图类
-│       └── depth_mapping.launch.py 等 5 个
+│   ├── mapping/        #   感知建图类
+│   │   └── depth_mapping.launch.py 等 5 个
+│   └── vins_mono/      #   视觉惯性里程计类
+│       └── vins_mono.launch.py
 └── rviz/               # 与 launch/ 分目录对应
     ├── fly/
     │   ├── depth_cloud.rviz
     │   └── image_lidar.rviz
-    └── mapping/
-        ├── depth_mapping.rviz
-        └── colored_mapping.rviz
+    ├── mapping/
+    │   ├── depth_mapping.rviz
+    │   └── colored_mapping.rviz
+    └── vins_mono/
+        └── vins_mono.rviz
 ```
 
 ## 话题接口约定（提前冻结）
@@ -155,7 +192,9 @@ flylab/
 | lesson3.launch.py | `launch/sim_fly.launch.py`（更名 sim_fly，airsim_node 暂借用原包） | ✅ |
 | keyboard_velocity.py | —（弃用，由 Twist 话题取代） | ➖ |
 | lesson4 感知链路 (octomap_dynamic 等) | `src/octomap_dynamic.cpp` + `launch/depth_mapping.launch.py` 等 5 个 + `rviz/depth_mapping.rviz` 等 | ✅ |
+| lesson7 VINS+GPS 融合 | `launch/vins_mono/` + `rviz/vins_mono/` + `configs/vins_mono/`（VINS 配置随包分发，外参按实际装机校准） | ✅ |
 | lesson5 多机 (multi_move_velocity) | 待定 | ⬜ |
+| 双目 VINS (vins_stereo) | `launch/vins_stereo/` 等（沿用 vins_mono 目录结构，settings.json 双目模式） | ⬜ |
 | lesson12/13 EGO 跟踪器 | `src/ego_tracker.cpp`（待建，按上方接口约定实现） | ⬜ |
 | airsim_node (C++) | 暂不移植，include airsim_ros_pkgs | ⬜ |
 
