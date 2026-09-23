@@ -1,0 +1,264 @@
+%YAML:1.0
+
+# ==================================================================
+# 第一部分：系统基础配置 (Global System Settings)
+# ==================================================================
+
+# 日志详细程度：ALL, DEBUG, INFO, WARNING, ERROR, SILENT
+# 移植初期建议设为 "DEBUG" 以观察初始化过程和 Topic 状态
+verbosity: "WARNING" 
+
+# 是否使用“首估计雅可比”(First-Estimate Jacobians)
+# 作用：保证系统的一致性，防止重力方向产生错误的负反馈。建议永远保持 true
+use_fej: true 
+
+# IMU 预积分方法：discrete (欧拉法), rk4 (四阶龙格库塔), analytical (解析法)
+# 建议：AirSim 的 IMU 频率较高且稳定，使用 "rk4" 能获得最高精度
+integration: "rk4" 
+
+# 是否启用双目约束
+use_stereo: true 
+
+# 系统支持的最大相机数量
+# 1 = 单目, 2 = 双目 (对于 AirSim 移植，通常设为 1 或 2)
+# 超过 2 台相机时, cam0和cam1会被当作一个双目对进行立体匹配。cam2以及之后的相机会被当作独立的单目流。
+max_cameras: 2 
+
+# ==================================================================
+# 第二部分：在线标定参数 (Online Calibration)
+# 开启这些参数允许系统在运行过程中自动修正参数误差
+# ==================================================================
+
+# 是否在线优化“相机与 IMU 之间的外参” (旋转 R_ItoC 和 平移 p_CinI)
+# 建议：如果 AirSim 的外参你手动算得准，先设为 false，跑通后再开 true 自动优化
+calib_cam_extrinsics: false
+
+# 是否在线优化“相机内参” (焦距、主点、畸变系数)
+# 建议：AirSim 的相机是理想模型，通常设为 false；除非你使用了带畸变的材质
+calib_cam_intrinsics: false 
+
+# 是否在线优化“相机与 IMU 之间的时间偏移” (Time Offset)
+# 建议：【必开 true】。由于 WSL2 和 Windows 的网络延迟，图像和 IMU 往往不同步，这个非常关键
+calib_cam_timeoffset: true
+
+# 是否在线优化 IMU 自身的内参 (Scale factor, Axis misalignment)
+# 建议：AirSim 是仿真 IMU，设为 false 即可
+calib_imu_intrinsics: false 
+
+# 是否在线优化陀螺仪对重力的敏感性 (G-sensitivity)
+# 建议：仿真环境下设为 false
+calib_imu_g_sensitivity: false 
+
+# ==================================================================
+# 第三部分：滑动窗口与状态管理 (State Management)
+# ==================================================================
+
+# 滑动窗口中保留的历史相机位姿（Clones）数量
+# 建议：11-15 之间。越大精度越高，但消耗 CPU 越多（WSL2 若卡顿可减小）
+max_clones: 13 
+
+# 地图中保留的最大 SLAM 特征点数量 (用于增强漂移控制)
+# 建议：50-100。这些点会持久存在，不像 MSCKF 点用完就删
+max_slam: 80
+
+# 每次更新时参与计算的最大 SLAM 特征点数
+max_slam_in_update: 40
+
+# 每次更新时参与计算的最大 MSCKF 特征点数
+max_msckf_in_update: 50 
+
+# SLAM 特征点初始化的延迟时间（秒）
+dt_slam_delay: 2.0 
+
+# 当地重力加速度大小 (m/s^2)
+gravity_mag: 9.806650161743164
+
+# 特征点的表示方式：GLOBAL_3D (世界坐标系点), ANCHORED_3D (参考帧坐标系)
+# 建议：保持 GLOBAL_3D，这是 OpenVINS 的经典模式
+feat_rep_msckf: "GLOBAL_3D" 
+feat_rep_slam: "GLOBAL_3D"
+feat_rep_aruco: "GLOBAL_3D"
+
+# ==================================================================
+# 第四部分：零速更新 (ZUPT - Zero Velocity Update)
+# 当无人机静止时，利用此特性消除 IMU 漂移
+# ==================================================================
+
+# 是否尝试开启零速更新
+try_zupt: false 
+
+# 零速判断的卡方检验阈值
+zupt_chi2_multipler: 0.5
+
+# 判断为“静止”的最大速度阈值 (m/s)
+zupt_max_velocity: 0.05
+
+# 零速约束的噪声乘子
+zupt_noise_multiplier: 2.0 
+
+# 基于图像视差判断静止的阈值（0 表示只用 IMU 判断）
+zupt_max_disparity: 0.3
+
+# 是否仅在开始阶段执行零速更新
+zupt_only_at_beginning: false 
+
+# ==================================================================
+# 第五部分：初始化参数 (Initialization)
+# 非常关键：决定了系统如何从静止或运动中起步
+# ==================================================================
+
+# --- 静态初始化参数 ---
+# 初始静止观察窗口时长 (秒)
+init_window_time: 2.0 
+
+# IMU 方差阈值，用于判断是否处于静止状态
+# 建议：如果在 AirSim 还没动就报错，调大这个值（如 2.0）
+init_imu_thresh: 0.2
+
+# 初始化的最大视差要求
+init_max_disparity: 4.0
+
+# 初始化需要的最小特征点数量
+init_max_features: 15 
+
+# --- 动态初始化参数 (起飞后启动 VIO 的关键) ---
+# 是否开启动态初始化
+init_dyn_use: true 
+
+# 是否在动态初始化期间优化参数 (不建议开启)
+init_dyn_mle_opt_calib: false 
+
+# 动态初始化最大迭代次数
+init_dyn_mle_max_iter: 50 
+
+# 动态初始化允许的最长时间 (秒)
+init_dyn_mle_max_time: 0.5 
+
+# 并行线程数 (针对 WSL2 多核性能)
+init_dyn_mle_max_threads: 4
+
+# 动态初始化窗口内提取的位姿数量
+init_dyn_num_pose: 6 
+
+# 触发动态初始化所需的最小角度变化 (度)
+init_dyn_min_deg: 7.0 
+
+init_dyn_min_rec_cond: 1e-12
+
+# --- 初始方差膨胀系数 ---
+# 初始化后对旋转、速度、偏置的置信度设置（越大表示越不信任初始值）
+init_dyn_inflation_ori: 5    #10 
+init_dyn_inflation_vel: 50  #100 
+init_dyn_inflation_bg: 1     #10 
+init_dyn_inflation_ba: 10   #100 
+
+# 初始偏置的默认猜测值 [x, y, z]
+init_dyn_bias_g: [0.0, 0.0, 0.0]
+init_dyn_bias_a: [0.0, 0.0, 0.0]
+
+# ==================================================================
+# 第六部分：视觉前端与特征提取 (Frontend / KLT Tracking)
+# ==================================================================
+
+# 是否使用 KLT 光流跟踪（比描述子匹配快很多）
+use_klt: true 
+
+# 每帧保留的最大特征点数量
+# 建议：150-300。AirSim 纹理丰富时可以增加，纹理弱时减小
+num_pts: 300 
+
+# FAST 特征提取阈值（越小点越多，但噪声越大）
+fast_threshold: 17
+
+# 图像网格分块数 (用于保证特征点在整幅图像中均匀分布)
+grid_x: 5
+grid_y: 4
+
+# 相邻特征点之间的最小像素距离
+min_px_dist: 3
+
+# KNN 匹配比例（用于描述子匹配，KLT 模式下参考意义较小）
+knn_ratio: 0.70 
+
+# 跟踪频率 (Hz)
+# 建议：与你的 AirSim 图像发布频率一致
+track_frequency: 30.3
+
+# 是否对相机图像进行下采样
+downsample_cameras: false 
+
+# 视觉处理使用的多线程数
+num_opencv_threads: 4
+
+# 直方图均衡化方法：NONE, HISTOGRAM (全局), CLAHE (局部对比度增强)
+# 建议：AirSim 光影变化大，用 CLAHE 效果更好
+histogram_method: "CLAHE" 
+
+# ==================================================================
+# 第七部分：ArUco 二维码辅助 (通常仿真不用，设为 false)
+# ==================================================================
+use_aruco: false
+num_aruco: 1024
+downsize_aruco: true
+
+# ==================================================================
+# 第八部分：噪声项与卡方检验 (Noises & Outlier Rejection)
+# ==================================================================
+
+# MSCKF 特征点的像素观测噪声 (像素)
+up_msckf_sigma_px: 1.0
+
+# MSCKF 特征点的剔除阈值系数
+up_msckf_chi2_multipler: 2.0 
+
+# SLAM 特征点的像素观测噪声 (像素)
+up_slam_sigma_px: 1.2
+
+# SLAM 特征点的剔除阈值系数
+up_slam_chi2_multipler: 2.0
+
+up_aruco_sigma_px: 1.0
+up_aruco_chi2_multipler: 1.0
+
+# 是否使用掩码图像 (Mask) 屏蔽特定区域（如挡风玻璃）
+use_mask: false 
+
+# ==================================================================
+# 第九部分：子配置文件链接 (Relative Config Links)
+# 重要：这些文件必须位于 estimator_config.yaml 的同级目录下
+# ==================================================================
+
+# 引用 IMU 噪声参数文件
+relative_config_imu: "kalibr_imu_chain.yaml" 
+
+# 引用相机内参和 IMU-相机外参文件
+relative_config_imucam: "kalibr_imucam_chain.yaml" 
+
+# ==================================================================
+# 第十部分：保存与调试 (Debugging & Recording)
+# ==================================================================
+
+# 是否记录耗时统计
+record_timing_information: false 
+record_timing_filepath: "/tmp/traj_timing.txt"
+
+# 是否保存估计结果到文件
+save_total_state: false 
+filepath_est: "/tmp/ov_estimate.txt" # 估计轨迹保存路径
+filepath_std: "/tmp/ov_estimate_std.txt" # 标准差（不确定度）保存路径
+filepath_gt: "/tmp/ov_groundtruth.txt" # 真值保存路径（如果你有真值的话）
+
+# ==================================================================
+# 第十一部分：内置仿真器参数 (Simulation Only)
+# 注：当你运行 AirSim 实时数据时，这部分参数会被自动忽略
+# ==================================================================
+sim_seed_state_init: 0
+sim_seed_preturb: 0
+sim_seed_measurements: 0
+sim_do_perturbation: false
+sim_traj_path: "src/open_vins/ov_data/sim/tum_corridor1_512_16_okvis.txt"
+sim_distance_threshold: 1.1
+sim_freq_cam: 10
+sim_freq_imu: 400
+sim_min_feature_gen_dist: 5.0
+sim_max_feature_gen_dist: 7.0

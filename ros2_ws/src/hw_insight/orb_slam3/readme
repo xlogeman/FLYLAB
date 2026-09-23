@@ -1,0 +1,6 @@
+移植：https://github.com/zang09/ORB_SLAM3_ROS2/tree/humble
+
+运行：
+ros2 run orbslam3 stereo-inertial /home/hw/sitl/hw-ros2/ros2/src/orb_slam3/vocabulary/ORBvoc.txt /home/hw/sitl/hw-ros2/ros2/src/hw_insight/orb_slam3/lesson11/stereo-inertial.yaml false --ros-args -r /camera/left:=/airsim/left_cam/image_raw -r /camera/right:=/airsim/right_cam/image_raw -r /imu:=/airsim/imu_px4/data
+
+ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 1 map world

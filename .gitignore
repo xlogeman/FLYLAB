@@ -1,0 +1,33 @@
+# ---- 构建产物 (克隆后重新编译生成) ----
+px4.1.15.2/build/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ORB_SLAM3_FIXED/Examples/**/build/
+
+# ---- 编译中间产物 ----
+*.o
+*.d
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ---- 运行时产物 ----
+parameters*.bson
+dataman*
+eeprom*
+*.ulg
+*.log
+log/
+logs/
+.ros/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- 编辑器/系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store

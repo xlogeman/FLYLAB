@@ -1,0 +1,185 @@
+# ~/.bashrc: executed by bash(1) for non-login shells.
+# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
+# for examples
+
+# If not running interactively, don't do anything
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+
+# don't put duplicate lines or lines starting with space in the history.
+# See bash(1) for more options
+HISTCONTROL=ignoreboth
+
+# append to the history file, don't overwrite it
+shopt -s histappend
+
+# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
+HISTSIZE=1000
+HISTFILESIZE=2000
+
+# check the window size after each command and, if necessary,
+# update the values of LINES and COLUMNS.
+shopt -s checkwinsize
+
+# If set, the pattern "**" used in a pathname expansion context will
+# match all files and zero or more directories and subdirectories.
+#shopt -s globstar
+
+# make less more friendly for non-text input files, see lesspipe(1)
+[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+
+# set variable identifying the chroot you work in (used in the prompt below)
+if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
+    debian_chroot=$(cat /etc/debian_chroot)
+fi
+
+# set a fancy prompt (non-color, unless we know we "want" color)
+case "$TERM" in
+    xterm-color|*-256color) color_prompt=yes;;
+esac
+
+# uncomment for a colored prompt, if the terminal has the capability; turned
+# off by default to not distract the user: the focus in a terminal window
+# should be on the output of commands, not on the prompt
+#force_color_prompt=yes
+
+if [ -n "$force_color_prompt" ]; then
+    if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
+	# We have color support; assume it's compliant with Ecma-48
+	# (ISO/IEC-6429). (Lack of such support is extremely rare, and such
+	# a case would tend to support setf rather than setaf.)
+	color_prompt=yes
+    else
+	color_prompt=
+    fi
+fi
+
+if [ "$color_prompt" = yes ]; then
+    PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+else
+    PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
+fi
+unset color_prompt force_color_prompt
+
+# If this is an xterm set the title to user@host:dir
+case "$TERM" in
+xterm*|rxvt*)
+    PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"
+    ;;
+*)
+    ;;
+esac
+
+# enable color support of ls and also add handy aliases
+if [ -x /usr/bin/dircolors ]; then
+    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+    alias ls='ls --color=auto'
+    #alias dir='dir --color=auto'
+    #alias vdir='vdir --color=auto'
+
+    alias grep='grep --color=auto'
+    alias fgrep='fgrep --color=auto'
+    alias egrep='egrep --color=auto'
+fi
+
+# colored GCC warnings and errors
+#export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
+
+# some more ls aliases
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+
+# Add an "alert" alias for long running commands.  Use like so:
+#   sleep 10; alert
+alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+
+# Alias definitions.
+# You may want to put all your additions into a separate file like
+# ~/.bash_aliases, instead of adding them here directly.
+# See /usr/share/doc/bash-doc/examples in the bash-doc package.
+
+if [ -f ~/.bash_aliases ]; then
+    . ~/.bash_aliases
+fi
+
+# enable programmable completion features (you don't need to enable
+# this, if it's already enabled in /etc/bash.bashrc and /etc/profile
+# sources /etc/bash.bashrc).
+if ! shopt -oq posix; then
+  if [ -f /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+  elif [ -f /etc/bash_completion ]; then
+    . /etc/bash_completion
+  fi
+fi
+
+alias ytjy-info-ip='hostname -I'
+alias ytjy-sitl-px4='cd /root/fucker/px4.1.15.2; make px4_sitl_default none_iris'
+alias ytjy-sitl-px4-multi='cd /root/fucker/px4.1.15.2/ytjy; ./killpx4.sh; ./lesson5.sh'
+alias ytjy-sitl-dds='MicroXRCEAgent udp4 -p 8888'
+alias ytjy-sitl-keyboard-velocity='cd /root/fucker/ros2_ws; ros2 run hw_insight keyboard_velocity'
+alias ytjy-sitl-airsim='cd /root/fucker/ros2_ws; ros2 launch airsim_ros_pkgs airsim_node.launch.py'
+alias ytjy-clean-all='pkill -9 -f "px4|dds|lesson|ros|vins|airsim|python"'
+alias ytjy-px4-reset='rm /root/fucker/px4.1.15.2/build/px4_sitl_default/rootfs/parameters*'
+alias ytjy-sitl-init-env='ytjy-clean-all; ytjy-px4-reset'
+
+alias ytjy-sitl-fpv1='cd /root/fucker/px4.1.15.2; make px4_sitl_default ytjy_fpv1'
+alias ytjy-sitl-fpv2='cd /root/fucker/px4.1.15.2; make px4_sitl_default ytjy_fpv2'
+alias ytjy-git-checkout='cd /root/fucker/px4.1.15.2; git checkout ROMFS/px4fmu_common/init.d-posix/airframes/70002_ytjy_fpv2'
+alias ytjy-git-show='cd /root/fucker/px4.1.15.2; git show cbb01a32735d8bb743459bfe6e2fc0bef4fc9aeb:ROMFS/px4fmu_common/init.d-posix/airframes/70002_ytjy_fpv2'
+alias ytjy-git-diff='cd /root/fucker/px4.1.15.2; git diff ROMFS/px4fmu_common/init.d-posix/airframes/70002_ytjy_fpv2'
+
+alias ytjy-colcon-build='cd /root/fucker/ros2_ws;colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release'
+alias ytjy-sitl-run2='cd /root/fucker/ros2_ws; /root/fucker/scripts/origins/hw-avoidance-simple.py'
+alias ytjy-sitl-run3='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson3.launch.py'
+alias ytjy-sitl-run4='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson4.launch.py'
+alias ytjy-sitl-run5-keyboard='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson5-keyboard.launch.py'
+alias ytjy-sitl-run5-qgc='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson5-qgc.launch.py'
+alias ytjy-sitl-run6='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson6.launch.py'
+alias ytjy-sitl-run7='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson7.launch.py'
+alias ytjy-sitl-run8='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson8.launch.py'
+alias ytjy-sitl-run9-rviz='cd /root/fucker/ros2_ws; ros2 launch hw_insight lesson9.launch.py'
+alias ytjy-sitl-run9-airsim='cd /root/fucker/ros2_ws; ros2 run airsim_ros_pkgs ytjy_airsim_fast'
+alias ytjy-sitl-run9-vins-fusion='cd /root/fucker/ros2_ws; ros2 run vins vins_node /root/fucker/ros2_ws/src/vins/config/ytjy/lesson9_extrinsics.yaml --ros-args -p config_file:=/root/fucker/ros2_ws/src/vins/config/ytjy/lesson9_extrinsics.yaml -r __node:=vins_estimator -r __ns:=/vins_estimator'
+
+alias ytjy-sitl-test='terminator --layout=ytjy-sitl-test'
+alias ytjy-sitl-lesson1='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson1'
+alias ytjy-sitl-lesson2='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson2'
+alias ytjy-sitl-lesson3='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson3'
+alias ytjy-sitl-lesson4='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson4'
+alias ytjy-sitl-lesson5-keyboard='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson5-keyboard'
+alias ytjy-sitl-lesson5-qgc='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson5-qgc'
+alias ytjy-sitl-lesson6='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson6'
+alias ytjy-sitl-lesson7='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson7'
+alias ytjy-sitl-lesson8='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson8'
+alias ytjy-sitl-lesson9='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson9'
+alias ytjy-sitl-lesson10='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson10'
+alias ytjy-sitl-lesson11='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson11'
+alias ytjy-sitl-lesson12='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson12'
+alias ytjy-sitl-lesson13='ytjy-sitl-init-env; terminator --layout=ytjy-sitl-lesson13'
+
+alias ytjy-hitl-px4='cd /home/hw/hitl/px4.1.16.0; make micoair_h743-v2_default'
+
+alias vio-px4='cd /root/fucker/px4.1.15.2; make px4_sitl_default none_iris'
+alias vio-run='cd /root/fucker/ros2_ws; ./run.sh'
+alias vio-cam='ros2 topic hz /airsim/left_cam/image_raw -w 100'
+
+
+export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
+export PATH=/opt/gcc-arm-none-eabi-9-2020-q2-update/bin:/opt/ros/humble/bin:/home/hw/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/lib/wsl/lib:/snap/bin
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/fucker/ORB_SLAM3_FIXED/lib
+export LIBGL_ALWAYS_SOFTWARE=1
+export DISPLAY=":0"
+source /opt/ros/humble/setup.bash
+source /root/fucker/ros2_ws/install/local_setup.bash
+#source /root/fucker/ros2_ws/install/local_setup.bash
+
+#export http_proxy=$(hostname -I | awk '{split($1,a,"."); print a[1]"."a[2]"."a[3]".1:7890"}')
+#export https_proxy=$(hostname -I | awk '{split($1,a,"."); print a[1]"."a[2]"."a[3]".1:7890"}')
+
+#export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+#export PX4_SIM_HOST_ADDR=192.168.1.66
+

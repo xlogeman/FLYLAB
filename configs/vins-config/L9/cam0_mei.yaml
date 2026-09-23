@@ -1,0 +1,25 @@
+%YAML:1.0
+---
+# 定义模型的类型为MEI（Mixed Excitation Model），用于表示相机的投影模型
+model_type: PINHOLE 
+camera_name: camera
+image_width: 1280
+image_height: 1024
+
+
+# 畸变参数，用于校正径向和切向畸变
+distortion_parameters:
+   k1: -0.16297871850799125
+   k2: 0.1289866660070831
+   p1: -0.00017857325058516168
+   p2: 0.00020382253464972582
+
+
+# 投影参数，用于将3D点投影到图像平面
+projection_parameters:
+   fx: 1301.3357186616147
+   fy: 1301.8125079113408
+   cx: 636.8282614943055
+   cy: 510.4560208611155
+
+
