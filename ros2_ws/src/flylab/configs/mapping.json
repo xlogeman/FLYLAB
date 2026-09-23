@@ -1,5 +1,5 @@
 {
-    "SettingsVersion": 1.2,
+    "SettingsVersion": 2.0,
     "SimMode": "Multirotor",
     "ClockType": "SteppableClock",
     "ViewMode": "SpringArmChase",
