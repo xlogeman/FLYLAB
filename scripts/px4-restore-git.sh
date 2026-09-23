@@ -19,11 +19,12 @@ git config user.name "${USER:-repro}" && git config user.email "repro@local"
 git add -A && git commit -qm "restore px4 v1.15.2 from project"
 git tag -f v1.15.2
 
-echo "[px4-git] 2/4 重建子模块 .git 占位 (构建目标只检查文件存在)..."
+echo "[px4-git] 2/4 重建子模块 .git (构建依赖存在性检查 + 让 IDE/状态显示干净)..."
 git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}' |
 while read p; do
     if [ -d "$p" ] && [ ! -e "$p/.git" ]; then
-        (cd "$p" && git init -q)
+        (cd "$p" && git init -q && git config user.name repro && git config user.email repro@local \
+         && git add -A && git commit -qm "restore submodule")
         echo "  init: $p"
     fi
 done
