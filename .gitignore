@@ -34,3 +34,12 @@ __pycache__/
 
 # ---- 超过 GitHub 100MB 限制的大文件 (可重新下载) ----
 px4.1.15.2/gcc-arm-none-eabi-9-2020-q2-update-linux.tar.bz2
+
+# ---- 上游第三方仓库中不需要的大体积内容 ----
+ORB_SLAM3_FIXED/Examples_old/
+Cosys-AirSim/docs/
+Cosys-AirSim/Matlab/
+Cosys-AirSim/LogViewer/
+px4.1.15.2/Tools/simulation/
+ros2_ws/src/openvins/ov_data/
+ORB_SLAM3_FIXED/evaluation/
