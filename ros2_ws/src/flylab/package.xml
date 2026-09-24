@@ -17,18 +17,21 @@
   <depend>octomap_msgs</depend>
   <depend>std_msgs</depend>
 
-  <!-- lesson4 感知链路运行时依赖（外部节点，launch 中使用） -->
+  <!-- 感知链路运行时依赖 -->
   <exec_depend>depth_image_proc</exec_depend>
   <exec_depend>octomap_server</exec_depend>
   <exec_depend>rviz2</exec_depend>
 
-  <!-- vins_mono VINS+GPS 融合链路运行时依赖（外部节点，launch 中使用） -->
+  <!-- vins_mono VINS+GPS 融合链路运行时依赖 -->
   <exec_depend>topic_tools</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>airsim_ros_pkgs</exec_depend>
   <exec_depend>vins</exec_depend>
   <exec_depend>loop_fusion</exec_depend>
   <exec_depend>global_fusion</exec_depend>
+
+  <!-- ORB-SLAM3 双目+IMU 链路运行时依赖 -->
+  <exec_depend>orbslam3</exec_depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

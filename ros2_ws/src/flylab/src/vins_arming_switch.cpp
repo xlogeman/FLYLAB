@@ -59,7 +59,7 @@ private:
             publish_bool(imu_pub_, false);
             publish_bool(cam_pub_, false);
             publish_bool(restart_pub_, true);
-            RCLCPP_INFO(get_logger(), "[YTJY]: Vehicle disarmed, close VINS Fusion");
+            RCLCPP_INFO(get_logger(), "[SWITCH]: Vehicle disarmed, close VINS Fusion");
         }
         else if (vehicle_status_.arming_state == VehicleStatus::ARMING_STATE_DISARMED &&
                  msg->arming_state == VehicleStatus::ARMING_STATE_ARMED)
@@ -69,7 +69,7 @@ private:
             publish_bool(imu_pub_, true);
             publish_bool(cam_pub_, use_stereo_);
             publish_bool(restart_pub_, true);
-            RCLCPP_INFO(get_logger(), "[YTJY]: Vehicle armed, open and reset VINS Fusion");
+            RCLCPP_INFO(get_logger(), "[SWITCH]: Vehicle armed, open and reset VINS Fusion");
         }
         vehicle_status_ = *msg;
     }

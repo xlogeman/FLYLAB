@@ -1,0 +1,122 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# 1. 相机模型与内参 (Camera Parameters)
+#--------------------------------------------------------------------------------------------
+# AirSim 默认是理想针孔模型，不使用原始参考配置中的 KannalaBrandt8 (鱼眼模型)
+Camera.type: "PinHole"
+
+# 相机内参 (基于 VINS-Fusion 的 projection_parameters)
+# fx, fy, cx, cy
+Camera.fx: 200.0
+Camera.fy: 200.0
+Camera.cx: 200.0
+Camera.cy: 150.0
+
+# 畸变参数 (Distortion parameters)
+# AirSim 是完美的虚拟相机，没有任何径向或切向畸变，全部设为 0
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+
+# 右相机内参 (通常与左相机完全一致)
+Camera2.fx: 200.0
+Camera2.fy: 200.0
+Camera2.cx: 200.0
+Camera2.cy: 150.0
+
+Camera2.k1: 0.0
+Camera2.k2: 0.0
+Camera2.p1: 0.0
+Camera2.p2: 0.0
+
+# 双目外参：从右相机到左相机的变换矩阵 (Transformation matrix from right to left)
+# VINS 中左相机在 -0.08, 右相机在 0.08，间距 0.16m
+# 旋转矩阵为单位阵（因为平行），平移向量为 [0.16, 0, 0] (右相机到左相机的距离)
+Tlr: !!opencv-matrix
+  rows: 3
+  cols: 4
+  dt: f
+  data: [ 1.0, 0.0, 0.0, 0.16,
+          0.0, 1.0, 0.0, 0.0,
+          0.0, 0.0, 1.0, 0.0 ]
+
+# 图像分辨率 (必须与 AirSim 严格匹配)
+Camera.width: 400
+Camera.height: 300
+
+# 帧率 (与 VINS 配置中的 track_frequency 一致)
+Camera.fps: 30.0
+
+# 颜色顺序 (1: RGB, 0: BGR)
+Camera.RGB: 1
+
+# 尺度参数 (不缩放图像)
+Camera.imageScale: 1.0
+
+#--------------------------------------------------------------------------------------------
+# 2. 双目立体参数 (Stereo Specific Parameters)
+#--------------------------------------------------------------------------------------------
+# 关键参数：bf = fx * baseline
+# 根据 VINS 参数：200.0 * 0.16 = 32.0
+Camera.bf: 32.0
+
+# 判断点是“近”还是“远”的阈值 (通常设为基线的 40-50 倍)
+ThDepth: 40.0
+
+#--------------------------------------------------------------------------------------------
+# 3. 外参：从 IMU 到左相机的变换 (Tbc)
+#--------------------------------------------------------------------------------------------
+# 直接搬运 VINS-Fusion 中的 body_T_cam0 矩阵
+# 注意：VINS-Fusion 的 body_T_cam0 定义就是 T_imu_cam (即 Tbc)
+Tbc: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [ 0.0, -0.6,  0.8,  0.4,
+          -1.0,  0.0,  0.0,  0.08,
+           0.0, -0.8, -0.6,  0.00,
+           0.0,  0.0,  0.0,  1.00 ]
+
+#--------------------------------------------------------------------------------------------
+# 4. IMU 噪声参数 (IMU Noise Parameters)
+#--------------------------------------------------------------------------------------------
+# 映射关系：
+# ORB.NoiseGyro = VINS.gyr_n (陀螺仪白噪声)
+# ORB.NoiseAcc  = VINS.acc_n (加速度计白噪声)
+# ORB.GyroWalk  = VINS.gyr_w (陀螺仪偏置游走)
+# ORB.AccWalk   = VINS.acc_w (加速度计偏置游走)
+
+IMU.NoiseGyro: 0.086
+IMU.NoiseAcc: 0.06
+IMU.GyroWalk: 0.000086
+IMU.AccWalk: 0.00086
+IMU.Frequency: 200
+
+#--------------------------------------------------------------------------------------------
+# 5. ORB 特征参数 (ORB Parameters)
+#--------------------------------------------------------------------------------------------
+# 针对 400x300 较低的分辨率，建议点数设在 1000-1200
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+
+# FAST 提取阈值
+# 如果环境光线较暗，可以调低这两个值
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# 6. 可视化参数 (Viewer Parameters)
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8  # 略微调近一点，适合小型无人机观察
+Viewer.ViewpointF: 500

@@ -18,6 +18,7 @@ PX4 + AirSim SITL 无人机仿真工具包。从 [ytjy-sitl] 课程体系（hw_i
 | PX4 SITL | v1.15.2，机型 `none_iris` |
 | AirSim (Cosys fork) | UE 端仿真，`airsim_ros_pkgs` 提供传感器数据通路 |
 | MicroXRCEAgent | `udp4 -p 8888`，PX4 ↔ ROS2 DDS 桥 |
+| orbslam3 + ORB_SLAM3 库 | `orbslam3` wrapper 包提供 `stereo-inertial` 可执行文件；运行时库在 `/root/fucker/ORB_SLAM3_FIXED`（`LD_LIBRARY_PATH` 见工作区 `env.sh`） |
 
 ## 编译
 
@@ -45,6 +46,8 @@ MicroXRCEAgent udp4 -p 8888
 ros2 launch flylab sim_fly.launch.py
 
 ros2 launch flylab depth_mapping.launch.py
+
+ros2 launch flylab orb_slam3.launch.py
 ```
 
 > **AirSim 端配置**：不同场景需要不同的传感器配置，见 `configs/` 目录。把对应 json 复制为 Windows 端 `Documents\AirSim\settings.json` 后**重启 UE**（AirSim 只在启动时读取一次该文件）。
@@ -65,8 +68,10 @@ launch/
 │   └── colored_mapping.launch.py
 ├── vins_mono/    # 视觉惯性里程计类
 │   └── vins_mono.launch.py
-└── vins_stereo/  # 视觉惯性里程计类（双目）
-    └── vins_stereo.launch.py
+├── vins_stereo/  # 视觉惯性里程计类（双目）
+│   └── vins_stereo.launch.py
+└── orb_slam3/    # SLAM 类
+    └── orb_slam3.launch.py
 ```
 
 | launch | 用途 |
@@ -79,6 +84,7 @@ launch/
 | `mapping/colored_mapping.launch.py` | 彩色点云（xyzrgb）版建图 |
 | `vins_mono/vins_mono.launch.py` | 单目 VIO + GPS 全局融合（原课程 lesson7），见下文 |
 | `vins_stereo/vins_stereo.launch.py` | 双目 VIO + GPS 全局融合（原课程 lesson8），见下文 |
+| `orb_slam3/orb_slam3.launch.py` | ORB-SLAM3 双目+IMU SLAM（原课程 lesson11），见下文 |
 
 > `ros2 launch flylab <文件名>` 会递归搜索子目录，调用时**不需要带目录前缀**。
 
@@ -137,6 +143,37 @@ ros2 launch flylab vins_stereo.launch.py
 - 图像订阅 `/airsim_node/PX4/left_cam/Scene` 与 `/airsim_node/PX4/right_cam/Scene`
 - 双目基线 0.16m（Y=∓0.08m），外参与 AirSim 端相机位姿（Pitch -36.87°）严格对应，`estimate_extrinsic: 0` 锁定
 
+### orb_slam3 —— ORB-SLAM3 双目+IMU（原课程 lesson11）
+
+ORB-SLAM3 特征点法双目+惯性 SLAM（2020 版，含 Atlas 多地图），输出位姿与稀疏点云地图，与 vins_stereo（优化式 VIO）、OpenVINS（滤波式）形成方案对比。
+
+**前置条件**：UE 场景已启动（双目相机配置，沿用 `configs/settings.json`）、PX4 SITL 已运行、飞机有移动激励（静止时无视差，SLAM 无法初始化）。
+
+```bash
+ros2 launch flylab orb_slam3.launch.py
+```
+
+**launch 内容**：`ytjy_airsim_ros_topic`（airsim_ros_pkgs 内的 C++ 直连桥）+ `stereo-inertial`（orbslam3 包可执行文件）+ rviz。
+
+> Pangolin 可视化窗口在该 ROS 节点中固定开启（`System` 构造参数写死为 true），launch 参数控制不了它；软件渲染下会多占资源，介意可改 orbslam3 源码重编。
+
+**包内配置**（`configs/orb_slam3/`，随包分发、自包含）：
+
+| 文件 | 用途 |
+|---|---|
+| `stereo-inertial.yaml` | ORB-SLAM3 参数：内参（fx=fy=200，400x300）、双目基线（bf=32）、Tbc 外参、IMU 噪声、ORB 特征提取参数 |
+
+**外部依赖（未随包分发）**：
+
+- ORB 词表 `ORBvoc.txt`（约 52MB）：launch 中以绝对路径引用 `/root/fucker/ros2_ws/src/orb_slam3/vocabulary/ORBvoc.txt`，不宜复制进 flylab
+- `orbslam3` wrapper 包：`package.xml` 已声明 `exec_depend`
+
+**关键参数（已按实际装机校准）**：
+
+- 图像/IMU remap：`/camera/left → /airsim/left_cam/image_raw`、`/camera/right → /airsim/right_cam/image_raw`、`/imu → /airsim/imu_ros2/data`
+- 外参 `Tbc` 直接搬运 VINS 的 `body_T_cam0`（前 0.4m / 左 0.08m，36.87° 下俯），与 vins_stereo 同一装机
+- 启动第 3 个参数 `do_rectify := 'false'`：AirSim 是理想平行双目、零畸变，无需图像预校正（ORB-SLAM3 内部会用 yaml 的 `Tlr` 自行处理双目几何）。若改 `'true'`，节点要求 yaml 提供 `LEFT.K/D/R/P` + `RIGHT.K/D/R/P` 校正矩阵，缺了会直接报 "Calibration parameters to rectify stereo are missing!" 崩溃退出
+
 ## 节点说明
 
 ### move_velocity —— 通用 PX4 offboard 速度控制器
@@ -175,7 +212,8 @@ flylab/
 │   ├── mapping.json    #   建图链路用：仅 CameraDepth 深度相机
 │   ├── settings.json   #   双目基础配置（left_cam/right_cam）
 │   ├── vins_mono/      #   vins_mono 用：AirSim settings.json + VINS 参数 + 相机内参
-│   └── vins_stereo/    #   vins_stereo 用：VINS 双目外参 + 内参
+│   ├── vins_stereo/    #   vins_stereo 用：VINS 双目外参 + 内参
+│   └── orb_slam3/      #   orb_slam3 用：ORB-SLAM3 双目+IMU 参数
 ├── src/                # C++ 节点
 │   ├── move_velocity.cpp
 │   ├── octomap_dynamic.cpp
@@ -188,8 +226,10 @@ flylab/
 │   │   └── depth_mapping.launch.py 等 5 个
 │   ├── vins_mono/      #   视觉惯性里程计类（单目）
 │   │   └── vins_mono.launch.py
-│   └── vins_stereo/    #   视觉惯性里程计类（双目）
-│       └── vins_stereo.launch.py
+│   ├── vins_stereo/    #   视觉惯性里程计类（双目）
+│   │   └── vins_stereo.launch.py
+│   └── orb_slam3/      #   SLAM 类
+│       └── orb_slam3.launch.py
 └── rviz/               # 与 launch/ 分目录对应
     ├── fly/
     │   ├── depth_cloud.rviz
@@ -199,8 +239,10 @@ flylab/
     │   └── colored_mapping.rviz
     ├── vins_mono/
     │   └── vins_mono.rviz
-    └── vins_stereo/
-        └── vins_stereo.rviz
+    ├── vins_stereo/
+    │   └── vins_stereo.rviz
+    └── orb_slam3/
+        └── orb_slam3.rviz
 ```
 
 ## 话题接口约定（提前冻结）
@@ -232,6 +274,7 @@ flylab/
 | lesson7 VINS+GPS 融合 | `launch/vins_mono/` + `rviz/vins_mono/` + `configs/vins_mono/`（VINS 配置随包分发，外参按实际装机校准） | ✅ |
 | lesson5 多机 (multi_move_velocity) | 待定 | ⬜ |
 | 双目 VINS (vins_stereo) | `launch/vins_stereo/` + `rviz/vins_stereo/` + `configs/vins_stereo/` + `src/vins_arming_switch.cpp`（settings.json 双目模式） | ✅ |
+| lesson11 ORB-SLAM3 双目+IMU | `launch/orb_slam3/` + `rviz/orb_slam3/` + `configs/orb_slam3/stereo-inertial.yaml`（词表沿用 orbslam3 包，不随包分发） | ✅ |
 | lesson12/13 EGO 跟踪器 | `src/ego_tracker.cpp`（待建，按上方接口约定实现） | ⬜ |
 | airsim_node (C++) | 暂不移植，include airsim_ros_pkgs | ⬜ |
 

@@ -41,6 +41,7 @@ def generate_launch_description():
                 '/airsim_node/PX4/gps/gps_throttled'             # 输出话题
             ]
     )
+    
     # map to world
     static_tf_map_to_world = Node(
         package='tf2_ros',
@@ -49,8 +50,8 @@ def generate_launch_description():
         arguments=[
             '0', '0', '0',  # x y z 平移量（米）
             '0', '0', '0',  # roll pitch yaw 旋转量（弧度）
-            'world',         # 父坐标系
-            'map'            # 子坐标系
+            'world',        # 父坐标系
+            'map'           # 子坐标系
         ],
         output='screen'
     )
