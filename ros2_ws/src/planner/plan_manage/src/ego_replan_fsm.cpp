@@ -447,7 +447,8 @@ namespace ego_planner
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
-    cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
+    if (pre_s != int(new_state)) // 状态真正变化才打印，重复进入同一状态不刷屏
+      cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
   std::pair<int, EGOReplanFSM::FSM_EXEC_STATE> EGOReplanFSM::timesOfConsecutiveStateCalls()
@@ -709,7 +710,8 @@ namespace ego_planner
     /* ---------- check lost of depth ---------- */
     if (map->getOdomDepthTimeout())
     {
-      RCLCPP_ERROR(node_->get_logger(), "Depth Lost! EMERGENCY_STOP");
+      static rclcpp::Clock err_throttle_clock(RCL_STEADY_TIME);
+      RCLCPP_ERROR_THROTTLE(node_->get_logger(), err_throttle_clock, 2000, "Depth Lost! EMERGENCY_STOP");
 
       enable_fail_safe_ = false;
       changeFSMExecState(EMERGENCY_STOP, "SAFETY");
@@ -790,7 +792,11 @@ namespace ego_planner
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
     have_new_target_ = false;
 
-    cout << "refine_success=" << plan_and_refine_success << endl;
+    if (!plan_and_refine_success)
+    {
+      static rclcpp::Clock warn_throttle_clock(RCL_STEADY_TIME);
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), warn_throttle_clock, 2000, "refine_success=0, replan failed");
+    }
 
     if (plan_and_refine_success)
     {

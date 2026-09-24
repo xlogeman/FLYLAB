@@ -13,7 +13,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('hw_insight')
 
     # RVIZ2显示配置
-    lesson10_rviz_path = '/home/hw/sitl/hw-ros2/ros2/src/hw_insight/rviz/lesson10.rviz'
+    lesson10_rviz_path = '/root/fucker/ros2_ws/src/hw_insight/rviz/lesson10.rviz'
     lesson10_rviz_node = launch_ros.actions.Node(
             package='rviz2',
             executable='rviz2',

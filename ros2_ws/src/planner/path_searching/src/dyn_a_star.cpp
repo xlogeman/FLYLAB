@@ -88,10 +88,41 @@ vector<GridNodePtr> AStar::retrievePath(GridNodePtr current)
     return path;
 }
 
+void AStar::printPointDiagnosis(const char *which, const Eigen::Vector3d &pt)
+{
+    static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+    Eigen::Vector3d off = pt - center_;
+    Eigen::Vector3i idx = (off * inv_step_size_ + Eigen::Vector3d(0.5, 0.5, 0.5)).cast<int>() + CENTER_IDX_;
+    bool in_map = grid_map_->isInMap(pt);
+    int occ = grid_map_->getInflateOccupancy(pt);
+    Eigen::Vector3d origin = grid_map_->getOrigin();
+    double res = grid_map_->getResolution();
+
+    const char *conclusion =
+        !in_map ? "=> OUT OF MAP: point is beyond the local map range, check map size / odom origin / flight area"
+        : occ == 1 ? "=> IN OBSTACLE: point is occupied in the inflated grid map"
+                   : "=> index conversion failed (point too far from the A* search center, check step_size/pool_size)";
+
+    RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("AstarDiagnosis"), throttle_clock, 2000,
+        "A* point diagnosis [%s]: pt=(%.2f %.2f %.2f), offset from search center=(%.2f %.2f %.2f) m, "
+        "pool index=(%d %d %d) / POOL_SIZE=(%d %d %d). Point is %s grid map (origin=%.2f %.2f %.2f, res=%.2f), "
+        "inflate_occupancy=%d (1=occupied, 0=free, -1=unknown/outside-map). %s",
+        which, pt(0), pt(1), pt(2), off(0), off(1), off(2),
+        idx(0), idx(1), idx(2), POOL_SIZE_(0), POOL_SIZE_(1), POOL_SIZE_(2),
+        in_map ? "INSIDE" : "OUTSIDE", origin(0), origin(1), origin(2), res, occ, conclusion);
+}
+
 bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d end_pt, Vector3i &start_idx, Vector3i &end_idx)
 {
     if (!Coord2Index(start_pt, start_idx) || !Coord2Index(end_pt, end_idx))
+    {
+        Eigen::Vector3i tmp;
+        if (!Coord2Index(start_pt, tmp))
+            printPointDiagnosis("START", start_pt);
+        if (!Coord2Index(end_pt, tmp))
+            printPointDiagnosis("END", end_pt);
         return false;
+    }
 
     if (checkOccupancy(Index2Coord(start_idx)))
     {
@@ -100,7 +131,10 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         {
             start_pt = (start_pt - end_pt).normalized() * step_size_ + start_pt;
             if (!Coord2Index(start_pt, start_idx))
+            {
+                printPointDiagnosis("START (adjust, start deep in obstacle)", start_pt);
                 return false;
+            }
         } while (checkOccupancy(Index2Coord(start_idx)));
     }
 
@@ -111,7 +145,10 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         {
             end_pt = (end_pt - start_pt).normalized() * step_size_ + end_pt;
             if (!Coord2Index(end_pt, end_idx))
+            {
+                printPointDiagnosis("END (adjust, end deep in obstacle)", end_pt);
                 return false;
+            }
         } while (checkOccupancy(Index2Coord(end_idx)));
     }
 
@@ -130,7 +167,10 @@ bool AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d end_
     Vector3i start_idx, end_idx;
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
-        RCLCPP_ERROR(rclcpp::get_logger("AstarSearch"), "Unable to handle the initial or end point, force return!");
+        static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+        RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("AstarSearch"), throttle_clock, 2000,
+            "Unable to handle the initial or end point, force return! start=(%.2f %.2f %.2f), end=(%.2f %.2f %.2f)",
+            start_pt(0), start_pt(1), start_pt(2), end_pt(0), end_pt(1), end_pt(2));
         return false;
     }
 
@@ -235,7 +275,19 @@ bool AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d end_
         rclcpp::Time time_2 = rclcpp::Clock().now();
         if ((time_2 - time_1).seconds() > 0.2)
         {
-            RCLCPP_WARN(rclcpp::get_logger("AstarSearch"), "Failed in A star path searching !!! 0.2 seconds time limit exceeded.");
+            static rclcpp::Clock warn_throttle_clock(RCL_STEADY_TIME);
+            bool s_in_map = grid_map_->isInMap(start_pt);
+            bool e_in_map = grid_map_->isInMap(end_pt);
+            RCLCPP_WARN_THROTTLE(rclcpp::get_logger("AstarSearch"), warn_throttle_clock, 2000,
+                "Failed in A star path searching !!! 0.2 seconds time limit exceeded. "
+                "start=(%.2f %.2f %.2f), isInMap=%s, occ=%d; end=(%.2f %.2f %.2f), isInMap=%s, occ=%d "
+                "(1=occupied, 0=free, -1=unknown/outside-map). "
+                "%s",
+                start_pt(0), start_pt(1), start_pt(2), s_in_map ? "true" : "false", (int)grid_map_->getInflateOccupancy(start_pt),
+                end_pt(0), end_pt(1), end_pt(2), e_in_map ? "true" : "false", (int)grid_map_->getInflateOccupancy(end_pt),
+                !e_in_map || grid_map_->getInflateOccupancy(end_pt) != 0
+                    ? "=> end point is NOT free (occupied or in unknown/outside-map area), path likely unreachable"
+                    : "=> end point is free, but no connected free path found within the search pool");
             return false;
         }
     }

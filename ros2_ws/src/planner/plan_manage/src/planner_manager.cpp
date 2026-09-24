@@ -50,7 +50,9 @@ namespace ego_planner
                                         Eigen::Vector3d local_target_vel, bool flag_polyInit, bool flag_randomPolyTraj)
   {
     static int count = 0;
-    printf("\033[47;30m\n[drone %d replan %d]==============================================\033[0m\n", pp_.drone_id, count++);
+    static rclcpp::Clock header_throttle_clock(RCL_STEADY_TIME);
+    RCLCPP_INFO_THROTTLE(rclcpp::get_logger("planner_manager"), header_throttle_clock, 2000,
+        "[drone %d replan %d] ==============================================", pp_.drone_id, count++);
 
     if ((start_pt - local_target_pt).norm() < 0.2)
     {
@@ -235,8 +237,9 @@ namespace ego_planner
     {
       // cout << "enter" << endl;
       std::vector<ControlPoints> trajs = bspline_optimizer_->distinctiveTrajs(segments);
-      cout << "\033[1;33m"
-           << "multi-trajs=" << trajs.size() << "\033[1;0m" << endl;
+      static rclcpp::Clock info_throttle_clock(RCL_STEADY_TIME);
+      RCLCPP_INFO_THROTTLE(rclcpp::get_logger("planner_manager"), info_throttle_clock, 2000,
+          "multi-trajs=%d", (int)trajs.size());
 
       double final_cost, min_cost = 999999.0;
       for (int i = trajs.size() - 1; i >= 0; i--)
@@ -244,7 +247,9 @@ namespace ego_planner
         if (bspline_optimizer_->BsplineOptimizeTrajRebound(ctrl_pts_temp, final_cost, trajs[i], ts))
         {
 
-          cout << "traj " << trajs.size() - i << " success." << endl;
+          static rclcpp::Clock traj_info_clock(RCL_STEADY_TIME);
+          RCLCPP_INFO_THROTTLE(rclcpp::get_logger("planner_manager"), traj_info_clock, 2000,
+              "traj %d success.", trajs.size() - i);
 
           flag_step_1_success = true;
           if (final_cost < min_cost)
@@ -263,7 +268,9 @@ namespace ego_planner
         }
         else
         {
-          cout << "traj " << trajs.size() - i << " failed." << endl;
+          static rclcpp::Clock traj_warn_clock(RCL_STEADY_TIME);
+          RCLCPP_WARN_THROTTLE(rclcpp::get_logger("planner_manager"), traj_warn_clock, 2000,
+              "traj %d failed. (see AstarDiagnosis / obstacle logs above for the reason)", trajs.size() - i);
         }
       }
 
@@ -279,7 +286,13 @@ namespace ego_planner
       visualization_->displayInitPathList(point_set, 0.2, 0);
     }
 
-    cout << "plan_success=" << flag_step_1_success << endl;
+    if (!flag_step_1_success)
+    {
+      static rclcpp::Clock warn_throttle_clock(RCL_STEADY_TIME);
+      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("planner_manager"), warn_throttle_clock, 2000,
+          "plan_success=0 (continuous failures=%d), see AstarDiagnosis / obstacle logs above for the reason",
+          continous_failures_count_ + 1);
+    }
     if (!flag_step_1_success)
     {
       visualization_->displayOptimalList(ctrl_pts, 0);

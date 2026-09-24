@@ -11,7 +11,7 @@ def generate_launch_description():
     drone_id = LaunchConfiguration('drone_id', default=0)
 
     advanced_param_include = IncludeLaunchDescription(
-        '/home/hw/sitl/hw-ros2/ros2/src/hw_insight/ego_planner/lesson13/speed.launch.py',
+        '/root/fucker/ros2_ws/src/hw_insight/ego_planner/lesson13/speed.launch.py',
         launch_arguments={
             'drone_id': drone_id,           # 无人机编号，如果是单机通常为 0；多机集群时用来区分不同飞机
         }.items()

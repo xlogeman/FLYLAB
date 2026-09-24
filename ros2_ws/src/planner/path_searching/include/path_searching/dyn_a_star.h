@@ -54,6 +54,8 @@ private:
 
 	bool ConvertToIndexAndAdjustStartEndPoints(const Eigen::Vector3d start_pt, const Eigen::Vector3d end_pt, Eigen::Vector3i &start_idx, Eigen::Vector3i &end_idx);
 
+	void printPointDiagnosis(const char *which, const Eigen::Vector3d &pt);
+
 	inline Eigen::Vector3d Index2Coord(const Eigen::Vector3i &index) const;
 	inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
@@ -104,7 +106,10 @@ inline bool AStar::Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) 
 
 	if (idx(0) < 0 || idx(0) >= POOL_SIZE_(0) || idx(1) < 0 || idx(1) >= POOL_SIZE_(1) || idx(2) < 0 || idx(2) >= POOL_SIZE_(2))
 	{
-		RCLCPP_ERROR(rclcpp::get_logger("Coord2Index"), "Ran out of pool, index=%d %d %d, POOL_SIZE=%d %d %d", idx(0), idx(1), idx(2),POOL_SIZE_(0), POOL_SIZE_(1), POOL_SIZE_(2));
+		static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+		RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("Coord2Index"), throttle_clock, 2000,
+			"Ran out of pool, index=%d %d %d, POOL_SIZE=%d %d %d (detail diagnosis printed by AstarDiagnosis)",
+			idx(0), idx(1), idx(2), POOL_SIZE_(0), POOL_SIZE_(1), POOL_SIZE_(2));
 		return false;
 	}
 

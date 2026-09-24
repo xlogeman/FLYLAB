@@ -56,7 +56,7 @@ def generate_launch_description():
     )
 
     # 启动 vins_estimator 原始数据（绿色轨迹）
-    config_path = "/home/hw/sitl/hw-ros2/ros2/src/vins/config/AIRSIM/vins2_extrinsics.yaml"
+    config_path = "/root/fucker/ros2_ws/src/vins/config/AIRSIM/vins2_extrinsics.yaml"
     vins_estimator_node = launch_ros.actions.Node(
             package='vins',
             executable='vins_node',

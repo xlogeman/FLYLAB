@@ -584,7 +584,10 @@ namespace ego_planner
       }
       else
       {
-        RCLCPP_ERROR(rclcpp::get_logger("initControlPoints"), "a star error, force return!");
+        static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+        RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("initControlPoints"), throttle_clock, 2000,
+            "a star error, force return! (see AstarDiagnosis for details): segment [%d, %d], in=(%.2f %.2f %.2f), out=(%.2f %.2f %.2f)",
+            segment_ids[i].first, segment_ids[i].second, in(0), in(1), in(2), out(0), out(1), out(2));
         vector<std::pair<int, int>> blank_ret;
         return blank_ret;
       }
@@ -1340,7 +1343,14 @@ namespace ego_planner
         }
         if (j < 0) // fail to get the obs free point
         {
-          RCLCPP_ERROR(rclcpp::get_logger("check_collision_and_rebound"), "ERROR! the drone is in obstacle. This should not happen.");
+          static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+          Eigen::Vector3d p = cps_.points.col(i);
+          bool in_map = grid_map_->isInMap(p);
+          int occ = grid_map_->getInflateOccupancy(p);
+          RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("check_collision_and_rebound"), throttle_clock, 2000,
+              "ERROR! no obstacle-free control point found in [0, %d], drone likely in obstacle or outside map. "
+              "ctrl_pt[%d] pos=(%.2f %.2f %.2f), isInMap=%s, inflate_occ=%d (1=occupied, 0=free, -1=unknown/outside-map)",
+              i, i, p(0), p(1), p(2), in_map ? "true" : "false", occ);
           in_id = 0;
         }
 
@@ -1356,8 +1366,14 @@ namespace ego_planner
         }
         if (j >= cps_.size) // fail to get the obs free point
         {
-          RCLCPP_WARN(rclcpp::get_logger("check_collision_and_rebound"), 
-                      "WARN! terminal point of the current trajectory is in obstacle, skip this planning.");
+          static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+          Eigen::Vector3d p = cps_.points.col(cps_.size - 1);
+          bool in_map = grid_map_->isInMap(p);
+          int occ = grid_map_->getInflateOccupancy(p);
+          RCLCPP_WARN_THROTTLE(rclcpp::get_logger("check_collision_and_rebound"), throttle_clock, 2000,
+              "WARN! terminal point of the current trajectory is in obstacle, skip this planning. "
+              "ctrl_pt[last=%d] pos=(%.2f %.2f %.2f), isInMap=%s, inflate_occ=%d (1=occupied, 0=free, -1=unknown/outside-map)",
+              cps_.size - 1, p(0), p(1), p(2), in_map ? "true" : "false", occ);
 
           force_stop_type_ = STOP_FOR_ERROR;
           return false;
@@ -1382,7 +1398,10 @@ namespace ego_planner
         }
         else
         {
-          RCLCPP_ERROR(rclcpp::get_logger("check_collision_and_rebound"), "a star error");
+          static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+          RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("check_collision_and_rebound"), throttle_clock, 2000,
+              "a star error (see AstarDiagnosis for details): segment [%d, %d], in=(%.2f %.2f %.2f), out=(%.2f %.2f %.2f)",
+              segment_ids[i].first, segment_ids[i].second, in(0), in(1), in(2), out(0), out(1), out(2));
           segment_ids.erase(segment_ids.begin() + i);
           i--;
         }
@@ -1624,11 +1643,23 @@ namespace ego_planner
             // 如果在前三个控制点范围内检测到了碰撞则视为不可行
             if (t <= bspline_interval_) // First 3 control points in obstacles!
             {
-              // cout << cps_.points.col(1).transpose() << "\n"
-              //      << cps_.points.col(2).transpose() << "\n"
-              //      << cps_.points.col(3).transpose() << "\n"
-              //      << cps_.points.col(4).transpose() << endl;
-              RCLCPP_WARN(rclcpp::get_logger("rebound_optimize"), "First 3 control points in obstacles! return false, t=%f", t);
+              static rclcpp::Clock warn_throttle_clock(RCL_STEADY_TIME);
+              Eigen::Vector3d hit_p = traj.evaluateDeBoorT(t);
+              bool hit_in_map = grid_map_->isInMap(hit_p);
+              Eigen::Vector3d odom = grid_map_->getOrigin();
+              std::ostringstream cp_info;
+              int n_cp = std::min<int>(cps_.points.cols(), 5);
+              for (int k = 0; k < n_cp; ++k)
+              {
+                Eigen::Vector3d p = cps_.points.col(k);
+                cp_info << "cp" << k << "=(" << p(0) << "," << p(1) << "," << p(2) << "),occ="
+                        << grid_map_->getInflateOccupancy(p) << (k + 1 < n_cp ? "; " : "");
+              }
+              RCLCPP_WARN_THROTTLE(rclcpp::get_logger("rebound_optimize"), warn_throttle_clock, 2000,
+                  "First 3 control points in obstacles! return false. Hit point t=%.3f pos=(%.2f %.2f %.2f), "
+                  "isInMap=%s, inflate_occ=%d (1=occupied, 0=free, -1=unknown/outside-map), map origin=(%.2f %.2f %.2f). %s",
+                  t, hit_p(0), hit_p(1), hit_p(2), hit_in_map ? "true" : "false",
+                  grid_map_->getInflateOccupancy(hit_p), odom(0), odom(1), odom(2), cp_info.str().c_str());
               return false;
             }
 
@@ -1687,7 +1718,9 @@ namespace ego_planner
         // 如果没有检测到碰撞视为优化成功
         if (!flag_occ)
         {
-          printf("\033[32miter(+1)=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
+          static rclcpp::Clock print_throttle_clock(RCL_STEADY_TIME);
+          RCLCPP_INFO_THROTTLE(rclcpp::get_logger("rebound_optimize"), print_throttle_clock, 2000,
+              "iter(+1)=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f", iter_num_, time_ms, total_time_ms, final_cost);
           success = true;
         }
         // 如果有碰撞则重新初始化
@@ -1697,7 +1730,9 @@ namespace ego_planner
           initControlPoints(cps_.points, false);
           new_lambda2_ *= 2;
 
-          printf("\033[32miter(+1)=%d,time(ms)=%5.3f, collided, keep optimizing\n\033[0m", iter_num_, time_ms);
+          static rclcpp::Clock print_throttle_clock(RCL_STEADY_TIME);
+          RCLCPP_INFO_THROTTLE(rclcpp::get_logger("rebound_optimize"), print_throttle_clock, 2000,
+              "iter(+1)=%d,time(ms)=%5.3f, collided, keep optimizing (restart %d)", iter_num_, time_ms, restart_nums);
         }
       }
       // 如果优化被强制取消
@@ -1705,7 +1740,7 @@ namespace ego_planner
       {
         flag_force_return = true;
         rebound_times++;
-        cout << "iter=" << iter_num_ << ",time(ms)=" << time_ms << ",rebound." << endl;
+        // 常规 rebound 迭代不打日志，失败原因由 a star / obstacle 检查处输出
       }
       else
       {
