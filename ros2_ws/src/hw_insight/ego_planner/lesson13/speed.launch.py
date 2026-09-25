@@ -17,9 +17,9 @@ def generate_launch_description():
     # ！！！！！！注意：理论上全局地图x和y可以不相等，但是由于代码bug导致x，y不相等时会出问题，所以目前还是将x，y设置为相同大小。后续再改代码bug。
     # ！！！！！！注意：局部地图大小也有类似问题，先确保局部地图也是x和y相等。
     # ！！！！！！所以在分辨率很细，地图很大的情况下，会消耗海量内存，注意调整wsl和windows的内存分配，避免内存不够用。当前配制至少给WSL分配11G物理
-    map_size_x = LaunchConfiguration('map_size_x', default=500.0)       # EGO 全局静态内存数组的 X 轴物理边界大小 (米)
-    map_size_y = LaunchConfiguration('map_size_y', default=500.0)       # EGO 全局静态内存数组的 Y 轴物理边界大小 (米)
-    map_size_z = LaunchConfiguration('map_size_z', default=15.0)         # EGO 全局静态内存数组的 Z 轴物理边界大小 (米)
+    map_size_x = LaunchConfiguration('map_size_x', default=400.0)       # EGO 全局静态内存数组的 X 轴物理边界大小 (米)
+    map_size_y = LaunchConfiguration('map_size_y', default=400.0)       # EGO 全局静态内存数组的 Y 轴物理边界大小 (米)
+    map_size_z = LaunchConfiguration('map_size_z', default=30.0)        # EGO 全局静态内存数组的 Z 轴物理边界大小 (米)
     cx = LaunchConfiguration('cx', default=200.0)                       # 默认内参改为 AirSim 配置 (W400, H300, FOV90)
     cy = LaunchConfiguration('cy', default=150.0)
     fx = LaunchConfiguration('fx', default=200.0)
@@ -29,9 +29,10 @@ def generate_launch_description():
     # ============================= 局部地图参数参数 ================================
     # 局部更新范围，ego在此范围内规划路径
     resolution = 0.2                        # 局部地图和全局地图分辨率(米)。这个值越小，精度越高，占用内存空间越多。
-    local_update_range_x = 45.0              # 局部地图X轴长度(米)。local_update_range_x除以 resolution必须小于250，否则需要修改planner_manager.cpp中initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250))
-    local_update_range_y = 45.0              # 局部地图Y轴长度(米)。local_update_range_y除以 resolution必须小于250
-    local_update_range_z = 15.0              # 局部地图Z轴长度(米)。local_update_range_z除以 resolution必须小于250
+                                            # 【内存账】500x500x30 @0.3 → 约2.8亿格 x ~15字节/格 ≈ 4.2GB；若用回0.2会到 ~14GB，WSL 会爆
+    local_update_range_x = 45.0             # 局部地图X轴长度(米)。local_update_range_x除以 resolution必须小于250，否则需要修改planner_manager.cpp中initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250))
+    local_update_range_y = 45.0             # 局部地图Y轴长度(米)。local_update_range_y除以 resolution必须小于250
+    local_update_range_z = 15.0             # 局部地图Z轴长度(米)。local_update_range_z除以 resolution必须小于250
     local_map_margin = 10                   # 局部地图的边界余量
     # 在文件 planner_manager.cpp 中调用函数 initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250)) 设置了局部地图最大占据 250x250x250 个格子
     # X轴占据的格子数等于 local_update_range_x / resolution + local_map_margin * 2 ，上面的配置算出来是 23/0.1 + 10*2 = 250，正好没有超过。
@@ -84,10 +85,10 @@ def generate_launch_description():
     lambda_fitness = 0.05
 
     # 深度图滤波
-    use_depth_filter = True                             # 启用深度图滤波。
-    depth_filter_tolerance = 0.3                        # 滤波容差
-    depth_filter_maxdist = local_update_range_x/2 - 0.1   # 深度图有效最大距离（超过此值的数据截断）
-    depth_filter_mindist = 0.2                          # 深度图有效最小距离（过滤机身遮挡或近处噪点）
+    use_depth_filter = True                              # 启用深度图滤波。
+    depth_filter_tolerance = 0.3                         # 滤波容差
+    depth_filter_maxdist = local_update_range_x/2 - 0.1  # 深度图有效最大距离（超过此值的数据截断）
+    depth_filter_mindist = 0.2                           # 深度图有效最小距离（过滤机身遮挡或近处噪点）
 
     # 光线投射
     max_ray_length = local_update_range_x/2 - 0.2         # 光线投射最大长度
@@ -171,7 +172,7 @@ def generate_launch_description():
             {'grid_map/local_update_range_z': local_update_range_z},    # 局部地图在Z轴的更新范围（米）
             {'grid_map/obstacles_inflation': obstacles_inflation},      # 障碍物膨胀半径（米），通常略大于无人机半径。实测airsim无人机半径0.6米
             {'grid_map/local_map_margin': local_map_margin},            # 局部地图的边界余量
-            {'grid_map/ground_height': 0.1},           # 地面高度（小于此高度的所有物体都被忽略，也就是说必须保证飞行的最低高度大于这个值）
+            {'grid_map/ground_height': -15.0},         # 地图 z 轴下界 = ground_height（grid_map.cpp: map_origin_z）。允许飞到低于世界原点（起飞地面）的地形；代价：真实地面会被标记为障碍，飞机落地后无法规划，起飞后正常
 
             # 相机内参匹配 AirSim 配置 (W400, H300, FOV90)
             {'grid_map/cx': cx},

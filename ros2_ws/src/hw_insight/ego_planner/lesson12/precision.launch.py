@@ -29,8 +29,8 @@ def generate_launch_description():
     # ============================= 局部地图参数参数 ================================
     # 局部更新范围，ego在此范围内规划路径
     resolution = 0.1                        # 局部地图和全局地图分辨率(米)。这个值越小，精度越高，占用内存空间越多。
-    local_update_range_x = 22.0              # 局部地图X轴长度(米)。local_update_range_x除以 resolution必须小于250，否则需要修改planner_manager.cpp中initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250))
-    local_update_range_y = 22.0              # 局部地图Y轴长度(米)。local_update_range_y除以 resolution必须小于250
+    local_update_range_x = 22.0             # 局部地图X轴长度(米)。local_update_range_x除以 resolution必须小于250，否则需要修改planner_manager.cpp中initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250))
+    local_update_range_y = 22.0             # 局部地图Y轴长度(米)。local_update_range_y除以 resolution必须小于250
     local_update_range_z = 7.0              # 局部地图Z轴长度(米)。local_update_range_z除以 resolution必须小于250
     local_map_margin = 10                   # 局部地图的边界余量
     # 在文件 planner_manager.cpp 中调用函数 initGridMap(grid_map_, Eigen::Vector3i(250, 250, 250)) 设置了局部地图最大占据 250x250x250 个格子
