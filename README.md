@@ -11,23 +11,23 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | `px4.1.15.2/` | PX4 SITL v1.15.2 源码（机型 `none_iris`） |
 | `ORB_SLAM3_FIXED/` | ORB-SLAM3 运行时库 |
 | `mavros/` `libmavconn/` `mavros_msgs/` | MAVROS 通信栈 |
-| `scripts/` `env.sh` | 启动脚本与环境变量 |
+| `scripts/env.sh` | 启动脚本与环境变量 |
 
 ---
 
 ## flylab 核心包
 
-从 [ytjy-sitl] 课程体系（hw_insight / hw_interface）解构移植而来，C++ 重写、去除个人化封装。传感器节点 RPC 直连 AirSim，不依赖 `airsim_ros_pkgs`。
+从早期课程工程（已移除的 hw_insight / hw_interface 包）解构移植而来，C++ 重写、去除个人化封装。
 
 ### 功能链路一览
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
 | 仿真飞行 | `ros2 launch flylab sim_fly.launch.py` | `configs/fly.json` | 基础场景：手动 offboard 速度控制 |
-| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图（另有分段调试 / 动态清理 / 彩色点云版） |
+| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图 |
 | EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC |
-| OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO（原课程 lesson10），断桨联动启停 |
-| VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹（带起飞联动开关） |
+| OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
+| VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
 | ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
 
 ### C++ 节点（flylab/src）
@@ -36,7 +36,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 |---|---|
 | `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
 | `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
-| `px4_ego_tracker` | EGO 轨迹跟踪 + PX4 混控，链路状态彩色提示（黄=异常/绿=正常），断链自动检测（`link_timeout_sec`，默认 3s） |
+| `px4_ego_tracker` | EGO 轨迹跟踪 + PX4 混控，链路状态彩色提示，断链自动检测（默认 3s） |
 | `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
 | `octomap_dynamic` | 建图链路 octomap 动态清理 |
 | `vins_arming_switch` | VINS-Fusion 起飞联动开关 |
@@ -57,16 +57,16 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 # 1. 编译
 source /opt/ros/humble/setup.bash
 export MAKEFLAGS=-j2                    # WSL 下必须限制并行度
-cd ~/fucker/ros2_ws && colcon build --parallel-workers 2
+cd ~/flylab/ros2_ws && colcon build --parallel-workers 2
 source install/setup.bash
 
 # 2. 启动仿真环境
 #    UE/AirSim 场景配置: 把 configs/ 下对应 json 复制到 Windows 端 Documents\AirSim\settings.json 后重启 UE
-bash /root/fucker/scripts/fucker-run-px4.sh        # PX4 SITL
+bash /root/flylab/scripts/run-px4.sh        # PX4 SITL
 MicroXRCEAgent udp4 -p 8888                        # PX4 <-> ROS2 桥
 
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
-ros2 launch flylab fly_ego.launch.py        # EGO 避障（可选 xrce:=true / rviz:=false）
+ros2 launch flylab fly_ego.launch.py        # EGO 避障
 ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 ```
 
@@ -74,5 +74,5 @@ ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
 - **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
-- **airsim_ros_pkgs 为官方原版**（2026-09 从 Cosys-AirSim/ros2/src 迁入）：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`；旧课程话题命名（`world_ned`、`PX4/odometry`）不再有效。两个包的本地改动仅有：`AIRSIM_ROOT` 绝对路径、Humble 的 `cv_bridge.h` 头文件、launch 默认参数（`PX4_SIM_HOST_ADDR` 环境变量 / `is_vulkan:=False`）
+- **airsim_ros_pkgs 为官方原版**：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`；旧课程话题命名（`world_ned`、`PX4/odometry`）不再有效。两个包的本地改动仅有：`AIRSIM_ROOT` 绝对路径、Humble 的 `cv_bridge.h` 头文件、launch 默认参数（`PX4_SIM_HOST_ADDR` 环境变量 / `is_vulkan:=False`）
 - 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/*.cpp` 文件头注释

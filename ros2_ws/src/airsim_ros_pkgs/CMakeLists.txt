@@ -27,7 +27,7 @@ find_package(PCL REQUIRED)
 
 # hw-modify: 官方默认 ${CMAKE_CURRENT_SOURCE_DIR}/../../../ 适用于包在 Cosys-AirSim/ros2/src 下,
 # 本包迁移至 ros2_ws/src 后需指向 Cosys-AirSim 仓库根目录
-set(AIRSIM_ROOT /root/fucker/Cosys-AirSim)
+set(AIRSIM_ROOT /root/flylab/Cosys-AirSim)
 
 add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" rpclib_wrapper)
 add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib" AirLib)

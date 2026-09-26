@@ -32,7 +32,7 @@ def generate_launch_description():
     )
 
     # 启动 ORB SLAM3 双目+IMU
-    orb_vocab_path = "/root/fucker/ros2_ws/src/orb_slam3/vocabulary/ORBvoc.txt"
+    orb_vocab_path = "/root/flylab/ros2_ws/src/orb_slam3/vocabulary/ORBvoc.txt"
     orb_config_path = os.path.join(pkg_share, 'configs/orb_slam3/stereo-inertial.yaml')
     orbslam3_node = launch_ros.actions.Node(
         package='orbslam3',

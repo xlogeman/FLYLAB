@@ -53,7 +53,7 @@ ament_target_dependencies(vins_arming_switch
 # EGO 链路: AirSim 直连传感器节点 (深度图/IMU/真值里程计/GPS/气压计/磁力计 + TF)
 # 与 airsim_ros_pkgs 同款接法: 直接编译 AirLib/rpclib/MavLinkCom 源码并链接
 # ==============================================================================
-set(AIRSIM_ROOT /root/fucker/Cosys-AirSim)
+set(AIRSIM_ROOT /root/flylab/Cosys-AirSim)
 set(RPC_LIB_INCLUDES ${AIRSIM_ROOT}/external/rpclib/rpclib-2.3.1/include)
 add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" flylab_rpclib_wrapper)
 add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom" flylab_MavLinkCom)

@@ -8,7 +8,7 @@
 # ============================================================================
 set -e
 
-PX4_DIR="/root/fucker/px4.1.15.2"
+PX4_DIR="/root/flylab/px4.1.15.2"
 
 # ROS2 环境 (lesson1.sh 同款, 对 PX4 本身无害)
 [ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash
