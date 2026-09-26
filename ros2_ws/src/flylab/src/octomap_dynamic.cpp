@@ -18,7 +18,6 @@ using namespace std::chrono_literals;
 // 动态清理 octomap：周期调用 /octomap_server/clear_bbox 服务，
 // 按无人机当前位置轮流清理 6 个方向上远离无人机的旧地图区域，
 // 防止地图随飞行无限膨胀。
-// 移植自 hw_insight/octomap_dynamic.py
 class OctomapDynamic : public rclcpp::Node
 {
 public:
@@ -34,7 +33,7 @@ public:
       "/octomap_server/clear_bbox");
 
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      "/airsim_node/PX4/odometry", 1,
+      "/airsim_node/PX4/odom_local", 1,
       [this](const nav_msgs::msg::Odometry::SharedPtr msg)
       {
         x_ = msg->pose.pose.position.x;

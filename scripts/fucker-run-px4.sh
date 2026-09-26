@@ -27,7 +27,7 @@ fi
 
 # git 元数据自检 (幂等): 主仓库 .git / 子模块 / NuttX tag 任一缺失自动补齐,
 # 全部完整时秒退。归档瘦身剔除了 git 历史, 首次运行或迁移目录后会触发修复
-bash "$(dirname "$0")/../px4-restore-git.sh"
+bash "$(dirname "$0")/px4-restore-git.sh"
 
 # Windows 网关 IP = WSL 默认路由 (AirSim 在那台机器上监听 TCP 4560)
 export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')

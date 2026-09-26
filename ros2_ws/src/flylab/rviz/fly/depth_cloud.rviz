@@ -77,7 +77,7 @@ Visualization Manager:
           Value: false
         world_enu:
           Value: false
-        world_ned:
+        world:
           Value: false
       Marker Scale: 1
       Name: TF
@@ -85,7 +85,7 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        world_ned:
+        world:
           PX4:
             PX4/CameraDepth_body:
               {}
@@ -127,7 +127,7 @@ Visualization Manager:
       Color Transformer: AxisColor
       Color Transport Hint: raw
       Decay Time: 0
-      Depth Map Topic: /airsim_node/PX4/CameraDepth/DepthPerspective
+      Depth Map Topic: /airsim_node/PX4/CameraDepth_DepthPerspective/image
       Depth Map Transport Hint: raw
       Enabled: true
       Invert Rainbow: false
@@ -207,7 +207,7 @@ Visualization Manager:
         Z: 0
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
-      Invert Z Axis: true
+      Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
       Pitch: 0.2103976607322693

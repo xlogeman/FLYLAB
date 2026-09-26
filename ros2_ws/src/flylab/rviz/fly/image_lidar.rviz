@@ -57,7 +57,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /airsim_node/PX4/CameraImage/Scene
+        Value: /airsim_node/PX4/CameraImage_Scene/image
       Value: true
       Visibility:
         Grid: true
@@ -95,7 +95,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /airsim_node/PX4/lidar/Lidar
+        Value: /airsim_node/PX4/lidar/points/Lidar
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -128,7 +128,7 @@ Visualization Manager:
           Value: false
         world_enu:
           Value: false
-        world_ned:
+        world:
           Value: false
       Marker Scale: 1
       Name: TF
@@ -136,7 +136,7 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        world_ned:
+        world:
           PX4:
             PX4/CameraDepth_body:
               {}

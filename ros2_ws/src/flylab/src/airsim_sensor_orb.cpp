@@ -1,3 +1,15 @@
+// airsim_sensor_orb —— ORB-SLAM3 链路 AirSim 直连传感器节点
+//
+// 功能: 通过 RPC 直连 Cosys-AirSim 采集双目相机与传感器数据并发布 ROS2 话题,
+//       供 ORB-SLAM3 双目+IMU (orb_slam3.launch.py) 使用。
+//       由原 airsim_ros_pkgs/ytjy_airsim_ros_topic.cpp 移植收编。
+// 发布: /airsim/left_cam/image_raw  /airsim/right_cam/image_raw (双目灰度图, 同步时间戳)
+//       /airsim/imu_px4/data        (IMU, NED/FRD 原生格式)
+//       /airsim/imu_ros2/data       (IMU, ENU/FLU 转换后)
+//       /airsim/true_odom/data      (真值里程计, NED->ENU 转换)
+//       /airsim/gps/data  /airsim/baro/data  /airsim/mag/data
+// 采集: 3 个独立 RPC 客户端 (图像/IMU/低频) 多线程并行, 互不阻塞。
+// 连接: IP 读环境变量 PX4_SIM_HOST_ADDR, 未设置则默认 172.28.144.1。
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -33,9 +45,9 @@ using namespace std::chrono_literals;
 #define USE_RELIABLE_QOS 1
 // =========================================================================
 
-class AirSimFullSensorNode : public rclcpp::Node {
+class AirSimSensorOrb : public rclcpp::Node {
 public:
-    AirSimFullSensorNode() : Node("airsim_full_sensor_node"), vehicle_name_("PX4"), frame_count_(0){
+    AirSimSensorOrb() : Node("airsim_sensor_orb"), vehicle_name_("PX4"), frame_count_(0){
         
         // 1. 设置 QoS 策略
 #if USE_RELIABLE_QOS
@@ -88,11 +100,11 @@ public:
         // 7. 启动多线程定时器
         start_time_ = this->now();
         // 图像: 33ms (默认30Hz。如果改成1ms就是能跑多快跑多快，受限于渲染)
-        timer_img_ = this->create_wall_timer(33ms, std::bind(&AirSimFullSensorNode::grab_image, this), cb_group_img_);
+        timer_img_ = this->create_wall_timer(33ms, std::bind(&AirSimSensorOrb::grab_image, this), cb_group_img_);
         // IMU: 5ms (200Hz)
-        timer_imu_ = this->create_wall_timer(5ms, std::bind(&AirSimFullSensorNode::grab_imu, this), cb_group_imu_);
+        timer_imu_ = this->create_wall_timer(5ms, std::bind(&AirSimSensorOrb::grab_imu, this), cb_group_imu_);
         // 低频 (GPS/Baro/Mag): 20ms (50Hz)
-        timer_low_ = this->create_wall_timer(20ms, std::bind(&AirSimFullSensorNode::grab_low_freq, this), cb_group_low_);
+        timer_low_ = this->create_wall_timer(20ms, std::bind(&AirSimSensorOrb::grab_low_freq, this), cb_group_low_);
 
         // 初始化偏置标记
         is_imu_initialized_ = false;
@@ -355,7 +367,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<AirSimFullSensorNode>();
+    auto node = std::make_shared<AirSimSensorOrb>();
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
     executor.add_node(node);
     executor.spin();

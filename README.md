@@ -62,7 +62,7 @@ source install/setup.bash
 
 # 2. 启动仿真环境
 #    UE/AirSim 场景配置: 把 configs/ 下对应 json 复制到 Windows 端 Documents\AirSim\settings.json 后重启 UE
-bash /root/fucker/scripts/bare/fucker-run-px4.sh   # PX4 SITL
+bash /root/fucker/scripts/fucker-run-px4.sh        # PX4 SITL
 MicroXRCEAgent udp4 -p 8888                        # PX4 <-> ROS2 桥
 
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
@@ -74,4 +74,5 @@ ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
 - **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
+- **airsim_ros_pkgs 为官方原版**（2026-09 从 Cosys-AirSim/ros2/src 迁入）：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`；旧课程话题命名（`world_ned`、`PX4/odometry`）不再有效。两个包的本地改动仅有：`AIRSIM_ROOT` 绝对路径、Humble 的 `cv_bridge.h` 头文件、launch 默认参数（`PX4_SIM_HOST_ADDR` 环境变量 / `is_vulkan:=False`）
 - 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/*.cpp` 文件头注释

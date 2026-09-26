@@ -1,11 +1,9 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.12.0)
 
 project(airsim_interfaces)
 
-# Default to C++14
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
-endif()
+# Default to C++17
+set(CMAKE_CXX_STANDARD 17)
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -24,6 +22,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VelCmdGroup.msg"
   "msg/CarControls.msg"
   "msg/CarState.msg"
+  "msg/ComputerVisionState.msg"
+  "msg/InstanceSegmentationLabel.msg"
+  "msg/InstanceSegmentationList.msg"
+  "msg/ObjectTransformsList.msg"
+  "msg/StringArray.msg"
   "msg/Altimeter.msg"
   "msg/Environment.msg"
   "srv/SetGPSPosition.srv"
@@ -32,7 +35,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Land.srv"
   "srv/LandGroup.srv"
   "srv/Reset.srv"
-  "srv/SetLocalPosition.srv" DEPENDENCIES std_msgs geometry_msgs geographic_msgs
+  "srv/RefreshInstanceSegmentation.srv"
+  "srv/RefreshObjectTransforms.srv"
+  "srv/SetLocalPosition.srv"
+  "srv/ListSceneObjectTags.srv" DEPENDENCIES std_msgs geometry_msgs geographic_msgs LIBRARY_NAME ${PROJECT_NAME}
 )
 
 ament_export_dependencies(rosidl_default_runtime)

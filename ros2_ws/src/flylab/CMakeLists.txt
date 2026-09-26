@@ -27,7 +27,7 @@ set(FLYLAB_DEPENDENCIES
   geometry_msgs
 )
 
-# octomap 动态清理: 订阅 /airsim_node/PX4/odometry，
+# octomap 动态清理: 订阅 /airsim_node/PX4/odom_local，
 # 周期调用 /octomap_server/clear_bbox 清理无人机周围的旧地图
 add_executable(octomap_dynamic src/octomap_dynamic.cpp)
 ament_target_dependencies(octomap_dynamic
@@ -114,12 +114,35 @@ ament_target_dependencies(airsim_sensor_vio
 )
 target_compile_options(airsim_sensor_vio PRIVATE -Wno-pedantic -Wnoexcept)
 
+# ORB-SLAM3 链路 AirSim 传感器节点: 双目灰度图 + IMU(PX4/ROS2 双坐标系) + 真值里程计 + GPS/气压计/磁力计
+add_executable(airsim_sensor_orb src/airsim_sensor_orb.cpp)
+target_include_directories(airsim_sensor_orb PRIVATE
+  ${AIRSIM_ROOT}/AirLib/include
+  ${AIRSIM_ROOT}/AirLib/deps/eigen3
+  ${RPC_LIB_INCLUDES}
+  ${AIRSIM_ROOT}/MavLinkCom/include
+  ${AIRSIM_ROOT}/MavLinkCom/common_utils
+)
+target_link_libraries(airsim_sensor_orb AirLib ${OpenCV_LIBS} Threads::Threads)
+ament_target_dependencies(airsim_sensor_orb
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+target_compile_options(airsim_sensor_orb PRIVATE -Wno-pedantic -Wnoexcept)
+
 install(TARGETS
   move_velocity
   octomap_dynamic
   vins_arming_switch
   airsim_sensor_ego
   airsim_sensor_vio
+  airsim_sensor_orb
   px4_ego_tracker
   DESTINATION lib/${PROJECT_NAME}
 )

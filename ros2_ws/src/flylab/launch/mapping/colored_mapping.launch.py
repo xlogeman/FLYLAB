@@ -25,9 +25,10 @@ def generate_launch_description():
             executable='point_cloud_xyzrgb_node',
             name='depth_to_cloud',
             remappings=[
-                ('depth_registered/image_rect', '/airsim_node/PX4/CameraDepth/DepthPlanar'),
-                ('rgb/image_rect_color', '/airsim_node/PX4/CameraDepth/Scene'),
-                ('rgb/camera_info', '/airsim_node/PX4/CameraDepth/camera_info'),
+                ('depth_registered/image_rect', '/airsim_node/PX4/CameraDepth_DepthPlanar/image'),
+                ('depth_registered/camera_info', '/airsim_node/PX4/CameraDepth_DepthPlanar/camera_info'),
+                ('rgb/image_rect_color', '/airsim_node/PX4/CameraDepth_Scene/image'),
+                ('rgb/camera_info', '/airsim_node/PX4/CameraDepth_Scene/camera_info'),
                 ('points', '/point_cloud_xyzrgb_node/depth_color_cloud')
             ]
     )
@@ -37,8 +38,8 @@ def generate_launch_description():
             executable='octomap_server_node',  # 可执行文件名
             name='octomap_server',             # 节点名称
             parameters=[
-                {'frame_id': 'world_ned'},        # 地图坐标系，与点云一致，
-                {'base_frame_id': 'world_ned'},   # 过滤地面时，使用该坐标
+                {'frame_id': 'world'},            # 地图坐标系 (官方版 ENU)
+                {'base_frame_id': 'world'},       # 过滤地面时，使用该坐标
                 {'resolution': 0.25},             # 地图分辨率，单位：米
                 {'dynamic': True},                # 启用动态边界扩展
                 {'sensor_model.max_range': 50.0}, # 传感器最大有效距离
@@ -48,7 +49,7 @@ def generate_launch_description():
                 {'ground_filter.distance': 0.2},  # 小于多少米都算作地面
                 {'ground_filter.plane_distance': 0.21},
                 {'publish_free_space': False},    # 是否发布空的地点值(无阻挡的空间)，避障逻辑会使用
-                {'point_cloud_max_z': 0.0},       # Z轴的最大值
+                {'point_cloud_min_z': 0.0},       # ENU: 过滤起飞点高度以下的点 (原 NED: max_z<=0)
                 {'latch': False}                  # default: True for a static map, false if no initial map is given
             ],
             remappings=[

@@ -28,8 +28,8 @@ def generate_launch_description():
             executable='point_cloud_xyz_node',
             name='depth_to_cloud',
             remappings=[
-                ('image_rect', '/airsim_node/PX4/CameraDepth/DepthPlanar'),
-                ('camera_info', '/airsim_node/PX4/CameraDepth/camera_info'),
+                ('image_rect', '/airsim_node/PX4/CameraDepth_DepthPlanar/image'),
+                ('camera_info', '/airsim_node/PX4/CameraDepth_DepthPlanar/camera_info'),
                 ('points', '/depth_camera/pointers')
             ]
     )
@@ -47,7 +47,7 @@ def generate_launch_description():
             executable='octomap_server_node',  # 可执行文件名
             name='octomap_server',             # 节点名称
             parameters=[
-                {'frame_id': 'world_ned'},         # 地图坐标系，以世界地图为坐标
+                {'frame_id': 'world'},             # 地图坐标系 (官方版 ENU)
                 {'base_frame_id': 'PX4/CameraDepth_optical'},  #无人机参考坐标 # PX4/CameraDepth_optical, PX4/CameraDepth_body, PX4/CameraDepth_body/static
                 {'resolution': map_resolution},              # 地图分辨率，单位：米，当前0.25米的分辨率
                 {'compress_map': False},           # 是否压缩地图，启用后会减少网络数据传输，但会加大CPU计算量。用于分布式协同系统
@@ -61,10 +61,10 @@ def generate_launch_description():
                 {'point_cloud_min_x': -200.0},
                 {'point_cloud_max_y': 200.0},
                 {'point_cloud_min_y': -200.0},
-                {'point_cloud_max_z': -0.17},
-                {'point_cloud_min_z': -50.0},
-                {'occupancy_max_z': -0.17},
-                {'occupancy_min_z': -50.0},
+                {'point_cloud_max_z': 50.0},       # ENU: 0.17~50m 高于起飞点 (原 NED: -50~-0.17)
+                {'point_cloud_min_z': 0.17},
+                {'occupancy_max_z': 50.0},
+                {'occupancy_min_z': 0.17},
                 {'min_x_size': 0.0},
                 {'min_y_size': 0.0},
                 {'latch': False}                  # True for a static map, false if no initial map is given。设置为false能够加快处理速度

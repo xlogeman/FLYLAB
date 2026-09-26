@@ -23,11 +23,11 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 启动AirSim节点（自定义话题桥接节点）
+    # 启动 AirSim 直连传感器节点 (flylab 自研, 发布 /airsim/* 系列话题)
     airsim_ros_topic_node = launch_ros.actions.Node(
-        package='airsim_ros_pkgs',
-        executable='ytjy_airsim_ros_topic',
-        name='ytjy_airsim_ros_topic',
+        package='flylab',
+        executable='airsim_sensor_orb',
+        name='airsim_sensor_orb',
         output='screen'
     )
 

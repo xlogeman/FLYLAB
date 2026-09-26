@@ -11,8 +11,8 @@ multiple_thread: 1       # 启用多线程支持 (1为开启，提升实时性)
 # ===============================================
 # 2. ROS 话题与文件路径
 # ===============================================
-imu_topic: "/airsim_node/PX4/imu/Imu"                # IMU数据订阅话题
-image0_topic: "/airsim_node/PX4/left_cam/Scene"      # 相机图像订阅话题
+imu_topic: "/airsim_node/PX4/imu/Imu"                # IMU数据订阅话题 (官方版 wrapper: 数据已转 FLU, y/z 轴取反)
+image0_topic: "/airsim_node/PX4/left_cam_Scene/image"  # 相机图像订阅话题 (官方版命名: 相机_类型/image)
 output_path: "/root/fucker/ros2_ws/src/flylab/log/"    # VINS运行日志及结果输出路径
 
 # ===============================================
@@ -38,9 +38,10 @@ body_T_cam0: !!opencv-matrix
    rows: 4
    cols: 4
    dt: d
+   # 官方版 wrapper IMU 为 FLU 体系, 外参由原 FRD 体系左乘 diag(1,-1,-1) 旋转得到
    data: [ 0.0, 0.0, 1.0,  0.3,
-           1.0, 0.0, 0.0,  0.0,
-           0.0, 1.0, 0.0,  0.0,
+          -1.0, 0.0, 0.0,  0.0,
+           0.0,-1.0, 0.0,  0.0,
            0.0, 0.0, 0.0,  1.0 ]
 
 # ===============================================

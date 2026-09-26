@@ -106,7 +106,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: world_ned
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:
@@ -158,10 +158,10 @@ Visualization Manager:
       Focal Point:
         X: 4.692325592041016
         Y: -6.311612606048584
-        Z: -10.148429870605469
+        Z: 10.148429870605469
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
-      Invert Z Axis: true
+      Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
       Pitch: 0.46039795875549316

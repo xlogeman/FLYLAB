@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.12.0)
 project(airsim_ros_pkgs)
 
 find_package(rclcpp REQUIRED)
@@ -22,15 +22,18 @@ find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rosidl_default_runtime REQUIRED)
 find_package(airsim_interfaces REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(tf2_msgs REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(PCL REQUIRED)
 
+# hw-modify: 官方默认 ${CMAKE_CURRENT_SOURCE_DIR}/../../../ 适用于包在 Cosys-AirSim/ros2/src 下,
+# 本包迁移至 ros2_ws/src 后需指向 Cosys-AirSim 仓库根目录
 set(AIRSIM_ROOT /root/fucker/Cosys-AirSim)
 
 add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" rpclib_wrapper)
 add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib" AirLib)
 add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom" MavLinkCom)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "-O3 -Wall -Wextra -Wnoexcept -Wstrict-null-sentinel")
 set(CXX_EXP_LIB "-nostdinc++ -I/usr/include/c++/8 -I/usr/include/x86_64-linux-gnu/c++/8 -nodefaultlibs 
 -l/usr/lib/x86_64-linux-gnu/libc++.so -l/usr/lib/x86_64-linux-gnu/libc++abi.so
@@ -47,12 +50,6 @@ set(INCLUDE_DIRS include
   ${AIRSIM_ROOT}/MavLinkCom/include
   ${AIRSIM_ROOT}/MavLinkCom/common_utils
   ${OpenCV_INCLUDE_DIRS}
-  /opt/ros/humble/include/mavros_msgs
-  /opt/ros/humble/include/tf2
-  /opt/ros/humble/include/std_srvs
-  /opt/ros/humble/include/tf2_geometry_msgs
-  /opt/ros/humble/include/tf2_ros
-  ${mavros_msgs_INCLUDE_DIRS}
   )
 include_directories(${INCLUDE_DIRS})
 
@@ -66,6 +63,9 @@ ament_target_dependencies(pd_position_controller_simple
   nav_msgs
   geometry_msgs
   airsim_interfaces
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
 )
 
 add_library(airsim_ros src/airsim_ros_wrapper.cpp)
@@ -79,6 +79,13 @@ ament_target_dependencies(airsim_ros
   tf2_ros
   cv_bridge
   airsim_interfaces
+  mavros_msgs
+  std_srvs
+  tf2_geometry_msgs
+  tf2_sensor_msgs
+  tf2
+  pcl_conversions
+  PCL
 )
 
 add_executable(airsim_node src/airsim_node.cpp)
@@ -93,32 +100,11 @@ target_link_libraries(pd_position_controller_simple_node
   pd_position_controller_simple airsim_ros AirLib)
 ament_target_dependencies(pd_position_controller_simple_node 
   rclcpp
+  mavros_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
 )
-
-
-# ==============================================================================
-# [新增部分] 编译我们自己写的极速直连 C++ 节点 (绕过官方 Wrapper，直接和底层的 AirLib 对话)
-# ==============================================================================
-add_executable(ytjy_airsim_fast src/ytjy_airsim_fast.cpp)
-# 链接 AirSim 底层核心库 (AirLib) 和 OpenCV 库
-target_link_libraries(ytjy_airsim_fast AirLib ${OpenCV_LIBS})
-# 链接 ROS 2 核心消息依赖
-ament_target_dependencies(ytjy_airsim_fast rclcpp sensor_msgs cv_bridge nav_msgs)
-
-
-add_executable(ytjy_airsim_ros_topic src/ytjy_airsim_ros_topic.cpp)
-# 链接 AirSim 底层核心库 (AirLib) 和 OpenCV 库
-target_link_libraries(ytjy_airsim_ros_topic AirLib ${OpenCV_LIBS})
-# 链接 ROS 2 核心消息依赖
-ament_target_dependencies(ytjy_airsim_ros_topic rclcpp sensor_msgs cv_bridge nav_msgs)
-
-add_executable(ytjy_airsim_lesson12 src/ytjy_airsim_lesson12.cpp)
-# 链接 AirSim 底层核心库 (AirLib) 和 OpenCV 库
-target_link_libraries(ytjy_airsim_lesson12 AirLib ${OpenCV_LIBS})
-# 链接 ROS 2 核心消息依赖
-ament_target_dependencies(ytjy_airsim_lesson12 rclcpp sensor_msgs cv_bridge nav_msgs   geometry_msgs tf2 tf2_ros tf2_geometry_msgs tf2_msgs)
-# ==============================================================================
-
 
 # rosidl_target_interfaces(airsim_node
 # ${PROJECT_NAME} "rosidl_typesupport_cpp")
@@ -126,7 +112,7 @@ ament_target_dependencies(ytjy_airsim_lesson12 rclcpp sensor_msgs cv_bridge nav_
 # rosidl_target_interfaces(pd_position_controller_simple_node
 #   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-install(TARGETS airsim_node pd_position_controller_simple_node ytjy_airsim_fast ytjy_airsim_ros_topic ytjy_airsim_lesson12
+install(TARGETS airsim_node pd_position_controller_simple_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS airsim_ros pd_position_controller_simple
@@ -149,7 +135,6 @@ ament_export_dependencies(tf2_ros)
 ament_export_dependencies(tf2_sensor_msgs)
 ament_export_dependencies(rclpy)
 ament_export_dependencies(tf2)
-ament_export_dependencies(tf2_msgs)
 ament_export_dependencies(image_transport)
 ament_export_dependencies(geometry_msgs)
 ament_export_dependencies(cv_bridge)
@@ -161,7 +146,8 @@ ament_export_dependencies(ament_cmake)
 ament_export_dependencies(std_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 ament_export_dependencies(airsim_interfaces)
-ament_export_dependencies(airsim_interfaces)
+ament_export_dependencies(pcl_conversions)
+ament_export_dependencies(PCL)
 
 ament_export_include_directories(${INCLUDE_DIRS})
 ament_export_libraries(airsim_settings_parser pd_position_controller_simple
