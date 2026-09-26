@@ -35,9 +35,9 @@ using namespace std::chrono_literals;
 #define USE_RELIABLE_QOS 1
 // =========================================================================
 
-class AirSimFullSensorNode : public rclcpp::Node {
+class AirSimSensorEgoNode : public rclcpp::Node {
 public:
-    AirSimFullSensorNode() : Node("airsim_full_sensor_node"), vehicle_name_("PX4"), frame_count_(0){
+    AirSimSensorEgoNode() : Node("airsim_sensor_ego_node"), vehicle_name_("PX4"), frame_count_(0){
         
         // 1. 设置 QoS 策略
 #if USE_RELIABLE_QOS
@@ -87,11 +87,11 @@ public:
         // 7. 启动多线程定时器
         start_time_ = this->now();
         // 图像: 33ms (默认30Hz)
-        timer_img_ = this->create_wall_timer(33ms, std::bind(&AirSimFullSensorNode::grab_image, this), cb_group_img_);
+        timer_img_ = this->create_wall_timer(33ms, std::bind(&AirSimSensorEgoNode::grab_image, this), cb_group_img_);
         // IMU: 5ms (200Hz)
-        timer_imu_ = this->create_wall_timer(5ms, std::bind(&AirSimFullSensorNode::grab_imu, this), cb_group_imu_);
+        timer_imu_ = this->create_wall_timer(5ms, std::bind(&AirSimSensorEgoNode::grab_imu, this), cb_group_imu_);
         // 低频 (GPS/Baro/Mag): 20ms (50Hz)
-        timer_low_ = this->create_wall_timer(20ms, std::bind(&AirSimFullSensorNode::grab_low_freq, this), cb_group_low_);
+        timer_low_ = this->create_wall_timer(20ms, std::bind(&AirSimSensorEgoNode::grab_low_freq, this), cb_group_low_);
 
         // 初始化偏置标记
         is_imu_initialized_ = false;
@@ -373,7 +373,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<AirSimFullSensorNode>();
+    auto node = std::make_shared<AirSimSensorEgoNode>();
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
     executor.add_node(node);
     executor.spin();

@@ -187,7 +187,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   }
   accel_inI_norm /= (double)(readings.size() - 1);
   if (180.0 / M_PI * theta_inI_norm < params.init_dyn_min_deg) {
-    PRINT_WARNING(YELLOW "[init-d]: gyroscope only %.2f degree change (%.2f thresh)\n" RESET, 180.0 / M_PI * theta_inI_norm,
+    PRINT_INFO(YELLOW "[init-d]: gyroscope only %.2f degree change (%.2f thresh)\n" RESET, 180.0 / M_PI * theta_inI_norm,
                   params.init_dyn_min_deg);
     return false;
   }

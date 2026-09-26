@@ -68,16 +68,17 @@ ament_target_dependencies(px4_ego_tracker
   quadrotor_msgs
 )
 
-add_executable(airsim_full_sensor src/airsim_full_sensor.cpp)
-target_include_directories(airsim_full_sensor PRIVATE
+# EGO 链路 AirSim 传感器节点: 深度图/IMU/真值里程计/GPS/气压计/磁力计 + TF
+add_executable(airsim_sensor_ego src/airsim_sensor_ego.cpp)
+target_include_directories(airsim_sensor_ego PRIVATE
   ${AIRSIM_ROOT}/AirLib/include
   ${AIRSIM_ROOT}/AirLib/deps/eigen3
   ${RPC_LIB_INCLUDES}
   ${AIRSIM_ROOT}/MavLinkCom/include
   ${AIRSIM_ROOT}/MavLinkCom/common_utils
 )
-target_link_libraries(airsim_full_sensor AirLib ${OpenCV_LIBS} Threads::Threads)
-ament_target_dependencies(airsim_full_sensor
+target_link_libraries(airsim_sensor_ego AirLib ${OpenCV_LIBS} Threads::Threads)
+ament_target_dependencies(airsim_sensor_ego
   rclcpp
   sensor_msgs
   cv_bridge
@@ -88,13 +89,36 @@ ament_target_dependencies(airsim_full_sensor
   tf2_geometry_msgs
 )
 # AirSim 头文件不满足 -Wpedantic, 对该目标关闭
-target_compile_options(airsim_full_sensor PRIVATE -Wno-pedantic -Wnoexcept)
+target_compile_options(airsim_sensor_ego PRIVATE -Wno-pedantic -Wnoexcept)
+
+# VIO 链路 AirSim 传感器节点 (OpenVINS MSCKF): 双目相机 + IMU + GPS/气压计/磁力计
+add_executable(airsim_sensor_vio src/airsim_sensor_vio.cpp)
+target_include_directories(airsim_sensor_vio PRIVATE
+  ${AIRSIM_ROOT}/AirLib/include
+  ${AIRSIM_ROOT}/AirLib/deps/eigen3
+  ${RPC_LIB_INCLUDES}
+  ${AIRSIM_ROOT}/MavLinkCom/include
+  ${AIRSIM_ROOT}/MavLinkCom/common_utils
+)
+target_link_libraries(airsim_sensor_vio AirLib ${OpenCV_LIBS} Threads::Threads)
+ament_target_dependencies(airsim_sensor_vio
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+target_compile_options(airsim_sensor_vio PRIVATE -Wno-pedantic -Wnoexcept)
 
 install(TARGETS
   move_velocity
   octomap_dynamic
   vins_arming_switch
-  airsim_full_sensor
+  airsim_sensor_ego
+  airsim_sensor_vio
   px4_ego_tracker
   DESTINATION lib/${PROJECT_NAME}
 )

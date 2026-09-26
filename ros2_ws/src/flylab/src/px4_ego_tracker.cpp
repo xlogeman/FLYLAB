@@ -27,6 +27,7 @@ public:
         declare_parameter<double>("goal_reach_dist", 0.5);  // 到达目标点的距离阈值 (米)
         declare_parameter<double>("goal_reach_speed", 0.5); // 到达目标点的速度阈值 (米/秒)
         declare_parameter<bool>("return_to_loiter", true);  // 到达后切回 AUTO_LOITER (false 则保持 OFFBOARD 悬停)
+        declare_parameter<double>("link_timeout_sec", 3.0); // 飞控数据断链判定超时 (秒)
 
         // ---------------- 发布者 ----------------
         vehicle_command_publisher_ = create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos_profile);
@@ -39,9 +40,10 @@ public:
             "/fmu/out/vehicle_status", qos_profile,
             [this](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
                 vehicle_status_ = *msg;
+                last_status_time_ = now();
                 if (!received_status_) {
                     received_status_ = true;
-                    RCLCPP_INFO(get_logger(), "已接收到 PX4 飞控数据，MicroXRCEAgent 链路正常");
+                    RCLCPP_INFO(get_logger(), "\033[32m已接收到 PX4 飞控数据，MicroXRCEAgent 链路正常\033[0m");
                 }
             });
         sub_vehicle_pos_ = create_subscription<px4_msgs::msg::VehicleLocalPosition>(
@@ -59,6 +61,8 @@ public:
         // 定时器处理函数 (50Hz，仅用于维护 PX4 Offboard 心跳和状态机逻辑)
         timer_ = create_wall_timer(std::chrono::milliseconds(20), std::bind(&Px4EgoTrackerNode::timer_callback, this));
 
+        // 链路超时计时起点 = 节点启动时间 (启动后 link_timeout_sec 秒内不报"尚未收到")
+        last_status_time_ = now();
         RCLCPP_INFO(get_logger(), "PX4 + EGO 混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO_LOITER 交还 QGC)");
     }
 
@@ -132,9 +136,9 @@ private:
             if (get_parameter("return_to_loiter").as_bool()) {
                 // 自动交还控制权：切回 AUTO_LOITER，由 PX4 定点悬停，QGC 可直接接管
                 engage_loiter_mode();
-                RCLCPP_INFO(get_logger(), "已到达目标点 (距离 %.2f 米)，已切回 AUTO_LOITER，控制权交还 QGC", dist);
+                RCLCPP_INFO(get_logger(), "\033[32m已到达目标点 (距离 %.2f 米)，已切回 AUTO_LOITER，控制权交还 QGC\033[0m", dist);
             } else {
-                RCLCPP_INFO(get_logger(), "已到达目标点 (距离 %.2f 米)，保持 OFFBOARD 悬停", dist);
+                RCLCPP_INFO(get_logger(), "\033[32m已到达目标点 (距离 %.2f 米)，保持 OFFBOARD 悬停\033[0m", dist);
             }
         }
     }
@@ -221,10 +225,22 @@ private:
     // =============================================================================================================================
     void timer_callback()
     {
-        // 0. 数据链路自检：收不到飞控数据时提醒启动 MicroXRCEAgent
-        if (!received_status_) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
-                                 "尚未收到 PX4 飞控数据！请先启动 MicroXRCEAgent：  MicroXRCEAgent udp4 -p 8888");
+        // 0. 数据链路自检 (link_timeout_sec 秒内没收到 vehicle_status 才报警)：
+        //    a) 启动后 3 秒内保持静默, 避免刚启动就刷警告
+        //    b) 曾收到过数据后超时 → 断链警告 (只打一次), 并复位状态等待恢复
+        //    c) 未收到数据 (启动超时或断链后) → 每 3 秒节流提醒启动 MicroXRCEAgent
+        //    复位后重新收到数据时会再次打印绿色"链路正常"提示
+        const double link_timeout = get_parameter("link_timeout_sec").as_double();
+        if ((now() - last_status_time_).seconds() > link_timeout) {
+            if (received_status_) {
+                received_status_ = false;
+                RCLCPP_WARN(get_logger(),
+                            "\033[33mPX4 飞控数据已中断 (超过 %.1f 秒未收到 vehicle_status)，MicroXRCEAgent 链路可能已断开！\033[0m",
+                            link_timeout);
+            } else {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+                                     "\033[33m尚未收到 PX4 飞控数据！请先启动 MicroXRCEAgent：  MicroXRCEAgent udp4 -p 8888\033[0m");
+            }
         }
 
         // 1. 始终高频发布 Offboard 心跳
@@ -289,7 +305,8 @@ private:
     bool has_ego_cmd_ = false;                // 是否收到过EGO的指令
     bool ego_active_ = false;                 // 当前是否处于 EGO 自动避障模式
     bool has_goal_ = false;                   // 是否有目标点
-    bool received_status_ = false;            // 是否收到过 PX4 数据 (用于检测 MicroXRCEAgent)
+    bool received_status_ = false;            // 当前链路是否正常 (断链超时后会被复位)
+    rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};  // 最近一次收到 vehicle_status 的时间
     std::array<double, 3> ego_goal_ned_{};    // 当前目标点 (NED 坐标)
 };
 

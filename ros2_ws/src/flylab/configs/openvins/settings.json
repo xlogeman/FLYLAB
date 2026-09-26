@@ -1,0 +1,91 @@
+{
+    "SettingsVersion": 2.0,
+    "SimMode": "Multirotor",
+    "ClockType": "SteppableClock",
+    "ViewMode": "SpringArmChase",
+    "__ViewMode": "NoDisplay",
+    "Vehicles": {
+        "PX4": {
+            "VehicleType": "PX4Multirotor",
+            "Pitch": 0, "Roll": 0, "Yaw": 90,
+            "LockStep": true,
+            "UseTcp": true,
+            "TcpPort": 4560,
+            "LocalHostIp": "0.0.0.0",
+            "ControlPortLocal": 14030,
+            "ControlPortRemote": 14280,
+            "ControlIp": "remote",
+            "UseSerial": false,
+            "SerialBaudRate": 2000000,
+            "SerialPort": "COM8",
+            "QgcHostIp": "127.0.0.1",
+            "QgcPort": 14550,
+            "Cameras": {
+                "left_cam": {
+                    "CaptureSettings": [
+                        {
+                        "ImageType": 0,
+                        "Width": 400,
+                        "Height": 300,
+                        "FOV_Degrees": 90,
+                        "AutoExposureSpeed": 100,
+                        "AutoExposureBias": 0
+                        }
+                    ],
+                    "X": 0.4, "Y": -0.08, "Z": 0.0,
+                    "Pitch": -36.86989764584402, "Roll": 0, "Yaw": 0
+                },
+                "right_cam": {
+                    "CaptureSettings": [
+                        {
+                        "ImageType": 0,
+                        "Width": 400,
+                        "Height": 300,
+                        "FOV_Degrees": 90,
+                        "AutoExposureSpeed": 100,
+                        "AutoExposureBias": 0
+                        }
+                    ],
+                    "X": 0.4, "Y": 0.08, "Z": 0.0,
+                    "Pitch": -36.86989764584402, "Roll": 0, "Yaw": 0
+                }
+            },
+            "Sensors":{
+                "Magnetometer": {
+                    "SensorType": 4,
+                    "Enabled": true
+                },
+                "Barometer":{
+                    "SensorType": 1,
+                    "Enabled": true
+                },
+                "Imu": {
+                    "SensorType": 2,
+                    "Enabled" : true,
+                    "AngularRandomWalk": 0,
+                    "GyroBiasStabilityTau": 500,
+                    "GyroBiasStability": 0,
+                    "VelocityRandomWalk": 0,
+                    "AccelBiasStabilityTau": 800,
+                    "AccelBiasStability": 0,
+                    "UpdateFrequency": 200
+                },
+                "Gps": {
+                    "SensorType": 3,
+                    "Enabled" : true,
+                    "EphTimeConstant": 0.9,
+                    "EpvTimeConstant": 0.9,
+                    "EphInitial": 25,
+                    "EpvInitial": 25,
+                    "EphFinal": 0.1,
+                    "EpvFinal": 0.1,
+                    "EphMin3d": 3,
+                    "EphMin2d": 4,
+                    "UpdateLatency": 0.2,
+                    "UpdateFrequency": 10,
+                    "StartupDelay": 1
+                }
+            }
+        }
+    }
+}

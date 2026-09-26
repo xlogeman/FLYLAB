@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 # EGO 避障飞行一键启动:
 #   ros2 launch flylab fly_ego.launch.py
 # 等价于同时启动以下组件:
-#   1. airsim_full_sensor        AirSim 直连传感器节点 (深度图/IMU/里程计/GPS/气压计/磁力计 + TF)
+#   1. airsim_sensor_ego         AirSim 直连传感器节点 (深度图/IMU/里程计/GPS/气压计/磁力计 + TF)
 #   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
 #   3. px4_ego_tracker           PX4 轨迹跟踪节点 (RViz 点击目标点接管, 到达后交还 QGC)
 #   4. rviz2                     EGO 链路 RViz 可视化
@@ -44,8 +44,8 @@ def generate_launch_description():
         # 1. AirSim 直连传感器节点
         Node(
             package='flylab',
-            executable='airsim_full_sensor',
-            name='airsim_full_sensor_node',
+            executable='airsim_sensor_ego',
+            name='airsim_sensor_ego_node',
             output='screen',
         ),
 

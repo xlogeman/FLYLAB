@@ -18,7 +18,7 @@
   <depend>std_msgs</depend>
   <depend>quadrotor_msgs</depend>
 
-  <!-- AirSim 直连传感器节点 (airsim_full_sensor.cpp) 编译依赖 -->
+  <!-- AirSim 直连传感器节点 (airsim_sensor_ego.cpp / airsim_sensor_vio.cpp) 编译依赖 -->
   <depend>cv_bridge</depend>
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>
@@ -41,6 +41,9 @@
 
   <!-- ORB-SLAM3 双目+IMU 链路运行时依赖 -->
   <exec_depend>orbslam3</exec_depend>
+
+  <!-- OpenVINS MSCKF 链路运行时依赖 -->
+  <exec_depend>ov_msckf</exec_depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
