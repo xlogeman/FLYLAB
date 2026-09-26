@@ -1,5 +1,22 @@
-// px4_ego_tracker: EGO 轨迹跟踪 + PX4 混控节点
-// QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO_LOITER 交还 QGC
+// px4_ego_tracker —— EGO 链路轨迹跟踪 + PX4 混控节点
+//
+// 功能: 接收 EGO-Planner 轨迹指令, 转换坐标系后下发给 PX4 执行;
+//       QGC 起飞后, 在 RViz 中点击 2D Goal Pose 即接管, 到达目标点后
+//       自动切回 AUTO_LOITER 将控制权交还 QGC。
+// 工作流程:
+//   1. RViz 点击目标点 -> 高度强制改为 goal_z_height 后转发 EGO-Planner (/goal_pose_3d)
+//   2. 收到 EGO 轨迹 (/drone_0_planning/pos_cmd) -> ENU 转 NED (位置/速度/加速度/偏航)
+//   3. 切入 OFFBOARD 前以 50Hz 补发悬停 setpoint 凑足切换条件, 防止被 PX4 拒绝
+//   4. 位置+速度双条件判定到达 -> 自动切回 AUTO_LOITER (return_to_loiter=true 时)
+// 订阅: /fmu/out/vehicle_status        (px4_msgs/VehicleStatus)
+//       /fmu/out/vehicle_local_position (px4_msgs/VehicleLocalPosition)
+//       /goal_pose                     (geometry_msgs/PoseStamped, RViz 2D Goal Pose)
+//       /drone_0_planning/pos_cmd      (quadrotor_msgs/PositionCommand, EGO 轨迹)
+// 发布: /fmu/in/vehicle_command  /fmu/in/offboard_control_mode  /fmu/in/trajectory_setpoint
+//       /goal_pose_3d           (geometry_msgs/PoseStamped, 转发给 EGO-Planner)
+// 参数: goal_z_height (2.0, 目标点强制高度)  goal_reach_dist (0.5, 到达距离阈值)
+//       goal_reach_speed (0.5, 到达速度阈值)  return_to_loiter (true, 到达后交还 QGC)
+//       link_timeout_sec (3.0, 飞控数据断链判定超时)
 #include <array>
 #include <cmath>
 #include <cstdint>

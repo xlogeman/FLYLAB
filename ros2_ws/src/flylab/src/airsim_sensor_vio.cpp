@@ -1,11 +1,25 @@
+// airsim_sensor_vio —— VIO 链路 AirSim 直连传感器节点
+//
+// 功能: 通过 RPC 直连 Cosys-AirSim 采集双目相机与传感器数据并发布 ROS2 话题,
+//       供 OpenVINS MSCKF (openvins_msckf.launch.py) / VINS 等视觉惯导使用。
+// 发布: /airsim/left_cam/image_raw  /airsim/right_cam/image_raw (双目灰度图, 同步时间戳)
+//       /airsim/imu_px4/data        (IMU, NED/FRD 原生格式)
+//       /airsim/imu_ros2/data       (IMU, ENU/FLU 转换后)
+//       /airsim/gps/data  /airsim/baro/data  /airsim/mag/data
+// 降落联动: 订阅 /fmu/out/vehicle_status, 断桨(降落)时停发数据使 VIO 等效关闭,
+//       重新解锁后恢复 (参数 gate_by_arming, 默认开启), 关闭可用 gate_by_arming:=false。
+// 采集: 3 个独立 RPC 客户端 (图像/IMU/低频) 多线程并行, 互不阻塞。
+// 连接: IP 读环境变量 PX4_SIM_HOST_ADDR, 未设置则默认 172.28.144.1。
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/magnetic_field.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <tf2/LinearMath/Quaternion.h>
@@ -84,6 +98,30 @@ public:
         cb_group_imu_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         cb_group_low_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+        // 6.5 降落联动开关: 监听 PX4 arming 状态, 联动启停 VIO 数据源
+        //     OpenVINS 没有 VINS-Fusion 那样的 /vins_imu_switch 等控制话题,
+        //     因此在数据源端掐断: 断桨(降落)停发 图像+IMU, OpenVINS 无数据即等效关闭;
+        //     重新解锁后恢复发布 (OpenVINS 从原状态继续, 不做重置)
+        gate_by_arming_ = this->declare_parameter<bool>("gate_by_arming", true);
+        rclcpp::QoS px4_qos(rclcpp::KeepLast(1));
+        px4_qos.best_effort().transient_local();
+        vehicle_status_sub_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
+            "/fmu/out/vehicle_status", px4_qos,
+            [this](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
+                const bool was_armed = (vehicle_status_.arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED);
+                const bool now_armed = (msg->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED);
+                if (was_armed && !now_armed) {
+                    publishing_.store(false);
+                    RCLCPP_INFO(this->get_logger(), "\033[33m[ARMING] 检测到降落断桨, 已暂停发布 VIO 数据 (图像/IMU)\033[0m");
+                } else if (!was_armed && now_armed) {
+                    publishing_.store(true);
+                    RCLCPP_INFO(this->get_logger(), "\033[32m[ARMING] 检测到解锁起飞, 恢复发布 VIO 数据\033[0m");
+                }
+                vehicle_status_ = *msg;
+            });
+        // 初始按"已解锁"处理: 未接入 PX4 链路时照常发布; 首次收到 DISARMED 即暂停
+        vehicle_status_.arming_state = px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
+
         // 7. 启动多线程定时器
         start_time_ = this->now();
         // 图像: 33ms (30Hz，和电脑性能相关)
@@ -99,6 +137,7 @@ public:
 private:
     // ================= 线程 1：双目图像发布 (极速 0拷贝) =================
     void grab_image() {
+        if (gate_by_arming_ && !publishing_.load()) { return; }  // 降落联动: 断桨期间停发
         try {
             const std::vector<msr::airlib::ImageCaptureBase::ImageResponse>& responses = client_img_->simGetImages(img_request_, vehicle_name_);
 
@@ -149,6 +188,7 @@ private:
 
     // ================= 线程 2：极高频 IMU 发布 (200Hz) =================
     void grab_imu() {
+        if (gate_by_arming_ && !publishing_.load()) { return; }  // 降落联动: 断桨期间停发
         try {
             // 1. 从 AirSim 获取单次原始快照 (基于 NED 世界系 和 FRD 机体系)
             auto imu_data = client_imu_->getImuData("Imu", vehicle_name_);
@@ -234,6 +274,7 @@ private:
   
     // ================= 线程 3：低频传感器发布 (50Hz) =================
     void grab_low_freq() {
+        if (gate_by_arming_ && !publishing_.load()) { return; }  // 降落联动: 断桨期间停发
         try {
             auto now_stamp = this->now();
             
@@ -295,6 +336,12 @@ private:
     std::string vehicle_name_;
     int frame_count_;
     rclcpp::Time start_time_;
+
+    // 降落联动开关相关
+    rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
+    px4_msgs::msg::VehicleStatus vehicle_status_;
+    bool gate_by_arming_ = true;      // 是否启用 arming 联动 (参数 gate_by_arming)
+    std::atomic<bool> publishing_{true};  // 当前是否对外发布数据 (跨线程读写, 用原子量)
 };
 
 int main(int argc, char** argv) {

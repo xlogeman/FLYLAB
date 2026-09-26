@@ -1,7 +1,14 @@
-// VINS 起飞联动开关（原课程 lesson8_vins_switch，mono/stereo 链路共用）
-// 功能: 监听 /fmu/out/vehicle_status, 在 arming/disarming 跳变时开关并重启 VINS-Fusion
-//   起飞(disarmed -> armed):   开 IMU + 开相机 + 重置 VINS
-//   降落(armed -> disarmed):   关 IMU + 关相机 + 重置 VINS
+// vins_arming_switch —— VINS 起飞联动开关
+//
+// 功能: 监听 PX4 arming 状态跳变, 通过 VINS-Fusion 移植版的控制话题
+//       开关其传感器输入并触发重置, 使 VINS 只在飞行期间运行:
+//   起飞 (disarmed -> armed):   开 IMU + 开相机 + 重置 VINS
+//   降落 (armed -> disarmed):   关 IMU + 关相机 + 重置 VINS
+// 订阅: /fmu/out/vehicle_status (px4_msgs/VehicleStatus, BEST_EFFORT + TRANSIENT_LOCAL)
+// 发布: /vins_imu_switch  /vins_cam_switch  /vins_restart (std_msgs/Bool)
+// 参数: use_stereo (默认 true; VINS 端相机开关语义为 true=双目 / false=单目左相机,
+//       mono 配置 num_of_cam: 1 若被切到双目会取不到 cam1 数据, 故需按链路配置)
+// 初始: 按 ARMED 处理, 保证节点晚启动时首次收到的 DISARMED 也能触发"降落关闭"分支
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "px4_msgs/msg/vehicle_status.hpp"

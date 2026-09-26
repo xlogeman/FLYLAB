@@ -1,3 +1,11 @@
+// octomap_dynamic —— octomap 动态清理节点 (建图链路)
+//
+// 功能: 周期调用 /octomap_server/clear_bbox 服务 (BoundingBoxQuery),
+//       以无人机当前位置为中心, 清理 6 个方向上远离无人机的旧地图区域,
+//       防止建图链路长时间飞行后地图无限膨胀。
+// 参数: range_around_drone (默认 5.0 米, 无人机周围保留范围),
+//       map_range (默认 200.0 米, 总地图范围)。
+// 输入: nav_msgs/Odometry 无人机里程计; 移植自 hw_insight/octomap_dynamic.py。
 #include <chrono>
 #include <memory>
 

@@ -1,3 +1,15 @@
+// airsim_sensor_ego —— EGO 链路 AirSim 直连传感器节点
+//
+// 功能: 通过 RPC 直连 Cosys-AirSim 采集传感器数据并发布 ROS2 话题,
+//       供 EGO-Planner 避障链路 (fly_ego.launch.py) 使用, 不依赖 airsim_ros_pkgs。
+// 发布: /airsim/depth_cam/image_raw (深度图 32FC1)
+//       /airsim/imu_px4/data        (IMU, NED/FRD 原生格式)
+//       /airsim/imu_ros2/data       (IMU, ENU/FLU 转换后)
+//       /airsim/true_odom/data      (真值里程计)
+//       /airsim/gps/data  /airsim/baro/data  /airsim/mag/data
+//       + TF (map -> 机体相关坐标系)
+// 采集: 3 个独立 RPC 客户端 (图像/IMU/低频) 多线程并行, 互不阻塞。
+// 连接: IP 读环境变量 PX4_SIM_HOST_ADDR, 未设置则默认 172.28.144.1。
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>

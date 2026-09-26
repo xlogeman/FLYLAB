@@ -103,6 +103,7 @@ target_include_directories(airsim_sensor_vio PRIVATE
 target_link_libraries(airsim_sensor_vio AirLib ${OpenCV_LIBS} Threads::Threads)
 ament_target_dependencies(airsim_sensor_vio
   rclcpp
+  px4_msgs
   sensor_msgs
   cv_bridge
   nav_msgs

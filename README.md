@@ -1,71 +1,77 @@
-# fucker/ —— ytjy-sitl 课程复现工作区（已扁平化，自包含）
+# FLYLAB —— PX4 + AirSim SITL 无人机仿真实验平台
 
-> 原始 `code/` 归档与 `bare/`、`origins/` 已删除，本目录即全部。
-> 归档时代的原始说明保留在 `docs/README-archive.md`、`docs/source-map.md`。
+WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做无人机自主飞行研究：感知建图、视觉惯导（VINS / OpenVINS / ORB-SLAM3）、避障规划（EGO-Planner）与 offboard 控制全链路打通。
 
-```
-fucker/
-├── env.sh            ← 环境总入口（每个新终端先 source /root/fucker/env.sh）
-├── README.md         ← 本文件
-├── REPRODUCE.md      ← 复现清单（实测踩坑记录 + 新机器操作步骤）
-├── ros2_ws/          ← colcon 工作空间（38 源码包全绿，install/ 45 包）
-│   ├── src/          ← 课程 10 包 + mavros/libmavconn/mavros_msgs（源码 2.15.0）
-│   └── build/ install/ log/
-├── px4.1.15.2/       ← PX4 v1.15.2 全量（含编译产物，可直接启动）
-├── ORB_SLAM3_FIXED/  ← ORB-SLAM3 库（含 lib/*.so 与 Thirdparty 编译产物）
-├── Cosys-AirSim/     ← AirSim 本体（UE 端插件同源 fork，airsim_ros_pkgs 编译依赖）
-├── mavros/           ← mavros 源码原件（已复制进 ros2_ws/src，此为留档）
-├── scripts/
-│   ├── bare/         ← 每课裸命令脚本（含一键启动 fucker-run-px4.sh）
-│   ├── origins/      ← launch 原件、多机脚本、MAVSDK 避障、airframes
-│   ├── px4/          ← PX4 快速启动入口
-│   └── gcs-relay.py  ← QGC 双向 UDP 中继（QGC 必备）
-├── configs/
-│   ├── vins-config/  ← VINS 课程配置
-│   └── shell/        ← 原作者 bashrc / terminator 布局（参考用）
-└── docs/             ← 归档时代说明（README-archive / source-map，历史参考）
-```
+## 工作区总体
 
-## src/ 包清单
-
-| 包 | 说明 |
+| 目录 | 说明 |
 |---|---|
-| hw_insight | 课程主包：节点+launch+rviz+YOLO 权重（.pt 已随包） |
-| hw_interface / airsim_ros_pkgs / airsim_interfaces / px4_msgs | 消息与桥接，lesson3 起的基础设施 |
-| planner / uav_simulator | EGO-Planner（lesson12/13） |
-| openvins | OpenVINS（ov_core/ov_init/ov_msckf 等 5 包） |
-| vins | VINS-Fusion（4 子包） |
-| orb_slam3 | ORB-SLAM3 wrapper；`CMakeModules/FindORB_SLAM3.cmake` 指向 `/root/fucker/ORB_SLAM3_FIXED` |
-| mavros / libmavconn / mavros_msgs | 源码编译 2.15.0（官方源无 C++ 二进制，见 REPRODUCE.md） |
+| `ros2_ws/` | ROS2 工作空间，**核心是 `src/flylab` 包**，其余为各算法移植包（openvins / vins / orb_slam3 / planner / mavros 等） |
+| `Cosys-AirSim/` | UE 端仿真器（Cosys fork，含深度相机/激光雷达支持） |
+| `px4.1.15.2/` | PX4 SITL v1.15.2 源码（机型 `none_iris`） |
+| `ORB_SLAM3_FIXED/` | ORB-SLAM3 运行时库 |
+| `mavros/` `libmavconn/` `mavros_msgs/` | MAVROS 通信栈 |
+| `scripts/` `env.sh` | 启动脚本与环境变量 |
 
-## 常用命令
+---
+
+## flylab 核心包
+
+从 [ytjy-sitl] 课程体系（hw_insight / hw_interface）解构移植而来，C++ 重写、去除个人化封装。传感器节点 RPC 直连 AirSim，不依赖 `airsim_ros_pkgs`。
+
+### 功能链路一览
+
+| 链路 | 一键启动 | 场景配置 | 说明 |
+|---|---|---|---|
+| 仿真飞行 | `ros2 launch flylab sim_fly.launch.py` | `configs/fly.json` | 基础场景：手动 offboard 速度控制 |
+| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图（另有分段调试 / 动态清理 / 彩色点云版） |
+| EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC |
+| OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO（原课程 lesson10），断桨联动启停 |
+| VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹（带起飞联动开关） |
+| ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
+
+### C++ 节点（flylab/src）
+
+| 节点 | 功能 |
+|---|---|
+| `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
+| `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
+| `px4_ego_tracker` | EGO 轨迹跟踪 + PX4 混控，链路状态彩色提示（黄=异常/绿=正常），断链自动检测（`link_timeout_sec`，默认 3s） |
+| `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
+| `octomap_dynamic` | 建图链路 octomap 动态清理 |
+| `vins_arming_switch` | VINS-Fusion 起飞联动开关 |
+
+### 环境依赖
+
+| 依赖 | 说明 |
+|---|---|
+| ROS2 Humble + PX4 SITL v1.15.2 | PX4 消息经 MicroXRCEAgent（`udp4 -p 8888`）桥接 |
+| Cosys-AirSim 5.8 | UE 端仿真器，场景按链路选用 `configs/` 下的 json |
+| ego_planner / ov_msckf / orbslam3 | 工作空间内移植的算法包 |
+
+---
+
+## 快速开始
 
 ```bash
-# 0. 环境总入口（每个新终端）
-source /root/fucker/env.sh
+# 1. 编译
+source /opt/ros/humble/setup.bash
+export MAKEFLAGS=-j2                    # WSL 下必须限制并行度
+cd ~/fucker/ros2_ws && colcon build --parallel-workers 2
+source install/setup.bash
 
-# 1. 启动 PX4（先开 Windows 端 UE/Cosys-AirSim 场景）
-bash /root/fucker/scripts/bare/fucker-run-px4.sh          # --clean 清参数缓存
+# 2. 启动仿真环境
+#    UE/AirSim 场景配置: 把 configs/ 下对应 json 复制到 Windows 端 Documents\AirSim\settings.json 后重启 UE
+bash /root/fucker/scripts/bare/fucker-run-px4.sh   # PX4 SITL
+MicroXRCEAgent udp4 -p 8888                        # PX4 <-> ROS2 桥
 
-# 2. DDS Agent（lesson3 起，另开终端）
-MicroXRCEAgent udp4 -p 8888
-
-# 3. 按课验证
-ros2 launch hw_insight lesson3.launch.py
-ros2 run hw_insight keyboard_velocity
-
-# 4. QGC 地面站（Windows 端）：先起中继再开 QGC
-nohup python3 /root/fucker/scripts/gcs-relay.py > /root/fucker/gcs-relay.log 2>&1 &
-
-# 5. 重新编译（改了 src/ 之后）
-cd /root/fucker/ros2_ws && colcon build --parallel-workers 2 \
-    --cmake-args -DCMAKE_BUILD_TYPE=Release    # ⚠ 并行度别调高，会打爆 WSL 内存
+# 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
+ros2 launch flylab fly_ego.launch.py        # EGO 避障（可选 xrce:=true / rviz:=false）
+ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 ```
 
-## 关键适配点（动过的地方，详见 REPRODUCE.md）
+## 注意事项
 
-- `orb_slam3/CMakeModules/FindORB_SLAM3.cmake` → 指向本目录 `ORB_SLAM3_FIXED`
-- `env.sh` LD_LIBRARY_PATH → `ORB_SLAM3_FIXED/{lib,Thirdparty/DBoW2/lib,Thirdparty/g2o/lib}`
-- PX4 build 缓存内绝对路径已改为 `/root/fucker/px4.1.15.2`
-- `airsim_ros_pkgs/CMakeLists.txt` 的 `AIRSIM_ROOT` → `/root/fucker/Cosys-AirSim`
-- 课程脚本内原机器路径（/home/hw/...）已全部改写为本目录
+- **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
+- **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
+- 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/*.cpp` 文件头注释
