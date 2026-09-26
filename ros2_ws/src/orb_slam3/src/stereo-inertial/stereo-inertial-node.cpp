@@ -64,8 +64,8 @@ StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const string &st
 	ptrPubOdom_ = this->create_publisher<nav_msgs::msg::Odometry>("orb_slam3/odometry", 10);
 	ptrPubPath_ = this->create_publisher<nav_msgs::msg::Path>("orb_slam3/path", 10);
 
-	// 设置 Path 的 Frame ID
-	mPath_.header.frame_id = "map";
+	// 设置 Path 的 Frame ID (与 odometry 的 frame_id 保持一致, RViz 无需 TF 即可同时显示)
+	mPath_.header.frame_id = "world";
 
     subImu_ = this->create_subscription<ImuMsg>("imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
     subImgLeft_ = this->create_subscription<ImageMsg>("camera/left", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));

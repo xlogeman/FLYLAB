@@ -47,7 +47,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Axes
       Enabled: true
-      Length: 1
+      Length: 0.5
       Name: Axes
       Radius: 0.10000000149011612
       Reference Frame: PX4/CameraDepth_body

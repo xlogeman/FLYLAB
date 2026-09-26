@@ -48,12 +48,12 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
-      Color: 25; 255; 0
+      Color: 216; 225; 54
       Enabled: true
       Head Diameter: 0.30000001192092896
       Head Length: 0.20000000298023224
       Length: 0.30000001192092896
-      Line Style: Lines
+      Line Style: Billboard
       Line Width: 0.029999999329447746
       Name: Path
       Offset:
@@ -90,12 +90,12 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
-      Color: 255; 0; 0
+      Color: 105; 192; 198
       Enabled: true
       Head Diameter: 0.30000001192092896
       Head Length: 0.20000000298023224
       Length: 0.30000001192092896
-      Line Style: Lines
+      Line Style: Billboard
       Line Width: 0.029999999329447746
       Name: Path
       Offset:
@@ -118,12 +118,12 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
-      Color: 255; 255; 255
+      Color: 187; 143; 213
       Enabled: true
       Head Diameter: 0.30000001192092896
       Head Length: 0.20000000298023224
       Length: 0.30000001192092896
-      Line Style: Lines
+      Line Style: Billboard
       Line Width: 0.029999999329447746
       Name: Path
       Offset:
@@ -142,6 +142,48 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /global_fusion/global_path
+      Value: true
+    - Alpha: 1
+      Angle Tolerance: 0.10000000149011612
+      Axes Length: 1
+      Axes Radius: 0.05000000074505806
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 204; 51; 204
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: false
+        Position:
+          Alpha: 0.30000001192092896
+          Color: 204; 51; 204
+          Scale: 1
+          Value: false
+        Value: false
+      Enabled: true
+      Keep Shape: false
+      Name: DronePose
+      Position Tolerance: 0.10000000149011612
+      Shape:
+        Alpha: 1
+        Axes Length: 0.5
+        Axes Radius: 0.10000000074505806
+        Color: 255; 25; 0
+        Head Length: 0.30000001192092896
+        Head Radius: 0.10000000149011612
+        Shaft Length: 1
+        Shaft Radius: 0.05000000074505806
+        Value: Axes
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /vins_estimator/imu_propagate
       Value: true
   Enabled: true
   Global Options:
