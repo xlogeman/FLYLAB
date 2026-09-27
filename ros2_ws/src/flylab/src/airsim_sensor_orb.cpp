@@ -2,7 +2,6 @@
 //
 // 功能: 通过 RPC 直连 Cosys-AirSim 采集双目相机与传感器数据并发布 ROS2 话题,
 //       供 ORB-SLAM3 双目+IMU (orb_slam3.launch.py) 使用。
-//       由原 airsim_ros_pkgs/ytjy_airsim_ros_topic.cpp 移植收编。
 // 发布: /airsim/left_cam/image_raw  /airsim/right_cam/image_raw (双目灰度图, 同步时间戳)
 //       /airsim/imu_px4/data        (IMU, NED/FRD 原生格式)
 //       /airsim/imu_ros2/data       (IMU, ENU/FLU 转换后)

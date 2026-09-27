@@ -3,7 +3,7 @@
 <package format="3">
   <name>flylab</name>
   <version>0.2.0</version>
-  <description>PX4 + AirSim SITL course toolkit: C++ offboard control nodes, launch files and rviz configs, refactored from the ytjy-sitl lessons for sharing.</description>
+  <description>PX4 + AirSim SITL course toolkit: C++ offboard control nodes, launch files and rviz configs.</description>
   <maintainer email="xlogeman@gmail.com">xlogeman</maintainer>
   <license>Apache-2.0</license>
 

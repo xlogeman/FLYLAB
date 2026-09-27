@@ -71,26 +71,3 @@ add_custom_target(none_iris
 		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/10016_none_iris
 	COMMENT "launching px4 none_iris (SYS_AUTOSTART=10016)"
 )
-
-# ytjy_fpv1 (custom airframe for AirSim)
-add_custom_target(ytjy_fpv1
-	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70001 $<TARGET_FILE:px4>
-	WORKING_DIRECTORY ${SITL_WORKING_DIR}
-	USES_TERMINAL
-	DEPENDS
-		px4
-		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70001_ytjy_fpv1
-	COMMENT "launching px4 ytjy_fpv1 (SYS_AUTOSTART=70001)"
-)
-
-add_custom_target(ytjy_fpv2
-	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70002 $<TARGET_FILE:px4>
-	WORKING_DIRECTORY ${SITL_WORKING_DIR}
-	USES_TERMINAL
-	DEPENDS
-		px4
-		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70002_ytjy_fpv2
-	COMMENT "launching px4 ytjy_fpv2 (SYS_AUTOSTART=70002)"
-)
-
-

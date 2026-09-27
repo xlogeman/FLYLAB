@@ -1,7 +1,7 @@
 // ============================================================================
 // move_velocity —— 通用 PX4 offboard 速度控制器 (C++)
 //
-// 移植自 ytjy-sitl hw_insight/move_velocity.py, 改动点:
+// 功能:
 //   1. 去掉键盘依赖 (HWSimpleKeyboardInfo), 改订阅标准 geometry_msgs/Twist
 //   2. Twist 按 REP-103 惯例解释 (FLU: x前 y左 z上, angular.z 逆时针为正),
 //      内部转换为 PX4 NED 系速度
