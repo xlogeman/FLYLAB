@@ -70,6 +70,24 @@ ros2 launch flylab fly_ego.launch.py        # EGO 避障
 ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 ```
 
+---
+
+## flylab_tools 视觉算法实验区
+
+独立小工具（`ros2_ws/src/flylab_tools`），**直连 AirSim RPC** 实时查看任意相机画面，不依赖 ROS 链路/传感器节点，与算法链路互不干扰。
+
+- **按需拉取**：每帧只向 AirSim 请求当前选中的那 1 路相机（30Hz），切换下拉框即时生效，其余相机零开销
+- **深度伪彩**：名字含 `depth` 的相机自动伪彩显示（红近蓝远，0.2~20m）
+- **断线重连**：UE 重启后自动接上；只保留最新帧，不积压
+- 前提：相机需在 UE 端 `settings.json` 中配置过（`configs/settings.json` 已含全部相机）
+
+```bash
+ros2 run flylab_tools camera_view                                # 本机 UE / 已设 PX4_SIM_HOST_ADDR
+ros2 run flylab_tools camera_view --ros-args -p host:=<UE主机IP>  # 跨主机指定
+```
+
+依赖：`pip install msgpack-rpc-python`；AirSim 客户端复用 `Cosys-AirSim/PythonClient`。
+
 ## 注意事项
 
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可

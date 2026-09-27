@@ -3,7 +3,7 @@
   "SimMode": "Multirotor",
   "ClockType": "SteppableClock",
   "ClockSpeed": 1,
-  "ViewMode": "",
+  "ViewMode": "SpringArmChase",
   "RpcEnabled": true,
   "ApiServerPort": 41451,
   "LogMessagesVisible": true,
@@ -69,22 +69,28 @@
         "Imu": {
           "SensorType": 2,
           "Enabled": true,
-          "RotationalVariance": 0.0002,
-          "LinearAccelerationVariance": 0.0015,
-          "LinearAccelerationBiasStd": 0.0003,
-          "AngularRandomWalk": 0.008,
-          "VelocityRandomWalk": 0.008
+          "AngularRandomWalk": 0,
+          "GyroBiasStabilityTau": 500,
+          "GyroBiasStability": 0,
+          "VelocityRandomWalk": 0,
+          "AccelBiasStabilityTau": 800,
+          "AccelBiasStability": 0,
+          "UpdateFrequency": 200
         },
         "Gps": {
           "SensorType": 3,
           "Enabled": true,
-          "EphTimeConstantSec": 0.9,
-          "EphInitialStdev": 1.0,
-          "EphDriftStdev": 0.02,
-          "EphFinalStdev": 0.0001,
-          "EphMin3d": 3.0,
-          "EphMin2d": 2.0,
-          "UpdateRateHz": 50
+          "EphTimeConstant": 0.001,
+          "EpvTimeConstant": 0.001,
+          "EphInitial": 0.01,
+          "EpvInitial": 0.01,
+          "EphFinal": 0.01,
+          "EpvFinal": 0.01,
+          "EphMin3d": 0.01,
+          "EphMin2d": 0.01,
+          "UpdateLatency": 0.0,
+          "UpdateFrequency": 100,
+          "StartupDelay": 0
         },
         "Barometer": {
           "SensorType": 1,
@@ -95,44 +101,123 @@
         "Magnetometer": {
           "SensorType": 4,
           "Enabled": true
+        },
+        "Lidar1": {
+          "SensorType": 6,
+          "Enabled": true,
+          "NumberOfChannels": 16,
+          "MeasurementsPerCycle": 1800,
+          "RotationsPerSecond": 10,
+          "UpdateFrequency": 10,
+          "HorizontalFOVStart": 0,
+          "HorizontalFOVEnd": 360,
+          "VerticalFOVUpper": 15,
+          "VerticalFOVLower": -15,
+          "Range": 100,
+          "GenerateNoise": true,
+          "MinNoiseStandardDeviation": 0.002,
+          "NoiseDistanceScale": 0.001,
+          "X": 0.0,
+          "Y": 0.0,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0,
+          "DrawSensor": false
         }
       },
       "Cameras": {
+        "depth_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 1,
+              "Width": 400,
+              "Height": 300,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0
+            }
+          ],
+          "X": 0.4,
+          "Y": 0.0,
+          "Z": 0.0,
+          "Pitch": 0.0,
+          "Roll": 0.0,
+          "Yaw": 0.0
+        },
         "left_cam": {
           "CaptureSettings": [
             {
               "ImageType": 0,
-              "Width": 640,
-              "Height": 480,
+              "Width": 400,
+              "Height": 300,
               "FOV_Degrees": 90,
-              "TargetGamma": 1.0,
-              "MotionBlurAmount": 0
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0
             }
           ],
-          "X": 0.1,
-          "Y": -0.05,
+          "X": 0.4,
+          "Y": -0.08,
           "Z": 0.0,
+          "Pitch": -36.86989764584402,
           "Roll": 0,
-          "Pitch": 0,
           "Yaw": 0
         },
         "right_cam": {
           "CaptureSettings": [
             {
               "ImageType": 0,
-              "Width": 640,
-              "Height": 480,
+              "Width": 400,
+              "Height": 300,
               "FOV_Degrees": 90,
-              "TargetGamma": 1.0,
-              "MotionBlurAmount": 0
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0
             }
           ],
-          "X": 0.1,
-          "Y": 0.05,
+          "X": 0.4,
+          "Y": 0.08,
           "Z": 0.0,
+          "Pitch": -36.86989764584402,
           "Roll": 0,
-          "Pitch": 0,
           "Yaw": 0
+        },
+        "CameraDepth": {
+          "CaptureSettings": [
+            {
+              "ImageType": 1,
+              "Width": 200,
+              "Height": 120,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 1000,
+              "AutoExposureBias": 0,
+              "AutoExposureMaxBrightness": 0.64,
+              "AutoExposureMinBrightness": 0.03,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0,
+              "ProjectionMode": "",
+              "OrthoWidth": 5.12
+            }
+          ],
+          "Gimbal": {
+            "Stabilization": 0,
+            "Pitch": 0,
+            "Roll": 0,
+            "Yaw": 0
+          },
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "Pitch": 0,
+          "Roll": 0,
+          "Yaw": 0,
+          "UnrealEngine": {
+            "PixelFormatOverride": [
+              {
+                "ImageType": 0,
+                "PixelFormat": 0
+              }
+            ]
+          }
         }
       },
       "Parameters": {
