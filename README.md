@@ -6,8 +6,8 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 | 目录 | 说明 |
 |---|---|
-| `ros2_ws/` | ROS2 工作空间，**核心是 `src/flylab` 包**，其余为各算法移植包（openvins / vins / orb_slam3 / planner / mavros 等） |
-| `Cosys-AirSim/` | UE 端仿真器（Cosys fork，含深度相机/激光雷达支持） |
+| `ros2_ws/` | ROS2 工作空间，核心是 `src/flylab` 包，其余为各算法移植包  |
+| `Cosys-AirSim/` | UE 端仿真器 |
 | `px4.1.15.2/` | PX4 SITL v1.15.2 源码（机型 `none_iris`） |
 | `ORB_SLAM3_FIXED/` | ORB-SLAM3 运行时库 |
 | `mavros/` `libmavconn/` `mavros_msgs/` | MAVROS 通信栈 |
@@ -74,5 +74,5 @@ ros2 launch flylab openvins_msckf.launch.py # OpenVINS 双目 VIO
 
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
 - **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
-- **airsim_ros_pkgs 为官方原版**：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`；旧课程话题命名（`world_ned`、`PX4/odometry`）不再有效。两个包的本地改动仅有：`AIRSIM_ROOT` 绝对路径、Humble 的 `cv_bridge.h` 头文件、launch 默认参数（`PX4_SIM_HOST_ADDR` 环境变量 / `is_vulkan:=False`）
+- **airsim_ros_pkgs 为官方原版**：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`。
 - 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/*.cpp` 文件头注释

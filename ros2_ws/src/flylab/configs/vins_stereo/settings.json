@@ -18,7 +18,7 @@
             "SerialPort": "COM8",
             "QgcHostIp": "127.0.0.1",
             "QgcPort": 14550,
-            "Pitch": 0, "Roll": 0, "Yaw": 90,
+            "Pitch": 0, "Roll": 0, "Yaw": 0,
             "Cameras": {
                 "left_cam": {
                     "CaptureSettings": [

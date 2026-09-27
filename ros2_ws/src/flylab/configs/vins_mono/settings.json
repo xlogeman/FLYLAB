@@ -18,7 +18,7 @@
             "SerialPort": "COM8",
             "QgcHostIp": "127.0.0.1",
             "QgcPort": 14550,
-            "Pitch": 0, "Roll": 0, "Yaw": 90,
+            "Pitch": 0, "Roll": 0, "Yaw": 0,
             "Cameras": {
                 "left_cam": {
                     "CaptureSettings": [
@@ -32,20 +32,6 @@
                         }
                     ],
                     "X": 0.4, "Y": -0.08, "Z": 0.0,
-                    "Pitch": -36.86989764584402, "Roll": 0, "Yaw": 0
-                },
-                "right_cam": {
-                    "CaptureSettings": [
-                        {
-                        "ImageType": 0,
-                        "Width": 400,
-                        "Height": 300,
-                        "FOV_Degrees": 90,
-                        "AutoExposureSpeed": 100,
-                        "AutoExposureBias": 0
-                        }
-                    ],
-                    "X": 0.4, "Y": 0.08, "Z": 0.0,
                     "Pitch": -36.86989764584402, "Roll": 0, "Yaw": 0
                 }
             },

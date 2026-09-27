@@ -97,7 +97,7 @@ Visualization Manager:
       Enabled: true
       Length: 0.5
       Name: Axes
-      Radius: 0.2
+      Radius: 0.1
       Reference Frame: base_link
       Value: true
   Enabled: true
@@ -164,7 +164,7 @@ Visualization Manager:
       Pitch: 0.7
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.6
+      Yaw: -1
     Saved: ~
 Window Geometry:
   Displays:
