@@ -1,0 +1,48 @@
+/**:
+    ros__parameters:
+        # FAST-LIO 建图参数 —— 适配 flylab 仿真链路 (configs/fast_lio/settings.json + airsim_sensor_lidar 节点)
+        feature_extract_enable: false      # 直接法 (scan-to-map), 默认关闭特征提取
+        point_filter_num: 2                # 每 N 点取 1, 仿真点云噪声小可适当加密
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: "./fastlio_map.pcd"
+
+        common:
+            lid_topic:  "/airsim/lidar/points"   # airsim_sensor_lidar 发布
+            imu_topic:  "/airsim/imu/data"       # airsim_sensor_lidar 发布 (FLU, 200Hz)
+            time_sync_en: false                  # LiDAR/IMU 同源仿真时钟, 无需软件同步
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 2                # 2 = Velodyne (标准 PointCloud2 路径), airsim_sensor_lidar 输出 velodyne 风格字段
+            scan_line: 16                # settings.json 中 NumberOfChannels = 16
+            scan_rate: 10                # RotationsPerSecond / UpdateFrequency = 10Hz
+            timestamp_unit: 0            # time 字段单位: 0-秒 (airsim_sensor_lidar 合成的 per-point time 为秒)
+            blind: 1.0                   # 近距离盲区 (米), 机体自身近处点云过滤
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     100.0         # 与 settings.json 中 Range 一致
+            extrinsic_est_en:  false     # LiDAR 与 IMU 同装于机体原点, 外参精确已知, 关闭在线估计
+            # 外参 = LiDAR 在 IMU body 系 (FLU) 下的位姿, 与 settings.json 挂载参数 (NED) 对应
+            extrinsic_T: [ 0., 0., 0.]
+            extrinsic_R: [ 1., 0., 0.,
+                        0., 1., 0.,
+                        0., 0., 1.]
+
+        publish:
+            path_en:  true
+            scan_publish_en:  true       # false: close all the point cloud output
+            dense_publish_en: true       # false: low down the points number in a global-frame point clouds scan.
+            scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
+
+        pcd_save:
+            pcd_save_en: false           # 需要保存地图时改为 true, 运行中调用 /map_save 服务
+            interval: -1                 # -1: 全部帧存入单个 pcd 文件

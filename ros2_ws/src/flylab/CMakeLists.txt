@@ -136,6 +136,25 @@ ament_target_dependencies(airsim_sensor_orb
 )
 target_compile_options(airsim_sensor_orb PRIVATE -Wno-pedantic -Wnoexcept)
 
+# FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR (合成逐点时间戳) + IMU
+add_executable(airsim_sensor_lidar src/airsim_sensor_lidar.cpp)
+target_include_directories(airsim_sensor_lidar PRIVATE
+  ${AIRSIM_ROOT}/AirLib/include
+  ${AIRSIM_ROOT}/AirLib/deps/eigen3
+  ${RPC_LIB_INCLUDES}
+  ${AIRSIM_ROOT}/MavLinkCom/include
+  ${AIRSIM_ROOT}/MavLinkCom/common_utils
+)
+target_link_libraries(airsim_sensor_lidar AirLib Threads::Threads)
+ament_target_dependencies(airsim_sensor_lidar
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+)
+target_compile_options(airsim_sensor_lidar PRIVATE -Wno-pedantic -Wnoexcept)
+
 install(TARGETS
   move_velocity
   octomap_dynamic
@@ -143,6 +162,7 @@ install(TARGETS
   airsim_sensor_ego
   airsim_sensor_vio
   airsim_sensor_orb
+  airsim_sensor_lidar
   px4_ego_tracker
   DESTINATION lib/${PROJECT_NAME}
 )

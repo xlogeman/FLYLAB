@@ -17,8 +17,6 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 ## flylab 核心包
 
-从早期课程工程（已移除的 hw_insight / hw_interface 包）解构移植而来，C++ 重写、去除个人化封装。
-
 ### 功能链路一览
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
@@ -29,6 +27,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
 | VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
 | ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
+| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（16 线仿真雷达），`/map_save` 保存 PCD |
 
 ### C++ 节点（flylab/src）
 
@@ -36,6 +35,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 |---|---|
 | `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
 | `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
+| `airsim_sensor_lidar` | FAST-LIO 链路传感器：3D LiDAR（按方位角合成逐点时间戳）+ IMU，NED→FLU |
 | `px4_ego_tracker` | EGO 轨迹跟踪 + PX4 混控，链路状态彩色提示，断链自动检测（默认 3s） |
 | `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
 | `octomap_dynamic` | 建图链路 octomap 动态清理 |
@@ -47,7 +47,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 |---|---|
 | ROS2 Humble + PX4 SITL v1.15.2 | PX4 消息经 MicroXRCEAgent（`udp4 -p 8888`）桥接 |
 | Cosys-AirSim 5.8 | UE 端仿真器，场景按链路选用 `configs/` 下的 json |
-| ego_planner / ov_msckf / orbslam3 | 工作空间内移植的算法包 |
+| ego_planner / ov_msckf / orbslam3 / fast_lio | 工作空间内移植的算法包（fast_lio 依赖 livox_ros_driver2，需先 source） |
 
 ---
 
