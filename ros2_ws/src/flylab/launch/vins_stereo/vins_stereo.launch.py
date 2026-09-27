@@ -66,7 +66,7 @@ def generate_launch_description():
     # 配置取自 flylab/configs/vins_stereo/ (内参 yaml 相对 config 文件所在目录解析, 需同目录)
     config_path = os.path.join(pkg_share, 'configs/vins_stereo/stereo_extrinsics.yaml')
     vins_estimator_node = launch_ros.actions.Node(
-            package='vins',
+            package='vins_fusion',
             executable='vins_node',
             name='vins_estimator',
             namespace='vins_estimator',

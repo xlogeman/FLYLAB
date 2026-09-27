@@ -61,7 +61,7 @@ def generate_launch_description():
     # AirSim 端参数用 configs/vins_mono/settings.json（复制到 Windows 的 Documents/AirSim/ 下）
     config_path = os.path.join(pkg_share, 'configs/vins_mono/euroc_mono_imu_config.yaml')
     vins_estimator_node = launch_ros.actions.Node(
-            package='vins',
+            package='vins_fusion',
             executable='vins_node',
             name='vins_estimator',
             namespace='vins_estimator',
