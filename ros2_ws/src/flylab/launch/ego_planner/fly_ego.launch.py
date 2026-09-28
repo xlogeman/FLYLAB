@@ -4,18 +4,26 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-# EGO 避障飞行一键启动:
-#   ros2 launch flylab fly_ego.launch.py
+# EGO 避障飞行一键启动 (支持 tracker 参数选择控制链路):
+#   ros2 launch flylab fly_ego.launch.py                     # 默认 uXRCE-DDS 链路
+#   ros2 launch flylab fly_ego.launch.py tracker:=mavros     # MAVROS 链路
 # 等价于同时启动以下组件:
 #   1. airsim_sensor_ego         AirSim 直连传感器节点 (深度图/IMU/里程计/GPS/气压计/磁力计 + TF)
 #   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
-#   3. ego_tracker_px4           EGO 轨迹跟踪节点 (RViz 点击目标点接管, 到达后交还 QGC)
-#   4. rviz2                     EGO 链路 RViz 可视化
+#   3. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
+#      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
+#      注意: PX4 SITL 的 14540/14580 onboard 实例对端会被 AirSim 控制通道 (UnrealEditor, UDP 14580) 抢占,
+#      MAVROS 必须使用 14582↔14542 专属实例 (见 px4-rc.mavlink)
+#   4. ego_tracker_mavros / ego_tracker_px4  EGO 轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
+#   5. rviz2                     EGO 链路 RViz 可视化
 # 可选:
-#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (若已手动启动过会端口冲突, 保持默认 false)
+#   tracker:=px4|mavros          轨迹跟踪链路选择 (默认 px4, 即 uXRCE-DDS 直连)
+#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=px4 时需要, 已手动启动则保持 false)
+#   mavros:=false                不启动 MAVROS (tracker:=mavros 且已手动启动过时使用)
+#   fcu_url:=udp://:14542@       MAVROS 连接串, 默认指向 PX4 的 MAVROS 专属实例 (14582→14542)
 #   rviz:=false                  不启动 RViz
 
 
@@ -27,11 +35,23 @@ def generate_launch_description():
 
     use_rviz = LaunchConfiguration('rviz', default='true')
     start_xrce = LaunchConfiguration('xrce', default='false')
+    tracker = LaunchConfiguration('tracker', default='px4')
+    start_mavros = LaunchConfiguration('mavros', default='true')
+    fcu_url = LaunchConfiguration('fcu_url', default='udp://:14542@')
     drone_id = LaunchConfiguration('drone_id', default='0')
+
+    # MAVROS 启动条件: tracker 选了 mavros 且 mavros 参数未关闭
+    need_mavros = PythonExpression([
+        "'", tracker, "' == 'mavros' and '", start_mavros, "' == 'true'"
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument('rviz', default_value='true', description='是否启动 RViz'),
-        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (已手动启动则保持 false)'),
+        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (tracker:=px4 时需要, 已手动启动则保持 false)'),
+        DeclareLaunchArgument('tracker', default_value='px4', choices=['mavros', 'px4'],
+                              description='轨迹跟踪链路: px4=uXRCE-DDS 直连 (默认) / mavros=MAVROS 桥'),
+        DeclareLaunchArgument('mavros', default_value='true', description='是否随 launch 启动 MAVROS (tracker:=mavros 且已手动启动则设为 false)'),
+        DeclareLaunchArgument('fcu_url', default_value='udp://:14542@', description='MAVROS 飞控连接串 (PX4 MAVROS 专属实例 14582→14542)'),
         DeclareLaunchArgument('drone_id', default_value='0', description='Drone ID'),
 
         # 可选: MicroXRCEAgent (PX4 与 ROS2 的 uXRCE-DDS 桥)
@@ -55,15 +75,38 @@ def generate_launch_description():
             launch_arguments={'drone_id': drone_id}.items(),
         ),
 
-        # 3. PX4 轨迹跟踪节点
+        # 3. MAVROS 桥 (仅 tracker:=mavros 时启动, mavros:=false 可关闭适用于已手动启动的情况)
+        Node(
+            package='mavros',
+            executable='mavros_node',
+            name='mavros',
+            output='screen',
+            parameters=[{
+                'fcu_url': fcu_url,
+                'gcs_url': '',
+                'tgt_system': 1,
+                'tgt_component': 1,
+            }],
+            condition=IfCondition(need_mavros),
+        ),
+
+        # 4. EGO 轨迹跟踪节点 (按 tracker 参数二选一)
+        Node(
+            package='flylab',
+            executable='ego_tracker_mavros',
+            name='ego_tracker_mavros_node',
+            output='screen',
+            condition=IfCondition(PythonExpression(["'", tracker, "' == 'mavros'"])),
+        ),
         Node(
             package='flylab',
             executable='ego_tracker_px4',
             name='ego_tracker_px4_node',
             output='screen',
+            condition=IfCondition(PythonExpression(["'", tracker, "' == 'px4'"])),
         ),
 
-        # 4. RViz 可视化 (rviz:=false 可关闭)
+        # 5. RViz 可视化 (rviz:=false 可关闭)
         Node(
             package='rviz2',
             executable='rviz2',

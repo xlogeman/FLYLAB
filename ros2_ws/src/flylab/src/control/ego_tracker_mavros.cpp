@@ -75,7 +75,7 @@ protected:
         hover.type_mask = mavros_msgs::msg::PositionTarget::IGNORE_VX | mavros_msgs::msg::PositionTarget::IGNORE_VY |
                           mavros_msgs::msg::PositionTarget::IGNORE_VZ | mavros_msgs::msg::PositionTarget::IGNORE_AFX |
                           mavros_msgs::msg::PositionTarget::IGNORE_AFY | mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
-                          mavros_msgs::msg::PositionTarget::FORCE | mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
+                          mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
         hover.position = current_pose_.pose.position;
         hover.yaw = extractYaw(current_pose_.pose.orientation);
         setpoint_publisher_->publish(hover);
@@ -86,8 +86,9 @@ protected:
     {
         ego_setpoint_.header.stamp = now();
         ego_setpoint_.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
-        // type_mask 只置 FORCE 位 (512): 位置+速度+加速度+yaw+yaw_rate 全部启用前馈
-        ego_setpoint_.type_mask = mavros_msgs::msg::PositionTarget::FORCE;
+        // type_mask = 0: 所有字段(位置+速度+加速度+yaw+yaw_rate)全部生效, 不带任何 IGNORE 位;
+        // 切勿置 FORCE 位(512)——PX4 不支持力设定点, 见到即丢弃整条 setpoint
+        ego_setpoint_.type_mask = 0;
         ego_setpoint_.position.x = msg.position.x;
         ego_setpoint_.position.y = msg.position.y;
         ego_setpoint_.position.z = msg.position.z;
