@@ -19,7 +19,7 @@
             "QgcHostIp": "127.0.0.1",
             "QgcPort": 14550,
             "Cameras": {
-                "CameraDepth": {
+                "depth_cam": {
                     "CaptureSettings": [
                         {
                         "ImageType": 1,

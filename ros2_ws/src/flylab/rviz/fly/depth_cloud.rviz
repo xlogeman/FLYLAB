@@ -53,17 +53,17 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        CameraDepth_optical/static:
+        depth_cam_optical/static:
           Value: false
         CameraImage_optical/static:
           Value: false
         PX4:
           Value: false
-        PX4/CameraDepth_body:
+        PX4/depth_cam_body:
           Value: true
-        PX4/CameraDepth_body/static:
+        PX4/depth_cam_body/static:
           Value: false
-        PX4/CameraDepth_optical:
+        PX4/depth_cam_optical:
           Value: false
         PX4/CameraImage_body:
           Value: false
@@ -87,20 +87,20 @@ Visualization Manager:
       Tree:
         world:
           PX4:
-            PX4/CameraDepth_body:
+            PX4/depth_cam_body:
               {}
-            PX4/CameraDepth_optical:
+            PX4/depth_cam_optical:
               {}
             PX4/CameraImage_body:
               {}
             PX4/CameraImage_optical:
               {}
             PX4/odom_local_ned:
-              CameraDepth_optical/static:
+              depth_cam_optical/static:
                 {}
               CameraImage_optical/static:
                 {}
-              PX4/CameraDepth_body/static:
+              PX4/depth_cam_body/static:
                 {}
               PX4/CameraImage_body/static:
                 {}
@@ -127,7 +127,7 @@ Visualization Manager:
       Color Transformer: AxisColor
       Color Transport Hint: raw
       Decay Time: 0
-      Depth Map Topic: /airsim_node/PX4/CameraDepth_DepthPerspective/image
+      Depth Map Topic: /airsim_node/PX4/depth_cam_DepthPerspective/image
       Depth Map Transport Hint: raw
       Enabled: true
       Invert Rainbow: false
@@ -152,7 +152,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: PX4/CameraDepth_body
+    Fixed Frame: PX4/depth_cam_body
     Frame Rate: 30
   Name: root
   Tools:

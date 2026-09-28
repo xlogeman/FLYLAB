@@ -25,10 +25,10 @@ def generate_launch_description():
             executable='point_cloud_xyzrgb_node',
             name='depth_to_cloud',
             remappings=[
-                ('depth_registered/image_rect', '/airsim_node/PX4/CameraDepth_DepthPlanar/image'),
-                ('depth_registered/camera_info', '/airsim_node/PX4/CameraDepth_DepthPlanar/camera_info'),
-                ('rgb/image_rect_color', '/airsim_node/PX4/CameraDepth_Scene/image'),
-                ('rgb/camera_info', '/airsim_node/PX4/CameraDepth_Scene/camera_info'),
+                ('depth_registered/image_rect', '/airsim_node/PX4/depth_cam_DepthPlanar/image'),
+                ('depth_registered/camera_info', '/airsim_node/PX4/depth_cam_DepthPlanar/camera_info'),
+                ('rgb/image_rect_color', '/airsim_node/PX4/depth_cam_Scene/image'),
+                ('rgb/camera_info', '/airsim_node/PX4/depth_cam_Scene/camera_info'),
                 ('points', '/point_cloud_xyzrgb_node/depth_color_cloud')
             ]
     )

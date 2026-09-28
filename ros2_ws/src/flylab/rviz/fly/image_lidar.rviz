@@ -104,17 +104,17 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        CameraDepth_optical/static:
+        depth_cam_optical/static:
           Value: false
         CameraImage_optical/static:
           Value: false
         PX4:
           Value: false
-        PX4/CameraDepth_body:
+        PX4/depth_cam_body:
           Value: false
-        PX4/CameraDepth_body/static:
+        PX4/depth_cam_body/static:
           Value: false
-        PX4/CameraDepth_optical:
+        PX4/depth_cam_optical:
           Value: false
         PX4/CameraImage_body:
           Value: true
@@ -138,20 +138,20 @@ Visualization Manager:
       Tree:
         world:
           PX4:
-            PX4/CameraDepth_body:
+            PX4/depth_cam_body:
               {}
-            PX4/CameraDepth_optical:
+            PX4/depth_cam_optical:
               {}
             PX4/CameraImage_body:
               {}
             PX4/CameraImage_optical:
               {}
             PX4/odom_local_ned:
-              CameraDepth_optical/static:
+              depth_cam_optical/static:
                 {}
               CameraImage_optical/static:
                 {}
-              PX4/CameraDepth_body/static:
+              PX4/depth_cam_body/static:
                 {}
               PX4/CameraImage_body/static:
                 {}

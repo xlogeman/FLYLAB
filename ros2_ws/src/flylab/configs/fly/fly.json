@@ -135,7 +135,7 @@
         }
       },
       "Cameras": {
-        "CameraDepth": {
+        "depth_cam": {
           "CaptureSettings": [
             {
               "ImageType": 2,

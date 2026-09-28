@@ -180,44 +180,6 @@
           "Pitch": -36.86989764584402,
           "Roll": 0,
           "Yaw": 0
-        },
-        "CameraDepth": {
-          "CaptureSettings": [
-            {
-              "ImageType": 1,
-              "Width": 200,
-              "Height": 120,
-              "FOV_Degrees": 90,
-              "AutoExposureSpeed": 1000,
-              "AutoExposureBias": 0,
-              "AutoExposureMaxBrightness": 0.64,
-              "AutoExposureMinBrightness": 0.03,
-              "MotionBlurAmount": 0,
-              "TargetGamma": 1.0,
-              "ProjectionMode": "",
-              "OrthoWidth": 5.12
-            }
-          ],
-          "Gimbal": {
-            "Stabilization": 0,
-            "Pitch": 0,
-            "Roll": 0,
-            "Yaw": 0
-          },
-          "X": 0,
-          "Y": 0,
-          "Z": -1,
-          "Pitch": 0,
-          "Roll": 0,
-          "Yaw": 0,
-          "UnrealEngine": {
-            "PixelFormatOverride": [
-              {
-                "ImageType": 0,
-                "PixelFormat": 0
-              }
-            ]
-          }
         }
       },
       "Parameters": {

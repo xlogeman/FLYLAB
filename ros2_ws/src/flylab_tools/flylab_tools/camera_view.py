@@ -15,11 +15,22 @@
      cosysairsim 客户端位于 Cosys-AirSim/PythonClient（自动加入 sys.path）
 """
 import os
+import signal
 import sys
 import threading
 import time
 
 import numpy as np
+
+
+def _to_np(data, dtype):
+    """AirSim msgpack 返回的图像数据可能是 bytes(bin 编码)或 list(array 编码)，
+    统一转成 numpy 数组。"""
+    if isinstance(data, np.ndarray):
+        return data
+    if isinstance(data, list):
+        return np.asarray(data, dtype=dtype)
+    return np.frombuffer(data, dtype=dtype)
 
 try:
     import cosysairsim as airsim
@@ -29,18 +40,18 @@ except ImportError:
 
 import rclpy
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QHBoxLayout, QLabel, QMainWindow, QVBoxLayout,
     QWidget,
 )
 
 VEHICLE = 'PX4'
-GRAB_HZ = 30        # 拉取频率
+GRAB_HZ = 60        # 拉取频率上限 (实际帧率 = min(该值, 1/RPC往返延迟))
 DISPLAY_MS = 33     # 显示刷新周期
 DEPTH_MIN_M, DEPTH_MAX_M = 0.2, 20.0
 
-DEFAULT_CAMERAS = ['left_cam', 'right_cam', 'depth_cam', 'CameraDepth']
+DEFAULT_CAMERAS = ['left_cam', 'right_cam', 'depth_cam']
 
 
 class Grabber(threading.Thread):
@@ -73,6 +84,7 @@ class Grabber(threading.Thread):
         n, t_prev = 0, time.time()
         while self.running:
             try:
+                t_start = time.monotonic()
                 if client is None:
                     client = airsim.VehicleClient(ip=self.host, port=self.port)
                     client.confirmConnection()
@@ -81,17 +93,24 @@ class Grabber(threading.Thread):
                 with self.lock:
                     cam = self.camera
                 is_depth = 'depth' in cam.lower()
-                req = airsim.ImageRequest(
-                    cam, airsim.ImageType.Scene, is_depth, False)
+                # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
+                # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
+                # PF_FloatRGBA ensure 断言并返回无效数据 (NaN/Inf)
+                if is_depth:
+                    req = airsim.ImageRequest(
+                        cam, airsim.ImageType.DepthPlanar, True, False)
+                else:
+                    req = airsim.ImageRequest(
+                        cam, airsim.ImageType.Scene, False, False)
                 resp = client.simGetImages([req], VEHICLE)
 
                 if resp and resp[0].width > 0:
                     r = resp[0]
                     if is_depth:   # DepthPlanar, 单位米
-                        arr = np.frombuffer(
+                        arr = _to_np(
                             r.image_data_float, np.float32).reshape(r.height, r.width)
                     else:          # BGR
-                        arr = np.ascontiguousarray(np.frombuffer(
+                        arr = np.ascontiguousarray(_to_np(
                             r.image_data_uint8, np.uint8).reshape(r.height, r.width, 3))
                     with self.lock:
                         self.frame = (arr, is_depth)
@@ -102,7 +121,9 @@ class Grabber(threading.Thread):
                         n, t_prev = 0, now
                 else:
                     time.sleep(0.05)
-                time.sleep(1.0 / GRAB_HZ)
+                # 自适应节流: 扣除 RPC 往返耗时后再补足剩余间隔。
+                # 往返超过 1/GRAB_HZ 时不再额外睡眠, 帧率由网络/渲染延迟决定
+                time.sleep(max(0.0, 1.0 / GRAB_HZ - (time.monotonic() - t_start)))
             except Exception as e:
                 self.log(f'连接中断: {e}，1 秒后重连...')
                 client = None
@@ -111,7 +132,9 @@ class Grabber(threading.Thread):
 
 def colorize_depth(depth):
     """深度图(米) -> 伪彩 BGR。"""
-    d = np.clip(depth, DEPTH_MIN_M, DEPTH_MAX_M)
+    # 天空等无回波区域为 Inf/NaN, 归到最远端, 避免 invalid value in cast 警告
+    d = np.nan_to_num(depth, nan=DEPTH_MAX_M, posinf=DEPTH_MAX_M, neginf=DEPTH_MIN_M)
+    d = np.clip(d, DEPTH_MIN_M, DEPTH_MAX_M)
     norm = ((d - DEPTH_MIN_M) / (DEPTH_MAX_M - DEPTH_MIN_M) * 255).astype(np.uint8)
     try:
         import cv2
@@ -170,7 +193,7 @@ class Viewer(QMainWindow):
         h, w = arr.shape[:2]
         img = QImage(arr.data, w, h, w * 3, QImage.Format_BGR888).copy()
         self.video.setPixmap(QPixmap.fromImage(img).scaled(
-            self.video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.video.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
         kind = '深度' if is_depth else 'Scene'
         self.status.setText(f'[{cam}] {w}x{h} {kind}  {fps:.1f} fps')
 
@@ -187,13 +210,27 @@ def main(args=None):
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
     app = QApplication([])
+    # 显式指定含中文字形的字体, 避免无中文字体环境下界面显示为方框
+    app.setFont(QFont('Noto Sans CJK SC', 10))
     win = Viewer(grabber)
     win.show()
-    ret = app.exec_()
 
-    grabber.stop()
-    node.destroy_node()
-    rclpy.shutdown()
+    # Ctrl+C 修复: 主线程阻塞在 Qt 事件循环里, 默认的 KeyboardInterrupt 会被
+    # PyQt 的槽回调边界吞掉, 导致进程杀不死。改为收到 SIGINT 直接退出事件循环。
+    signal.signal(
+        signal.SIGINT, lambda *_: QApplication.instance().quit())
+
+    try:
+        ret = app.exec_()
+    except KeyboardInterrupt:
+        ret = 0
+    finally:
+        grabber.stop()
+        node.destroy_node()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
     raise SystemExit(ret)
 
 

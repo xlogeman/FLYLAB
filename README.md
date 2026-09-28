@@ -57,7 +57,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 ```bash
 # 1. 编译
 source /opt/ros/humble/setup.bash
-export MAKEFLAGS=-j2                    # WSL 下必须限制并行度
+export MAKEFLAGS=-j2                    # WSL 下需限制并行度
 cd ~/flylab/ros2_ws && colcon build --parallel-workers 2
 source install/setup.bash
 
