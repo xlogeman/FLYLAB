@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 # 等价于同时启动以下组件:
 #   1. airsim_sensor_ego         AirSim 直连传感器节点 (深度图/IMU/里程计/GPS/气压计/磁力计 + TF)
 #   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
-#   3. px4_ego_tracker           PX4 轨迹跟踪节点 (RViz 点击目标点接管, 到达后交还 QGC)
+#   3. ego_tracker_px4           EGO 轨迹跟踪节点 (RViz 点击目标点接管, 到达后交还 QGC)
 #   4. rviz2                     EGO 链路 RViz 可视化
 # 可选:
 #   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (若已手动启动过会端口冲突, 保持默认 false)
@@ -58,8 +58,8 @@ def generate_launch_description():
         # 3. PX4 轨迹跟踪节点
         Node(
             package='flylab',
-            executable='px4_ego_tracker',
-            name='px4_ego_tracker_node',
+            executable='ego_tracker_px4',
+            name='ego_tracker_px4_node',
             output='screen',
         ),
 

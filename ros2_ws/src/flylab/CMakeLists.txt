@@ -19,6 +19,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(quadrotor_msgs REQUIRED)
+find_package(mavros_msgs REQUIRED)
 
 set(FLYLAB_DEPENDENCIES
   rclcpp
@@ -37,7 +38,7 @@ ament_target_dependencies(octomap_dynamic
 )
 
 # offboard 速度控制器: 订阅 /flylab/cmd_vel (geometry_msgs/Twist)
-add_executable(move_velocity src/move_velocity.cpp)
+add_executable(move_velocity src/control/move_velocity.cpp)
 ament_target_dependencies(move_velocity ${FLYLAB_DEPENDENCIES})
 
 # VINS 起飞联动开关: 监听 /fmu/out/vehicle_status,
@@ -59,17 +60,26 @@ add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" flylab_rpclib_wrapper)
 add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom" flylab_MavLinkCom)
 add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib" flylab_AirLib)
 
-# EGO 轨迹跟踪节点: 接收 EGO-Planner 轨迹并转成 PX4 setpoint 下发
-add_executable(px4_ego_tracker src/px4_ego_tracker.cpp)
-ament_target_dependencies(px4_ego_tracker
+# EGO 轨迹跟踪节点: 接收 EGO-Planner 轨迹并转成 PX4 setpoint 下发 (uXRCE-DDS 链路)
+add_executable(ego_tracker_px4 src/control/ego_tracker_px4.cpp)
+ament_target_dependencies(ego_tracker_px4
   rclcpp
   px4_msgs
   geometry_msgs
   quadrotor_msgs
 )
 
+# EGO 轨迹跟踪节点 (MAVROS 版): 接收 EGO-Planner 轨迹并经 MAVROS 下发 PX4
+add_executable(ego_tracker_mavros src/control/ego_tracker_mavros.cpp)
+ament_target_dependencies(ego_tracker_mavros
+  rclcpp
+  geometry_msgs
+  mavros_msgs
+  quadrotor_msgs
+)
+
 # EGO 链路 AirSim 传感器节点: 深度图/IMU/真值里程计/GPS/气压计/磁力计 + TF
-add_executable(airsim_sensor_ego src/airsim_sensor_ego.cpp)
+add_executable(airsim_sensor_ego src/sensors/airsim_sensor_ego.cpp)
 target_include_directories(airsim_sensor_ego PRIVATE
   ${AIRSIM_ROOT}/AirLib/include
   ${AIRSIM_ROOT}/AirLib/deps/eigen3
@@ -92,7 +102,7 @@ ament_target_dependencies(airsim_sensor_ego
 target_compile_options(airsim_sensor_ego PRIVATE -Wno-pedantic -Wnoexcept)
 
 # VIO 链路 AirSim 传感器节点 (OpenVINS MSCKF): 双目相机 + IMU + GPS/气压计/磁力计
-add_executable(airsim_sensor_vio src/airsim_sensor_vio.cpp)
+add_executable(airsim_sensor_vio src/sensors/airsim_sensor_vio.cpp)
 target_include_directories(airsim_sensor_vio PRIVATE
   ${AIRSIM_ROOT}/AirLib/include
   ${AIRSIM_ROOT}/AirLib/deps/eigen3
@@ -115,7 +125,7 @@ ament_target_dependencies(airsim_sensor_vio
 target_compile_options(airsim_sensor_vio PRIVATE -Wno-pedantic -Wnoexcept)
 
 # ORB-SLAM3 链路 AirSim 传感器节点: 双目灰度图 + IMU(PX4/ROS2 双坐标系) + 真值里程计 + GPS/气压计/磁力计
-add_executable(airsim_sensor_orb src/airsim_sensor_orb.cpp)
+add_executable(airsim_sensor_orb src/sensors/airsim_sensor_orb.cpp)
 target_include_directories(airsim_sensor_orb PRIVATE
   ${AIRSIM_ROOT}/AirLib/include
   ${AIRSIM_ROOT}/AirLib/deps/eigen3
@@ -137,7 +147,7 @@ ament_target_dependencies(airsim_sensor_orb
 target_compile_options(airsim_sensor_orb PRIVATE -Wno-pedantic -Wnoexcept)
 
 # FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR (合成逐点时间戳) + IMU
-add_executable(airsim_sensor_lidar src/airsim_sensor_lidar.cpp)
+add_executable(airsim_sensor_lidar src/sensors/airsim_sensor_lidar.cpp)
 target_include_directories(airsim_sensor_lidar PRIVATE
   ${AIRSIM_ROOT}/AirLib/include
   ${AIRSIM_ROOT}/AirLib/deps/eigen3
@@ -163,7 +173,8 @@ install(TARGETS
   airsim_sensor_vio
   airsim_sensor_orb
   airsim_sensor_lidar
-  px4_ego_tracker
+  ego_tracker_px4
+  ego_tracker_mavros
   DESTINATION lib/${PROJECT_NAME}
 )
 

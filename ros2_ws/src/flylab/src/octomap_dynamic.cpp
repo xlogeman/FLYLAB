@@ -5,7 +5,7 @@
 //       防止建图链路长时间飞行后地图无限膨胀。
 // 参数: range_around_drone (默认 5.0 米, 无人机周围保留范围),
 //       map_range (默认 200.0 米, 总地图范围)。
-// 输入: nav_msgs/Odometry 无人机里程计; 移植自 hw_insight/octomap_dynamic.py。
+// 输入: nav_msgs/Odometry 无人机里程计。
 #include <chrono>
 #include <memory>
 
