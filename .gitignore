@@ -44,3 +44,4 @@ px4.1.15.2/Tools/simulation/
 ros2_ws/src/openvins/ov_data/
 ORB_SLAM3_FIXED/evaluation/
 ros2_ws/src/FAST_LIO_ROS2/doc/
+ros2_ws/src/SUPER/misc/
