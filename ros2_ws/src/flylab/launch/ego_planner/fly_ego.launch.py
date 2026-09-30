@@ -17,7 +17,7 @@ from launch_ros.actions import Node
 #      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
 #      注意: PX4 SITL 的 14540/14580 onboard 实例对端会被 AirSim 控制通道 (UnrealEditor, UDP 14580) 抢占,
 #      MAVROS 必须使用 14582↔14542 专属实例 (见 px4-rc.mavlink)
-#   4. ego_tracker_mavros / ego_tracker_px4  EGO 轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
+#   4. tracker_mavros / tracker_px4  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
 #   5. rviz2                     EGO 链路 RViz 可视化
 # 可选:
 #   tracker:=px4|mavros          轨迹跟踪链路选择 (默认 px4, 即 uXRCE-DDS 直连)
@@ -90,19 +90,23 @@ def generate_launch_description():
             condition=IfCondition(need_mavros),
         ),
 
-        # 4. EGO 轨迹跟踪节点 (按 tracker 参数二选一)
+        # 4. 轨迹跟踪节点 (按 tracker 参数二选一; pos_cmd_topic 对接 EGO-Planner 输出)
         Node(
             package='flylab',
-            executable='ego_tracker_mavros',
-            name='ego_tracker_mavros_node',
+            executable='tracker_mavros',
+            name='tracker_mavros_node',
             output='screen',
+            parameters=[{'pos_cmd_topic': PythonExpression(
+                ["'/drone_' + '", drone_id, "' + '_planning/pos_cmd'"])}],
             condition=IfCondition(PythonExpression(["'", tracker, "' == 'mavros'"])),
         ),
         Node(
             package='flylab',
-            executable='ego_tracker_px4',
-            name='ego_tracker_px4_node',
+            executable='tracker_px4',
+            name='tracker_px4_node',
             output='screen',
+            parameters=[{'pos_cmd_topic': PythonExpression(
+                ["'/drone_' + '", drone_id, "' + '_planning/pos_cmd'"])}],
             condition=IfCondition(PythonExpression(["'", tracker, "' == 'px4'"])),
         ),
 

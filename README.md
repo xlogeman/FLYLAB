@@ -36,8 +36,8 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
 | `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
 | `airsim_sensor_lidar` | FAST-LIO 链路传感器：3D LiDAR（按方位角合成逐点时间戳）+ IMU，NED→FLU |
-| `ego_tracker_px4` | EGO 轨迹跟踪 + PX4 混控（uXRCE-DDS 链路），链路状态彩色提示，断链自动检测 |
-| `ego_tracker_mavros` | EGO 轨迹跟踪 + PX4 混控（MAVROS 链路），与 ego_tracker_px4 共用控制逻辑 |
+| `tracker_px4` | 轨迹跟踪 + PX4 混控（uXRCE-DDS 链路），链路状态彩色提示，断链自动检测 |
+| `tracker_mavros` | 轨迹跟踪 + PX4 混控（MAVROS 链路），与 tracker_px4 共用控制逻辑 |
 | `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
 | `octomap_dynamic` | 建图链路 octomap 动态清理 |
 | `vins_arming_switch` | VINS-Fusion 起飞联动开关 |

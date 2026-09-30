@@ -80,7 +80,7 @@ def generate_launch_description():
         output='screen',                    # 将该节点的日志打印到终端屏幕上
 
         remappings=[
-            # 【输出接口】：将默认的 position_cmd 重映射为特定的格式，ego_tracker_px4 监听这个话题
+            # 【输出接口】：将默认的 position_cmd 重映射为特定的格式，tracker_px4/tracker_mavros 监听这个话题
             ('position_cmd', ['drone_', drone_id, '_planning/pos_cmd']),
 
             # 【输入接口】：监听由大脑 (ego_planner_node) 发出的 B-样条数学曲线参数

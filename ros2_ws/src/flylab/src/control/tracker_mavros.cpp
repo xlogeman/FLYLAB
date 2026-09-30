@@ -1,8 +1,8 @@
-// ego_tracker_mavros —— EGO 链路轨迹跟踪 + MAVROS 混控节点
+// tracker_mavros —— 避障规划链路轨迹跟踪 + MAVROS 混控节点
 //
-// 可执行名: ego_tracker_mavros
+// 可执行名: tracker_mavros
 // 链路: MAVROS (UDP 14540), 不依赖 MicroXRCEAgent / px4_msgs
-// 与 ego_tracker_px4 共用 ego_tracker_base.hpp 的控制逻辑,
+// 与 tracker_px4 共用 tracker_base.hpp 的控制逻辑,
 // 本文件只实现 MAVROS 传输层: ENU 轨迹直接透传 / set_mode 服务 / mavros 状态源
 // 注: MAVROS setpoint_raw 插件输入为 ENU 语义, 内部负责 ENU->NED 转换 (含 yaw/yaw_rate)
 #include <array>
@@ -17,14 +17,14 @@
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <quadrotor_msgs/msg/position_command.hpp>
 
-#include "ego_tracker_base.hpp"
+#include "tracker_base.hpp"
 
-class EgoTrackerMavros : public EgoTrackerBase
+class TrackerMavros : public TrackerBase
 {
 public:
-    EgoTrackerMavros()
-    : EgoTrackerBase("ego_tracker_mavros_node", 20.0,
-                     "MAVROS + EGO 混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO.LOITER 交还 QGC)")
+    TrackerMavros()
+    : TrackerBase("tracker_mavros_node", 20.0,
+                  "MAVROS + 轨迹跟踪混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO.LOITER 交还 QGC)")
     {
         setpoint_publisher_ = create_publisher<mavros_msgs::msg::PositionTarget>("/mavros/setpoint_raw/local", 10);
 
@@ -81,36 +81,36 @@ protected:
         setpoint_publisher_->publish(hover);
     }
 
-    // ---------------- EGO 指令编码: ENU 直接透传 ----------------
-    void fillEgoSetpoint(const quadrotor_msgs::msg::PositionCommand & msg) override
+    // ---------------- 规划指令编码: ENU 直接透传 ----------------
+    void fillPlannerSetpoint(const quadrotor_msgs::msg::PositionCommand & msg) override
     {
-        ego_setpoint_.header.stamp = now();
-        ego_setpoint_.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+        planner_setpoint_.header.stamp = now();
+        planner_setpoint_.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
         // type_mask = 0: 所有字段(位置+速度+加速度+yaw+yaw_rate)全部生效, 不带任何 IGNORE 位;
         // 切勿置 FORCE 位(512)——PX4 不支持力设定点, 见到即丢弃整条 setpoint
-        ego_setpoint_.type_mask = 0;
-        ego_setpoint_.position.x = msg.position.x;
-        ego_setpoint_.position.y = msg.position.y;
-        ego_setpoint_.position.z = msg.position.z;
-        ego_setpoint_.velocity.x = msg.velocity.x;
-        ego_setpoint_.velocity.y = msg.velocity.y;
-        ego_setpoint_.velocity.z = msg.velocity.z;
-        ego_setpoint_.acceleration_or_force.x = msg.acceleration.x;
-        ego_setpoint_.acceleration_or_force.y = msg.acceleration.y;
-        ego_setpoint_.acceleration_or_force.z = msg.acceleration.z;
-        ego_setpoint_.yaw = msg.yaw;
-        ego_setpoint_.yaw_rate = msg.yaw_dot;
+        planner_setpoint_.type_mask = 0;
+        planner_setpoint_.position.x = msg.position.x;
+        planner_setpoint_.position.y = msg.position.y;
+        planner_setpoint_.position.z = msg.position.z;
+        planner_setpoint_.velocity.x = msg.velocity.x;
+        planner_setpoint_.velocity.y = msg.velocity.y;
+        planner_setpoint_.velocity.z = msg.velocity.z;
+        planner_setpoint_.acceleration_or_force.x = msg.acceleration.x;
+        planner_setpoint_.acceleration_or_force.y = msg.acceleration.y;
+        planner_setpoint_.acceleration_or_force.z = msg.acceleration.z;
+        planner_setpoint_.yaw = msg.yaw;
+        planner_setpoint_.yaw_rate = msg.yaw_dot;
     }
 
-    void publishEgoSetpoint() override
+    void publishPlannerSetpoint() override
     {
-        setpoint_publisher_->publish(ego_setpoint_);
+        setpoint_publisher_->publish(planner_setpoint_);
     }
 
-    // ---------------- OFFBOARD 且已有 EGO 指令: 重发缓存轨迹点(心跳兜底) + 到达检测 ----------------
-    void tickOffboardWithEgo() override
+    // ---------------- OFFBOARD 且已有规划指令: 重发缓存轨迹点(心跳兜底) + 到达检测 ----------------
+    void tickOffboardWithPlanner() override
     {
-        publishEgoSetpoint();
+        publishPlannerSetpoint();
         checkGoalReached();
     }
 
@@ -165,13 +165,13 @@ private:
     mavros_msgs::msg::State state_;                     // MAVROS 飞控状态 (connected/armed/mode)
     geometry_msgs::msg::PoseStamped current_pose_;      // 当前位置 (ENU)
     geometry_msgs::msg::TwistStamped current_velocity_; // 当前速度 (ENU)
-    mavros_msgs::msg::PositionTarget ego_setpoint_;     // 缓存的最新 EGO 轨迹点 (ENU, 待透传)
+    mavros_msgs::msg::PositionTarget planner_setpoint_; // 缓存的最新规划轨迹点 (ENU, 待透传)
 };
 
 int main(int argc, char * argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<EgoTrackerMavros>());
+    rclcpp::spin(std::make_shared<TrackerMavros>());
     rclcpp::shutdown();
     return 0;
 }

@@ -60,18 +60,18 @@ add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" flylab_rpclib_wrapper)
 add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom" flylab_MavLinkCom)
 add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib" flylab_AirLib)
 
-# EGO 轨迹跟踪节点: 接收 EGO-Planner 轨迹并转成 PX4 setpoint 下发 (uXRCE-DDS 链路)
-add_executable(ego_tracker_px4 src/control/ego_tracker_px4.cpp)
-ament_target_dependencies(ego_tracker_px4
+# 轨迹跟踪节点: 接收规划器轨迹并转成 PX4 setpoint 下发 (uXRCE-DDS 链路)
+add_executable(tracker_px4 src/control/tracker_px4.cpp)
+ament_target_dependencies(tracker_px4
   rclcpp
   px4_msgs
   geometry_msgs
   quadrotor_msgs
 )
 
-# EGO 轨迹跟踪节点 (MAVROS 版): 接收 EGO-Planner 轨迹并经 MAVROS 下发 PX4
-add_executable(ego_tracker_mavros src/control/ego_tracker_mavros.cpp)
-ament_target_dependencies(ego_tracker_mavros
+# 轨迹跟踪节点 (MAVROS 版): 接收规划器轨迹并经 MAVROS 下发 PX4
+add_executable(tracker_mavros src/control/tracker_mavros.cpp)
+ament_target_dependencies(tracker_mavros
   rclcpp
   geometry_msgs
   mavros_msgs
@@ -173,8 +173,8 @@ install(TARGETS
   airsim_sensor_vio
   airsim_sensor_orb
   airsim_sensor_lidar
-  ego_tracker_px4
-  ego_tracker_mavros
+  tracker_px4
+  tracker_mavros
   DESTINATION lib/${PROJECT_NAME}
 )
 

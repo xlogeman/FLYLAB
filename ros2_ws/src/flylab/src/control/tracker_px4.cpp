@@ -1,8 +1,8 @@
-// ego_tracker_px4 —— EGO 链路轨迹跟踪 + PX4 混控节点 (uXRCE-DDS 版)
+// tracker_px4 —— 避障规划链路轨迹跟踪 + PX4 混控节点 (uXRCE-DDS 版)
 //
-// 可执行名: ego_tracker_px4
+// 可执行名: tracker_px4
 // 链路: px4_msgs 直发 /fmu/in/*, 依赖 MicroXRCEAgent (udp4 -p 8888)
-// 与 ego_tracker_mavros 共用 ego_tracker_base.hpp 的控制逻辑,
+// 与 tracker_mavros 共用 tracker_base.hpp 的控制逻辑,
 // 本文件只实现 uXRCE-DDS 传输层: setpoint 编码 / ENU->NED 转换 / 模式切换命令
 #include <array>
 #include <cmath>
@@ -16,14 +16,14 @@
 #include <px4_msgs/msg/vehicle_status.hpp>
 #include <quadrotor_msgs/msg/position_command.hpp>
 
-#include "ego_tracker_base.hpp"
+#include "tracker_base.hpp"
 
-class EgoTrackerPx4 : public EgoTrackerBase
+class TrackerPx4 : public TrackerBase
 {
 public:
-    EgoTrackerPx4()
-    : EgoTrackerBase("ego_tracker_px4_node", 50.0,
-                     "PX4 + EGO 混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO_LOITER 交还 QGC)")
+    TrackerPx4()
+    : TrackerBase("tracker_px4_node", 50.0,
+                  "PX4 + 轨迹跟踪混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO_LOITER 交还 QGC)")
     {
         // 和PX4通讯的QOS配置文件
         rclcpp::QoS qos_profile(rclcpp::KeepLast(1));
@@ -91,8 +91,8 @@ protected:
     void publishOffboardHeartbeat() override
     {
         px4_msgs::msg::OffboardControlMode msg;
-        if (ego_active_) {
-            // EGO 自动避障模式
+        if (planner_active_) {
+            // 避障规划自动飞行模式
             msg.position = true;
             msg.velocity = true;
             msg.acceleration = true;
@@ -121,26 +121,26 @@ protected:
         trajectory_setpoint_publisher_->publish(msg);
     }
 
-    // ---------------- EGO 指令编码: ENU -> NED ----------------
-    void fillEgoSetpoint(const quadrotor_msgs::msg::PositionCommand & msg) override
+    // ---------------- 规划指令编码: ENU -> NED ----------------
+    void fillPlannerSetpoint(const quadrotor_msgs::msg::PositionCommand & msg) override
     {
         // 坐标系转换：ROS(ENU) -> PX4(NED)
         // 1. 位置转换
-        ego_setpoint_.position = {static_cast<float>(msg.position.y), static_cast<float>(msg.position.x), static_cast<float>(-msg.position.z)};
+        planner_setpoint_.position = {static_cast<float>(msg.position.y), static_cast<float>(msg.position.x), static_cast<float>(-msg.position.z)};
         // 2. 速度转换
-        ego_setpoint_.velocity = {static_cast<float>(msg.velocity.y), static_cast<float>(msg.velocity.x), static_cast<float>(-msg.velocity.z)};
+        planner_setpoint_.velocity = {static_cast<float>(msg.velocity.y), static_cast<float>(msg.velocity.x), static_cast<float>(-msg.velocity.z)};
         // 3. 加速度转换
-        ego_setpoint_.acceleration = {static_cast<float>(msg.acceleration.y), static_cast<float>(msg.acceleration.x), static_cast<float>(-msg.acceleration.z)};
+        planner_setpoint_.acceleration = {static_cast<float>(msg.acceleration.y), static_cast<float>(msg.acceleration.x), static_cast<float>(-msg.acceleration.z)};
         // 4. 偏航角 (Yaw) 转换
-        ego_setpoint_.yaw = static_cast<float>(M_PI / 2.0) - msg.yaw;
+        planner_setpoint_.yaw = static_cast<float>(M_PI / 2.0) - msg.yaw;
         // 5. 偏航角速度 (Yaw Rate) 转换
-        ego_setpoint_.yawspeed = -msg.yaw_dot;
+        planner_setpoint_.yawspeed = -msg.yaw_dot;
     }
 
-    void publishEgoSetpoint() override
+    void publishPlannerSetpoint() override
     {
-        ego_setpoint_.timestamp = timestamp_now();
-        trajectory_setpoint_publisher_->publish(ego_setpoint_);
+        planner_setpoint_.timestamp = timestamp_now();
+        trajectory_setpoint_publisher_->publish(planner_setpoint_);
     }
 
     // ---------------- 模式切换命令 ----------------
@@ -208,7 +208,7 @@ private:
     // ---------------- 状态变量 ----------------
     px4_msgs::msg::VehicleStatus vehicle_status_;           // 无人机状态信息
     px4_msgs::msg::VehicleLocalPosition vehicle_position_;  // 无人机当前位置
-    px4_msgs::msg::TrajectorySetpoint ego_setpoint_;        // 转换后的EGO轨迹点
+    px4_msgs::msg::TrajectorySetpoint planner_setpoint_;    // 转换后的规划轨迹点
     bool received_status_ = false;                          // 当前链路是否正常 (断链超时后会被复位)
     rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};     // 最近一次收到 vehicle_status 的时间
 };
@@ -216,7 +216,7 @@ private:
 int main(int argc, char * argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<EgoTrackerPx4>());
+    rclcpp::spin(std::make_shared<TrackerPx4>());
     rclcpp::shutdown();
     return 0;
 }
