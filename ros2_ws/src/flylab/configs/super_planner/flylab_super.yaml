@@ -1,0 +1,197 @@
+# flylab_super.yaml —— SUPER 接入 flylab 仿真链路的配置
+#
+# 真源位于 flylab/configs/super_planner/ (编译后安装到 flylab/share),
+# 由 fly_super.launch.py 以绝对路径传给 fsm_node 的 config_name 参数。
+#   点云: /cloud_registered  (world 系 ENU, 由 flylab/airsim_sensor_super 发布)
+#   里程计: /lidar_slam/odom (world 系 ENU, 同上)
+#   目标点: /goal_pose_3d    (tracker 拦截 RViz /goal_pose 后转发, 与 EGO 链路一致)
+#   输出: /super/pos_cmd     (mars PositionCommand, 由 flylab/super_cmd_bridge
+#                             转成标准消息发到 /planning/pos_cmd 给 tracker)
+#
+# 与原版的关键差异:
+#   - click_height: -10  —— SUPER 在 click_height > -5 时会强制覆盖目标 z;
+#     设为 -10 表示信任 tracker 传来的 z (tracker 的 goal_z_height 参数, 默认 2.0m)
+#   - cmd_topic 改为 /super/pos_cmd, 避免与 tracker 订阅的 /planning/pos_cmd 冲突
+#   - 速度/加速度限制与 EGO 链路一致 (3.0 m/s, 3.0 m/s^2), 保证 PX4 可平稳跟踪
+fsm:
+  click_goal_en: true
+  click_goal_topic: "/goal_pose_3d"
+  click_height: -10
+  click_yaw_en: true
+  replan_rate: 15.0
+  cmd_topic: "/super/pos_cmd"
+  mpc_cmd_topic: "/super/poly_traj"
+  timer_en: true
+
+super_planner:
+  backup_traj_en: true
+  detailed_log_en: false
+  visualization_en: true
+  use_fov_cut: false
+  print_log: false
+  visual_process: false
+  frontend_in_known_free: false
+  goal_yaw_en: true
+  goal_vel_en: false
+  corridor_bound_dis: 1.0
+  corridor_line_max_length: 1.2
+  safe_corridor_line_max_length: 5.0
+  iris_iter_num: 2
+  obs_skip_num: 2
+  replan_forward_dt: 0.1
+  planning_horizon: 7.0
+  sensing_horizon: -1
+  receding_dis: 4.0
+  # 机体安全半径 (米): 传感器节点已过滤 0.8m 内机身回波, 此处取 0.25
+  robot_r: 0.25
+  yaw_dot_max: 3.0
+  # Yaw mode: 1 heading to velocity, 2 heading to goal
+  yaw_mode: 1
+  mpc_horizon: 15
+
+
+traj_opt:
+  switch:
+    save_log_en: false
+    print_optimizer_log: false
+
+  boundary:
+    # 与 EGO 链路一致的速度/加速度限制
+    max_vel: 3.0
+    max_acc: 3.0
+    max_jerk: 30.0
+    max_omg: 2.5
+    max_acc_thr: 20.0
+    min_acc_thr: 6.0
+    penna_margin: 0.05
+
+  exp_traj:
+    # 1 for xi 2 for pos
+    pos_constraint_type: 1
+    energy_cost_type: 4
+    block_energy_cost: false
+    opt_accuracy: 5.0e-6
+    scale_factor: 1.0
+    integral_reso: 15
+    smooth_eps: 0.01
+    penna_t: 12000.0
+    penna_pos: 5.0e+6
+    penna_vel: 5.0e+5
+    penna_acc: 5.0e+5
+    penna_jerk: -5.0e+5
+    penna_attract: 1.0e+3
+    penna_omg:  5.0e+5
+    penna_thr: 1.0e+5
+
+  backup_traj:
+    uniform_time_en: true
+    pos_constraint_type: 1
+    piece_num: 2
+    energy_cost_type: 4
+    block_energy_cost: true
+    opt_accuracy: 1.0e-6
+    scale_factor: 1.0
+    integral_reso: 12
+    smooth_eps: 0.01
+    penna_t: 1200.0
+    penna_ts: 1.0e+5
+    penna_pos: 1.0e+6
+    penna_vel: 1.0e+5
+    penna_acc: 1.0e+5
+    penna_jerk: -1.0e+5
+    penna_omg: 1.0e+5
+    penna_thr: 1.0e+5
+
+  flatness:
+    mass: 1.64
+    dh: 0.35
+    dv: 0.35
+    cp: 0.001
+    v_eps: 0.0001
+    grav: 9.81
+
+
+astar:
+  map_voxel_num: [ 500, 500, 100 ]
+  visual_process: false
+  allow_diag: true
+  # 0 DIAG; 1 MANHATTAN; 2 EUCLIDEAN
+  heu_type: 2
+  debug_visualization_en: false
+
+
+rog_map:
+  resolution: 0.1
+  inflation_resolution: 0.2
+  inflation_step: 2
+  unk_inflation_en: false
+  unk_inflation_step: 1
+  map_size: [ 50,50,6 ]
+  # If the map rolling is disable, the map origin [m] should be set.
+  fix_map_origin: [ 0,0,1.5 ]
+  frontier_extraction_en: false
+
+  # Virtual ceil and ground
+  virtual_ceil_height: 3.5
+  virtual_ground_height: -0.1
+
+  load_pcd_en: false
+
+  map_sliding:
+    enable: true
+    # The minimum distance [m] to slide the map.
+    threshold: 0.3
+
+  esdf:
+    enable: false
+    resolution: 0.1
+    # The range of esdf around the odom [m].
+    local_update_box: [ 5,5,3 ]
+
+  # If [enable = true], the ROG-Map will actively take ros topic as input.
+  #  else user should call function [updateMap] to update the map.
+  ros_callback:
+    enable: true
+    cloud_topic: "/cloud_registered"
+    odom_topic: "/lidar_slam/odom"
+    odom_timeout: 2.0
+
+
+  visualization:
+    enable: true
+    # when enabled, use rqt_reconfigure to change the visualization parameters.
+    use_dynamic_reconfigure: false
+    # The rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    time_rate: 2
+    # The frame rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    frame_rate: 0
+    # visualization range along the odom [m].
+    range: [ 15, 15,4 ]
+    frame_id: "world"
+    pub_unknown_map_en: false
+
+  # Intensity filter for input point cloud. If the point intensity is less than this value,
+  # it will be ignored (to avoid noise like dusk).
+  intensity_thresh: -10
+  # The temporal downsample rate for input point cloud.
+  #  e.g. if set to k, the point cloud will be downsampled to 1/k.
+  point_filt_num: 1
+
+  # Probabilistc update
+  raycasting:
+    # if disable, the map will only maintain occupied information, and all other grid
+    # will be considered as unknown.
+    enable: false
+    batch_update_size: 1
+    local_update_box: [ 100,100,5 ]
+    # The range of raycasting [m].
+    ray_range: [0.5, 100 ]
+
+    p_min: 0.12
+    p_miss: 0.49
+    p_free: 0.499
+    p_occ: 0.85
+    p_hit: 0.9
+    p_max: 0.98
+    # The threshold of a non-occupied inf map grid to be considered as free. [0.0-1.0]
+    unk_thresh: 1.0

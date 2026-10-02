@@ -80,11 +80,15 @@ int main(int argc, char** argv) {
     // 初始化FSM
 
 #define CONFIG_FILE_DIR(name) (std::string(std::string(ROOT_DIR) + "config/"+(name)))
+    // 绝对路径直接使用 (如 flylab 集成时传入安装后的配置路径),
+    // 相对路径则在 SUPER 源码树 config/ 目录下查找 (原有行为不变)
     auto fsm_ptr = std::make_shared<FsmRos2>();
     std::string cfg_path = "click.yaml";
     node->declare_parameter("config_name", cfg_path);
     node->get_parameter("config_name", cfg_path);
-    cfg_path = CONFIG_FILE_DIR(cfg_path);
+    if (cfg_path.empty() || cfg_path[0] != '/') {
+        cfg_path = CONFIG_FILE_DIR(cfg_path);
+    }
     fsm_ptr->init(node,cfg_path);
 
     // 打印启动信息（ROS2风格）

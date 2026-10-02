@@ -18,6 +18,8 @@
   <depend>octomap_msgs</depend>
   <depend>std_msgs</depend>
   <depend>quadrotor_msgs</depend>
+  <!-- SUPER 输出桥接节点 (super_cmd_bridge.cpp) 编译依赖 -->
+  <depend>mars_quadrotor_msgs</depend>
 
   <!-- AirSim 直连传感器节点 (airsim_sensor_ego.cpp / airsim_sensor_vio.cpp / airsim_sensor_orb.cpp) 编译依赖 -->
   <depend>cv_bridge</depend>
@@ -26,6 +28,9 @@
 
   <!-- EGO 链路运行时依赖 -->
   <exec_depend>ego_planner</exec_depend>
+
+  <!-- SUPER 避障链路运行时依赖 -->
+  <exec_depend>super_planner</exec_depend>
 
   <!-- MAVROS 链路运行时依赖 -->
   <exec_depend>mavros</exec_depend>

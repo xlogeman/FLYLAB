@@ -20,6 +20,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(quadrotor_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
+find_package(mars_quadrotor_msgs REQUIRED)
 
 set(FLYLAB_DEPENDENCIES
   rclcpp
@@ -75,6 +76,14 @@ ament_target_dependencies(tracker_mavros
   rclcpp
   geometry_msgs
   mavros_msgs
+  quadrotor_msgs
+)
+
+# SUPER 输出桥接节点: mars_quadrotor_msgs/PositionCommand -> quadrotor_msgs/PositionCommand
+add_executable(super_cmd_bridge src/control/super_cmd_bridge.cpp)
+ament_target_dependencies(super_cmd_bridge
+  rclcpp
+  mars_quadrotor_msgs
   quadrotor_msgs
 )
 
@@ -165,6 +174,24 @@ ament_target_dependencies(airsim_sensor_lidar
 )
 target_compile_options(airsim_sensor_lidar PRIVATE -Wno-pedantic -Wnoexcept)
 
+# SUPER 链路 AirSim 传感器节点: LiDAR -> world 系点云 (机身半径过滤) + 真值里程计
+add_executable(airsim_sensor_super src/sensors/airsim_sensor_super.cpp)
+target_include_directories(airsim_sensor_super PRIVATE
+  ${AIRSIM_ROOT}/AirLib/include
+  ${AIRSIM_ROOT}/AirLib/deps/eigen3
+  ${RPC_LIB_INCLUDES}
+  ${AIRSIM_ROOT}/MavLinkCom/include
+  ${AIRSIM_ROOT}/MavLinkCom/common_utils
+)
+target_link_libraries(airsim_sensor_super AirLib Threads::Threads)
+ament_target_dependencies(airsim_sensor_super
+  rclcpp
+  sensor_msgs
+  nav_msgs
+  tf2
+)
+target_compile_options(airsim_sensor_super PRIVATE -Wno-pedantic -Wnoexcept)
+
 install(TARGETS
   move_velocity
   octomap_dynamic
@@ -173,8 +200,10 @@ install(TARGETS
   airsim_sensor_vio
   airsim_sensor_orb
   airsim_sensor_lidar
+  airsim_sensor_super
   tracker_px4
   tracker_mavros
+  super_cmd_bridge
   DESTINATION lib/${PROJECT_NAME}
 )
 
