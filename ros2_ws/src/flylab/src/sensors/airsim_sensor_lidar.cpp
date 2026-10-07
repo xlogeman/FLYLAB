@@ -21,6 +21,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -44,6 +45,8 @@ public:
         vehicle_name_ = this->declare_parameter<std::string>("vehicle_name", "PX4");
         lidar_name_ = this->declare_parameter<std::string>("lidar_sensor_name", "Lidar1");
         imu_name_ = this->declare_parameter<std::string>("imu_sensor_name", "Imu");
+        // UE 端传感器类型: true=GPU 雷达 (SensorType 8, 深度渲染, 异步采集不阻塞仿真), false=CPU 雷达 (SensorType 6)
+        use_gpu_lidar_ = this->declare_parameter<bool>("use_gpu_lidar", true);
         num_channels_ = static_cast<uint16_t>(this->declare_parameter<int>("num_channels", 16));
         meas_per_cycle_ = this->declare_parameter<int>("measurements_per_cycle", 1800);
         rotation_hz_ = this->declare_parameter<double>("rotation_frequency", 10.0);
@@ -127,16 +130,62 @@ private:
     // ================= 线程 1: LiDAR 点云发布 =================
     void grab_lidar() {
         try {
-            auto lidar_data = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
-            const auto stamp = this->now();
-            const size_t total = lidar_data.point_cloud.size() / 3;
+            // 读取点云: GPU 雷达 (SensorType 8, getGPULidarData) 或 CPU 雷达 (SensorType 6),
+            // 两者数据结构同构 (time_stamp + point_cloud), 点云均为传感器局部 NED 系
+            uint64_t sim_stamp = 0;
+            std::vector<float> points;
+            if (use_gpu_lidar_) {
+                auto d = client_lidar_->getGPULidarData(lidar_name_, vehicle_name_);
+                sim_stamp = d.time_stamp;
+                points = std::move(d.point_cloud);
+            } else {
+                auto d = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
+                sim_stamp = d.time_stamp;
+                points = std::move(d.point_cloud);
+            }
+            const double wall_s = this->now().seconds();
+            const double sweep_dur =
+                (rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1;
+
+            // 重复帧去重: RPC 轮询相位与雷达输出相位未锁定, 同一帧可能被连续抓取两次,
+            // FAST-LIO 对相同时间戳的帧不去重, 会导致空 IMU 窗口的退化配准.
+            if (sim_stamp > 0 && sim_stamp == last_sim_stamp_) {
+                return;
+            }
+            last_sim_stamp_ = sim_stamp;
+
+            // FAST-LIO 约定 header.stamp = 扫描"起始"时刻 (lidar_end = beg + max(time)).
+            // AirSim time_stamp (纳秒, 仿真时钟) = 数据生成时刻 ≈ 扫描"结束"时刻.
+            // 关键: LiDAR 与 IMU 必须映射到同一条时间轴! 仿真慢于实时时 (速率<1), 若 IMU
+            // 用墙钟而雷达用仿真时钟, FAST-LIO 会按墙钟间隔积分仿真间隔内的运动, 系统性
+            // 过积分 → 平移漂移. 两路统一 stamp = 偏移 + 仿真时间, 时间轴内部速率一致
+            // (仿真卡顿时时间轴暂停, 不产生数据空洞), 墙钟帧率只影响延迟不影响正确性.
+            double header_s;
+            if (sim_stamp > 0) {
+                const double sim_s = static_cast<double>(sim_stamp) * 1e-9;
+                header_s = calib_sim_to_ros(sim_s, wall_s) - sweep_dur;
+            } else {
+                // 兜底: 仿真端未填 time_stamp, 退化为按"抓取 ≈ 扫描结束"回推
+                header_s = wall_s - sweep_dur;
+            }
+            const auto stamp = rclcpp::Time(
+                static_cast<int64_t>(header_s * 1e9), RCL_ROS_TIME);
+            // 每点 float 数: CPU 雷达 3 (x,y,z); GPU 雷达 5 (x,y,z,分割rgb,intensity)
+            const size_t point_stride = use_gpu_lidar_ ? 5 : 3;
+            const size_t total = points.size() / point_stride;
             if (total == 0) {
                 return;
             }
 
-            // 每列方位角对应的时间步长 (秒): 一转 360° 均分 measurements_per_cycle 列
-            const double col_period =
-                (rotation_hz_ > 0.0) ? 1.0 / (rotation_hz_ * meas_per_cycle_) : 0.0;
+            // per-point time 语义: AirSim 整帧点云是 UE 单时刻瞬时快照 (同一机体位姿一次性
+            // 射线检测, 无扫描内运动畸变). 统一填 sweep_dur (而非 0~sweep_dur 递增):
+            //   - header.stamp = 成像时刻 - sweep_dur (扫描"起始"), FAST-LIO 窗口末点
+            //     = header + max(time) = 成像时刻, 恰为快照真实位姿 → 零运动剪切;
+            //   - 不能填 0: 会触发 FAST-LIO "按方位角反推时间"兜底, 重新注入伪畸变;
+            //   - 不能填递增值: 快照无畸变, 递增时间会反向注入最大 sweep_dur*速度 的剪切
+            //     (平移时里程计系统性漂移的根源).
+            const float kPointTime = static_cast<float>(
+                (rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1);
 
             // velodyne 风格字段: x,y,z,intensity (float32), ring (uint16), time (float32)
             struct PointXYZIRT { float x, y, z, intensity; uint16_t ring; float time; };
@@ -145,14 +194,13 @@ private:
 
             size_t hits = 0;
             for (size_t i = 0; i < total; ++i) {
-                const float px = lidar_data.point_cloud[i * 3];
-                const float py = lidar_data.point_cloud[i * 3 + 1];
-                const float pz = lidar_data.point_cloud[i * 3 + 2];
+                const float px = points[i * point_stride];
+                const float py = points[i * point_stride + 1];
+                const float pz = points[i * point_stride + 2];
                 // 未命中点为 (0,0,0), 过滤
                 if (px == 0.0f && py == 0.0f && pz == 0.0f) {
                     continue;
                 }
-                const size_t col = i / num_channels_;   // 点云按列 (方位角) 主序排列
                 const uint16_t ring = static_cast<uint16_t>(i % num_channels_);
                 PointXYZIRT p;
                 // 雷达局部 NED -> 雷达局部 FLU
@@ -161,7 +209,7 @@ private:
                 p.z = -pz;
                 p.intensity = static_cast<float>(intensity_);
                 p.ring = ring;
-                p.time = static_cast<float>(col * col_period);
+                p.time = kPointTime;
                 pts.push_back(p);
                 ++hits;
             }
@@ -208,10 +256,46 @@ private:
     }
 
     // ================= 线程 2: IMU 发布 (FRD -> FLU, 原始数据) =================
+    // (ROS时钟 - 仿真时钟) 偏移的低通标定: LiDAR/IMU 双线程共享, 需加锁.
+    // 仿真慢于实时时偏移持续增长, EMA 跟踪; 大偏差 (仿真暂停/跳变) 时直接重标定.
+    double calib_sim_to_ros(double sim_s, double wall_s) {
+        std::lock_guard<std::mutex> lk(clock_mutex_);
+        if (!clock_calibrated_) {
+            wall_sim_offset_ = wall_s - sim_s;
+            clock_calibrated_ = true;
+        } else {
+            const double dev = (wall_s - sim_s) - wall_sim_offset_;
+            if (std::fabs(dev) > 0.5) {
+                wall_sim_offset_ = wall_s - sim_s;
+            } else {
+                wall_sim_offset_ += 0.05 * dev;
+            }
+        }
+        return wall_sim_offset_ + sim_s;
+    }
+
     void grab_imu() {
         try {
             auto imu_data = client_imu_->getImuData(imu_name_, vehicle_name_);
-            const auto stamp = this->now();
+
+            // 重复采样去重: 仿真慢于实时 (UE 过载) 时, 墙钟 200Hz 轮询会重复抓到同一仿真
+            // 采样; 仿真卡顿/暂停时也避免持续发布冻结的假 IMU 流 (FAST-LIO 会误积分).
+            if (imu_data.time_stamp > 0 && imu_data.time_stamp == last_imu_sim_stamp_) {
+                return;
+            }
+            last_imu_sim_stamp_ = imu_data.time_stamp;
+
+            // stamp 与 LiDAR 同一时间轴: 偏移 + 仿真时间 (见 grab_lidar 注释).
+            // 仿真 time_stamp 是采样真实时刻, 换算后 IMU 流在映射时间轴上严格均匀.
+            rclcpp::Time stamp;
+            if (imu_data.time_stamp > 0) {
+                const double sim_s = static_cast<double>(imu_data.time_stamp) * 1e-9;
+                const double mapped_s = calib_sim_to_ros(sim_s, this->now().seconds());
+                stamp = rclcpp::Time(
+                    static_cast<int64_t>(mapped_s * 1e9), RCL_ROS_TIME);
+            } else {
+                stamp = this->now();  // 兜底: 仿真端未填 time_stamp
+            }
 
             sensor_msgs::msg::Imu msg;
             msg.header.stamp = stamp;
@@ -244,9 +328,15 @@ private:
     rclcpp::TimerBase::SharedPtr timer_lidar_, timer_imu_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_;
     std::string vehicle_name_, lidar_name_, imu_name_, cloud_frame_;
+    bool use_gpu_lidar_ = false;
     uint16_t num_channels_;
     int meas_per_cycle_;
     double rotation_hz_, intensity_;
+    std::mutex clock_mutex_;            // 保护时钟标定状态 (LiDAR/IMU 双线程)
+    double wall_sim_offset_ = 0.0;      // ROS 时钟 - AirSim 仿真时钟 的低通估计 (秒)
+    bool clock_calibrated_ = false;
+    uint64_t last_sim_stamp_ = 0;       // 上次发布的雷达仿真 time_stamp (重复帧去重)
+    uint64_t last_imu_sim_stamp_ = 0;   // 上次发布的 IMU 仿真 time_stamp (重复采样去重)
     double mount_x_, mount_y_, mount_z_, mount_roll_, mount_pitch_, mount_yaw_;
 };
 

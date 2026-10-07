@@ -41,6 +41,10 @@ def generate_launch_description():
     declare_config_file = DeclareLaunchArgument(
             'config_file', default_value='fast_lio.yaml',
             description='fast_lio 配置文件名')
+    # UE 端雷达类型: true=GPU 雷达 (SensorType 8, 深度渲染, 异步采集), false=CPU 雷达 (SensorType 6)
+    declare_gpu_lidar = DeclareLaunchArgument(
+            'gpu_lidar', default_value='true',
+            description='UE 端是否使用 GPULidar (需 settings.json 中 Lidar1 SensorType=8)')
     run_fast_lio = Node(
             package='fast_lio',
             executable='fastlio_mapping',
@@ -48,13 +52,15 @@ def generate_launch_description():
             output='screen',
             parameters=[PathJoinSubstitution([config_path, config_file])])
 
-    # 启动 FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR(合成逐点时间戳) + IMU
+    # 启动 FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR(单时刻瞬时快照, 无伪逐点时间) + IMU
     # 参数默认值与 configs/fast_lio/settings.json 一致 (16线/1800点每转/10Hz)
+    # gpu_lidar:=true 需 UE 端 settings.json 中 Lidar1 SensorType=8
     airsim_sensor_lidar = Node(
             package='flylab',
             executable='airsim_sensor_lidar',
             name='airsim_sensor_lidar',
-            output='screen')
+            output='screen',
+            parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar')}])
 
     ld = LaunchDescription()
 
@@ -62,6 +68,7 @@ def generate_launch_description():
     ld.add_action(declare_rviz_cfg)
     ld.add_action(declare_config_path)
     ld.add_action(declare_config_file)
+    ld.add_action(declare_gpu_lidar)
     ld.add_action(airsim_sensor_lidar)
     ld.add_action(run_fast_lio)
     ld.add_action(fast_lio_rviz_node)

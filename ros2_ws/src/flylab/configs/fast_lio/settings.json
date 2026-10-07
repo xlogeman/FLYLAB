@@ -56,12 +56,13 @@
           "VelocityRandomWalk": 0.008
         },
         "Lidar1": {
-          "SensorType": 6,
+          "SensorType": 8,
           "Enabled": true,
           "NumberOfChannels": 16,
           "MeasurementsPerCycle": 1800,
           "RotationsPerSecond": 10,
           "UpdateFrequency": 10,
+          "Resolution": 512,
           "HorizontalFOVStart": 0,
           "HorizontalFOVEnd": 360,
           "VerticalFOVUpper": 15,
