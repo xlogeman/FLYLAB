@@ -60,7 +60,10 @@ def generate_launch_description():
             executable='airsim_sensor_lidar',
             name='airsim_sensor_lidar',
             output='screen',
-            parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar')}])
+            parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar'),
+                         'num_channels': 64,
+                         'measurements_per_cycle': 320,
+                         'rotation_frequency': 10.0}])
 
     ld = LaunchDescription()
 

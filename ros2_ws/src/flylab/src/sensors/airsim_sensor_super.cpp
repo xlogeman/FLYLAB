@@ -45,6 +45,9 @@ public:
         // 1. 参数 (与 configs/settings.json 中 Lidar1 配置一致)
         vehicle_name_ = this->declare_parameter<std::string>("vehicle_name", "PX4");
         lidar_name_ = this->declare_parameter<std::string>("lidar_sensor_name", "Lidar1");
+        // UE 端传感器类型: true=GPU 雷达 (SensorType 8, getGPULidarData, 每点 5 float),
+        // false=CPU 雷达 (SensorType 6, getLidarData, 每点 3 float)。点云均为传感器局部 NED 系
+        use_gpu_lidar_ = this->declare_parameter<bool>("use_gpu_lidar", true);
         cloud_topic_ = this->declare_parameter<std::string>("cloud_topic", "/cloud_registered");
         odom_topic_ = this->declare_parameter<std::string>("odom_topic", "/lidar_slam/odom");
         cloud_frame_ = this->declare_parameter<std::string>("cloud_frame_id", "world");
@@ -94,9 +97,31 @@ private:
     // ================= 线程 1: LiDAR -> world 系点云 =================
     void grab_lidar() {
         try {
-            auto lidar_data = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
+            // 读取点云: GPU 雷达 (getGPULidarData, 每点 5 float: x,y,z,分割rgb,intensity)
+            // 或 CPU 雷达 (getLidarData, 每点 3 float)。两者点云均为传感器局部 NED 系,
+            // 未命中点同为 (0,0,0) 占位
+            uint64_t sim_stamp = 0;
+            std::vector<float> points;
+            if (use_gpu_lidar_) {
+                auto d = client_lidar_->getGPULidarData(lidar_name_, vehicle_name_);
+                sim_stamp = d.time_stamp;
+                points = std::move(d.point_cloud);
+            } else {
+                auto d = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
+                sim_stamp = d.time_stamp;
+                points = std::move(d.point_cloud);
+            }
+
+            // 重复帧去重: RPC 轮询相位与传感器输出相位未锁定, 同一帧可能被重复发布,
+            // 会导致占据地图重复更新与位姿-点云错位累积
+            if (sim_stamp > 0 && sim_stamp == last_sim_stamp_) {
+                return;
+            }
+            last_sim_stamp_ = sim_stamp;
+
             const auto stamp = this->now();
-            const size_t total = lidar_data.point_cloud.size() / 3;
+            const size_t point_stride = use_gpu_lidar_ ? 5 : 3;
+            const size_t total = points.size() / point_stride;
             if (total == 0) {
                 return;
             }
@@ -130,9 +155,9 @@ private:
             size_t hits = 0;
             for (size_t i = 0; i < total; ++i) {
                 // 雷达传感器系 NED
-                const tf2::Vector3 p_sensor(lidar_data.point_cloud[i * 3],
-                                            lidar_data.point_cloud[i * 3 + 1],
-                                            lidar_data.point_cloud[i * 3 + 2]);
+                const tf2::Vector3 p_sensor(points[i * point_stride],
+                                            points[i * point_stride + 1],
+                                            points[i * point_stride + 2]);
                 // 未命中点为 (0,0,0)
                 if (p_sensor.isZero()) {
                     continue;
@@ -241,6 +266,8 @@ private:
     rclcpp::CallbackGroup::SharedPtr cb_group_lidar_, cb_group_odom_;
     rclcpp::TimerBase::SharedPtr timer_lidar_, timer_odom_;
     std::string vehicle_name_, lidar_name_, cloud_topic_, odom_topic_, cloud_frame_;
+    bool use_gpu_lidar_ = true;
+    uint64_t last_sim_stamp_ = 0;       // 上次发布的雷达仿真 time_stamp (重复帧去重)
     double body_filter_radius_, intensity_;
     double mount_x_, mount_y_, mount_z_, mount_roll_, mount_pitch_, mount_yaw_;
 };

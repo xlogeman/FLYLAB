@@ -17,7 +17,8 @@ from launch_ros.actions import Node
 #      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
 #   5. tracker_mavros / tracker_px4  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
 #   6. rviz2                     SUPER 链路 RViz 可视化
-# 前提: PX4 SITL + UE/AirSim 已启动; UE 端 settings.json 需含 Lidar1 16 线雷达
+# 前提: PX4 SITL + UE/AirSim 已启动; UE 端 settings.json 需含 Lidar1 雷达
+#       (默认 GPU 雷达 SensorType 8, 与 fast_lio 链路共用 configs/fast_lio/settings.json)
 # 可选:
 #   tracker:=px4|mavros          轨迹跟踪链路选择 (默认 px4, 即 uXRCE-DDS 直连)
 #   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=px4 时需要)
@@ -36,6 +37,7 @@ def generate_launch_description():
     tracker = LaunchConfiguration('tracker', default='px4')
     start_mavros = LaunchConfiguration('mavros', default='true')
     fcu_url = LaunchConfiguration('fcu_url', default='udp://:14542@')
+    gpu_lidar = LaunchConfiguration('gpu_lidar', default='true')
 
     # MAVROS 启动条件: tracker 选了 mavros 且 mavros 参数未关闭
     need_mavros = PythonExpression([
@@ -49,6 +51,8 @@ def generate_launch_description():
                               description='轨迹跟踪链路: px4=uXRCE-DDS 直连 (默认) / mavros=MAVROS 桥'),
         DeclareLaunchArgument('mavros', default_value='true', description='是否随 launch 启动 MAVROS'),
         DeclareLaunchArgument('fcu_url', default_value='udp://:14542@', description='MAVROS 飞控连接串'),
+        DeclareLaunchArgument('gpu_lidar', default_value='true',
+                              description='UE 端是否使用 GPULidar (需 settings.json 中 Lidar1 SensorType=8)'),
 
         # 可选: MicroXRCEAgent (PX4 与 ROS2 的 uXRCE-DDS 桥)
         ExecuteProcess(
@@ -58,11 +62,13 @@ def generate_launch_description():
         ),
 
         # 1. AirSim 直连传感器节点: LiDAR -> world 系点云 + 真值里程计
+        #    gpu_lidar:=true (默认) 走 GPULidar (SensorType 8, 与 fast_lio 链路共用同一 UE 配置)
         Node(
             package='flylab',
             executable='airsim_sensor_super',
             name='airsim_sensor_super_node',
             output='screen',
+            parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar')}],
         ),
 
         # 2. SUPER 规划器 (配置真源: flylab/configs/super_planner/flylab_super.yaml,

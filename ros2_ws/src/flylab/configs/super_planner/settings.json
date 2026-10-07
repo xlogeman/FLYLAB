@@ -1,0 +1,93 @@
+{
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor",
+  "ClockType": "SteppableClock",
+  "ClockSpeed": 1,
+  "ViewMode": "",
+  "RpcEnabled": true,
+  "ApiServerPort": 41451,
+  "LogMessagesVisible": true,
+  "EngineSound": false,
+  "OriginGeopoint": {
+    "Latitude": 47.641468,
+    "Longitude": -122.140165,
+    "Altitude": 122
+  },
+  "TimeOfDay": {
+    "Enabled": false,
+    "StartDateTime": "",
+    "CelestialClockSpeed": 1,
+    "StartDateTimeDst": false,
+    "UpdateIntervalSecs": 60
+  },
+  "Vehicles": {
+    "PX4": {
+      "VehicleType": "PX4Multirotor",
+      "DefaultVehicleState": "Disarmed",
+      "AllowAPIAlways": true,
+      "UseSerial": false,
+      "LockStep": true,
+      "UseTcp": true,
+      "TcpPort": 4560,
+      "UdpPort": 14560,
+      "ControlIp": "172.26.53.153",
+      "ControlPortLocal": 14540,
+      "ControlPortRemote": 14580,
+      "UdpIp": "172.26.53.153",
+      "LocalHostIp": "0.0.0.0",
+      "LogViewerHostIp": "127.0.0.1",
+      "LogViewerPort": 14388,
+      "QgcHostIp": "127.0.0.1",
+      "QgcPort": 14550,
+      "OffboardSysID": 134,
+      "OffboardCompID": 1,
+      "VehicleSysID": 135,
+      "VehicleCompID": 1,
+      "SimSysID": 142,
+      "SimCompID": 42,
+      "Sensors": {
+        "Imu": {
+          "SensorType": 2,
+          "Enabled": true,
+          "RotationalVariance": 0.0002,
+          "LinearAccelerationVariance": 0.0015,
+          "LinearAccelerationBiasStd": 0.0003,
+          "AngularRandomWalk": 0.008,
+          "VelocityRandomWalk": 0.008
+        },
+        "Lidar1": {
+          "SensorType": 8,
+          "Enabled": true,
+          "NumberOfChannels": 64,
+          "MeasurementsPerCycle": 320,
+          "RotationsPerSecond": 10,
+          "UpdateFrequency": 10,
+          "Resolution": 512,
+          "HorizontalFOVStart": 0,
+          "HorizontalFOVEnd": 360,
+          "VerticalFOVUpper": 52,
+          "VerticalFOVLower": -7,
+          "Range": 70,
+          "GenerateNoise": true,
+          "MinNoiseStandardDeviation": 0.02,
+          "NoiseDistanceScale": 1.0,
+          "X": 0.0,
+          "Y": 0.0,
+          "Z": 0.0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0,
+          "DrawSensor": false
+        }
+      },
+      "Parameters": {
+        "NAV_RCL_ACT": 0,
+        "NAV_DLL_ACT": 0,
+        "COM_OBL_ACT": 1,
+        "COM_OBL_RC_ACT": 0,
+        "LPE_LAT": 47.641468,
+        "LPE_LON": -122.140165
+      }
+    }
+  }
+}

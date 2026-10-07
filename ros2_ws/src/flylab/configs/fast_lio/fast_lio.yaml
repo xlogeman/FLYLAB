@@ -2,7 +2,7 @@
     ros__parameters:
         # FAST-LIO 建图参数 —— 适配 flylab 仿真链路 (configs/fast_lio/settings.json + airsim_sensor_lidar 节点)
         feature_extract_enable: false      # 直接法 (scan-to-map), 默认关闭特征提取
-        point_filter_num: 2                # 每 N 点取 1, 仿真点云噪声小可适当加密
+        point_filter_num: 1                # 每 N 点取 1, Mid-360 仿真单帧 ~2 万点, 全量使用
         max_iteration: 3
         filter_size_surf: 0.5
         filter_size_map: 0.5
@@ -18,10 +18,10 @@
 
         preprocess:
             lidar_type: 2                # 2 = Velodyne (标准 PointCloud2 路径), airsim_sensor_lidar 输出 velodyne 风格字段
-            scan_line: 16                # settings.json 中 NumberOfChannels = 16
+            scan_line: 64                # settings.json 中 NumberOfChannels = 64 (Mid-360 仿真垂直采样数)
             scan_rate: 10                # RotationsPerSecond / UpdateFrequency = 10Hz
-            timestamp_unit: 0            # time 字段单位: 0-秒 (airsim_sensor_lidar 合成的 per-point time 为秒)
-            blind: 1.0                   # 近距离盲区 (米), 机体自身近处点云过滤
+            timestamp_unit: 0            # time 字段单位: 0-秒 (统一 sweep_dur 值, 单时刻瞬时快照)
+            blind: 0.1                   # 近距离盲区 (米), Mid-360 最小量程 0.1m
 
         mapping:
             acc_cov: 0.1
@@ -29,7 +29,7 @@
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
             fov_degree:    360.0
-            det_range:     100.0         # 与 settings.json 中 Range 一致
+            det_range:     70.0          # 与 settings.json 中 Range 一致 (Mid-360 @80% 反射率 70m)
             extrinsic_est_en:  false     # LiDAR 与 IMU 同装于机体原点, 外参精确已知, 关闭在线估计
             # 外参 = LiDAR 在 IMU body 系 (FLU) 下的位姿, 与 settings.json 挂载参数 (NED) 对应
             extrinsic_T: [ 0., 0., 0.]
