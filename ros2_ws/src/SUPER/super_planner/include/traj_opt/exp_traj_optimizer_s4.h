@@ -36,6 +36,7 @@
 
 #include <utils/header/scope_timer.hpp>
 #include <utils/header/type_utils.hpp>
+#include <utils/header/print_throttle.hpp>
 #include <utils/optimization/optimization_utils.h>
 #include <utils/geometry/geometry_utils.h>
 
@@ -177,8 +178,11 @@ namespace traj_opt {
                 const double dis = geometry_utils::findInteriorDist(curIH, interior) / 2;
                 if (dis < 0.0 || std::isinf(dis)) {
 
-                    cout << YELLOW << " -- [SUPER] in [ GcopterExpS4::processCorridor]: Failed findInteriorDist Vs." <<
-                         RESET << endl;
+                    LOG_THROTTLE([&] {
+                        cout << YELLOW << " -- [SUPER] in [ GcopterExpS4::processCorridor]: Failed findInteriorDist Vs."
+                             << " (corridor " << i << "/" << opt_vars.hPolytopes.size()
+                             << ", adjacent polytopes not connected)" << RESET << endl;
+                    });
                     return false;
                 }
                 geometry_utils::enumerateVs(curIH, interior, curIV);

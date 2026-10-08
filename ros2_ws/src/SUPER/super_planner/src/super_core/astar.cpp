@@ -22,6 +22,7 @@
 */
 
 #include <path_search/astar.h>
+#include <utils/header/print_throttle.hpp>
 
 using namespace color_text;
 using namespace super_utils;
@@ -311,13 +312,12 @@ namespace path_search {
             ros_ptr_->vizAstarPoints(local_end_pt, Color::Green(), "local_end_pt", 0.3, 1);
         }
         if (!insideLocalMap(start_idx) || !insideLocalMap(end_idx)) {
-            cout << rog_map::RED << " -- [RM] Start or end point is out of local map, which should not happen." <<
-                 rog_map::RESET
-                 << endl;
-            ros_ptr_->error(" -- [RM] Start [{}] or end point [{}] is out of local map, which should not happen.",
-                            local_start_pt.transpose(),
-                            local_end_pt.transpose()
-                            );
+            LOG_THROTTLE([&] {
+                ros_ptr_->error(" -- [RM] Start [{}] or end point [{}] is out of local map, which should not happen.",
+                                local_start_pt.transpose(),
+                                local_end_pt.transpose()
+                );
+            });
             if(cfg_.visual_process || cfg_.debug_visualization_en) {
                 ros_ptr_->vizAstarPoints(local_start_pt, Color::Orange(), "local_start_pt", 0.3, 1);
                 ros_ptr_->vizAstarPoints(local_end_pt, Color::Green(), "local_end_pt", 0.3, 1);
@@ -532,7 +532,9 @@ namespace path_search {
                 break;
             }
             if (frontier_queue.empty()) {
-                cout << rog_map::RED << " -- [A*] Frontier queue is empty, return." << rog_map::RESET << endl;
+                LOG_THROTTLE([&] {
+                    cout << rog_map::RED << " -- [A*] Frontier queue is empty, return." << rog_map::RESET << endl;
+                });
                 return NO_PATH;
             }
             retrievePath(local_goal, node_path);
@@ -540,10 +542,11 @@ namespace path_search {
                 node_path.push_back(startPtr);
             }
             ConvertNodePathToPointPath(node_path, out_path);
-            cout << rog_map::BLUE << "Frontier queue: " << frontier_queue.size() << endl;
             return REACH_HORIZON;
         }
-        ros_ptr_->error(" -- [A*] Point to point path cannot find path with iter num: {}, return.", num_iter);
+        LOG_THROTTLE([&] {
+            ros_ptr_->error(" -- [A*] Point to point path cannot find path with iter num: {}, return.", num_iter);
+        });
         return NO_PATH;
     }
 
@@ -562,16 +565,20 @@ namespace path_search {
 
         if (!insideLocalMap(start_pt) ||
             !map_ptr_->insideLocalMap(start_pt)) {
-            fmt::print(fg(fmt::color::indian_red), " -- [A*] {}: escape start point is not inside local map.\n",
-                       RET_CODE_STR[INIT_ERROR].c_str());
+            LOG_THROTTLE([&] {
+                fmt::print(fg(fmt::color::indian_red), " -- [A*] {}: escape start point is not inside local map.\n",
+                           RET_CODE_STR[INIT_ERROR].c_str());
+            });
             return INIT_ERROR;
         }
         rog_map::Vec3f local_start_pt = start_pt;
 //        rog_map::GridType start_type = map_ptr_->getGridType(local_start_pt);
         if (!map_ptr_->getNearestCellNot(OCCUPIED, start_pt, local_start_pt,3.0)) {
-            cout << rog_map::RED <<
-                 " -- [A*] " << RET_CODE_STR[INIT_ERROR]
-                 << " : escape start point deeply occupied, cannot find feasible path.\n" << rog_map::RESET << endl;
+            LOG_THROTTLE([&] {
+                cout << rog_map::RED <<
+                     " -- [A*] " << RET_CODE_STR[INIT_ERROR]
+                     << " : escape start point deeply occupied, cannot find feasible path.\n" << rog_map::RESET << endl;
+            });
             return INIT_ERROR;
         }
 
@@ -711,7 +718,10 @@ namespace path_search {
                        (time_2 - time_1),
                        num_iter);
         }
-        cout << rog_map::RED << " -- [A*] Escape path searcher, cannot find path, return." << rog_map::RESET << endl;
+        LOG_THROTTLE([&] {
+            cout << rog_map::RED << " -- [A*] Escape path searcher, cannot find path, return." << rog_map::RESET
+                 << endl;
+        });
         return NO_PATH;
     }
 

@@ -27,6 +27,7 @@ using std::isnan;
 #include <memory>
 #include <super_utils/scope_timer.hpp>
 #include <fmt/color.h>
+#include <utils/header/print_throttle.hpp>
 
 using namespace super_utils;
 
@@ -75,7 +76,9 @@ namespace super_planner {
         latest_replan.reset();
         latest_replan.setGoal(goal_p, goal_yaw, robot_state_);
         if (robot_state_.rcv == false) {
-            ros_ptr_->warn(" -- [SUPER] in [PlanFromRest]: No odom, force return.");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] in [PlanFromRest]: No odom, force return.");
+            });
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_NO_ODOM);
             return FAILED;
         }
@@ -95,8 +98,11 @@ namespace super_planner {
         /// 1) First, shift the start_point to free space.
         Vec3f local_star_pt;
         if (!map_ptr_->getNearestCellNot(GridType::OCCUPIED, robot_state_.p, local_star_pt, 3.0)) {
-            ros_ptr_->error(
-                    " -- [SUPER] in [PlanFromRest] Local start point is deeply occupied, which should not happened.");
+            LOG_THROTTLE([&] {
+                ros_ptr_->error(
+                        " -- [SUPER] in [PlanFromRest] Local start point is deeply occupied (cur [{}]), "
+                        "which should not happened.", robot_state_.p.transpose());
+            });
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_NO_START_POINT);
             return FAILED;
         }
@@ -110,11 +116,17 @@ namespace super_planner {
         RET_CODE exp_ret_code = generateExpTraj(last_exp_traj_info_, exp_traj_info);
         //GenerateRestToRestExpTraj(local_star_pt, exp_traj_info);
         if (exp_ret_code == FAILED) {
-            ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory failed with {}.",
-                           RET_CODE_STR[exp_ret_code].c_str());
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory failed with {} "
+                               "(cur [{}], goal [{}]).",
+                               RET_CODE_STR[exp_ret_code].c_str(), robot_state_.p.transpose(),
+                               gi_.goal_p.transpose());
+            });
             return FAILED;
         } else {
-            ros_ptr_->info(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory SUCCESS.");
+            LOG_THROTTLE([&] {
+                ros_ptr_->info(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory SUCCESS.");
+            });
         }
 
         back_traj_info.setEmpty();
@@ -157,8 +169,12 @@ namespace super_planner {
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_SUCCESS_NO_BACKUP);
             return SUCCESS;
         }
-        ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory return [{}], force return",
-                       RET_CODE_STR[back_ret_code].c_str());
+        LOG_THROTTLE([&] {
+            ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory return [{}] "
+                           "(cur [{}], goal [{}]), force return",
+                           RET_CODE_STR[back_ret_code].c_str(), robot_state_.p.transpose(),
+                           gi_.goal_p.transpose());
+        });
         return FAILED;
     }
 
@@ -193,7 +209,10 @@ namespace super_planner {
         time_consuming_[GENERATE_EXP_TRAJ] = t_exp.stop();
 
         if (exp_ret_code == FAILED) {
-            ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: GenerateExpTrajectory failed, force return");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: GenerateExpTrajectory failed, force return "
+                               "(cur [{}], goal [{}])", robot_state_.p.transpose(), gi_.goal_p.transpose());
+            });
             return FAILED;
         } else if (exp_ret_code == NEW_TRAJ) {
             if (cfg_.print_log) {
@@ -201,7 +220,10 @@ namespace super_planner {
             }
             return NEW_TRAJ;
         } else if (exp_ret_code == EMER) {
-            ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan failed, switch to emer.");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan failed, switch to emer. (cur [{}], goal [{}])",
+                               robot_state_.p.transpose(), gi_.goal_p.transpose());
+            });
             return EMER;
         } else if (exp_ret_code == SUCCESS) {
             if (cfg_.print_log) {
@@ -234,7 +256,10 @@ namespace super_planner {
 
         double replan_dt = replan_total_t.stop();
         if (replan_dt > cfg_.replan_forward_dt * 0.9) {
-            ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan overtime, check parameters, replan dt = {}.", replan_dt);
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan overtime, check parameters, replan dt = {}.",
+                               replan_dt);
+            });
             return FAILED;
         }
 
@@ -291,8 +316,11 @@ namespace super_planner {
             latest_replan.setRetCode(SUPER_SUCCESS_NO_BACKUP);
             return SUCCESS;
         }
-        ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: generateBackupTrajectory return {}, replan Failed return",
-                       RET_CODE_STR[back_ret_code].c_str());
+        LOG_THROTTLE([&] {
+            ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: generateBackupTrajectory return {}, replan Failed return "
+                           "(cur [{}], goal [{}])", RET_CODE_STR[back_ret_code].c_str(),
+                           robot_state_.p.transpose(), gi_.goal_p.transpose());
+        });
         return FAILED;
     }
 
@@ -712,7 +740,11 @@ namespace super_planner {
         bool bool_ret_code = cg_ptr_->SearchPolytopeOnPath(guide_path, sfc, shifted_sfc_start_pt_, cfg_.use_fov_cut);
 
         if (!bool_ret_code) {
-            ros_ptr_->warn(" -- [SUPER] SearchPolytopeOnPath for new path failed");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] SearchPolytopeOnPath for new path failed "
+                               "(cur [{}], guide [{}] -> [{}])", robot_state_.p.transpose(),
+                               guide_path.front().transpose(), guide_path.back().transpose());
+            });
             return FAILED;
         }
         {
@@ -753,12 +785,18 @@ namespace super_planner {
             latest_replan.setExpCondition(init_ts, init_ps, pos_init_state, pos_fina_state, sfc);
         }
         if (!temp_ret) {
-            ros_ptr_->warn(" -- [SUPER] OptimizationExpTrajInPolytopes for new path failed");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] OptimizationExpTrajInPolytopes for new path failed "
+                               "(cur [{}], goal [{}], sfc {} pieces)", robot_state_.p.transpose(),
+                               gi_.goal_p.transpose(), sfc.size());
+            });
             return FAILED;
         }
         double replan_total_t = (ros_ptr_->getSimTime() - replan_process_start_WT);
         if (replan_total_t > cfg_.replan_forward_dt) {
-            ros_ptr_->warn(" -- [SUPER] Replan over time({})!!!! Return FAILED", replan_total_t);
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] Replan over time({})!!!! Return FAILED", replan_total_t);
+            });
             return FAILED;
         }
 
@@ -775,7 +813,9 @@ namespace super_planner {
         if (!last_exp_traj_info_.empty() &&
             !guide_pos_traj.getPartialTrajectoryByTime(replan_process_start_TT, replan_state_TT,
                                                        temp_exp_traj)) {
-            ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: getPartialTrajectoryByTime failed, force return");
+            LOG_THROTTLE([&] {
+                ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: getPartialTrajectoryByTime failed, force return");
+            });
             return FAILED;
         }
         out_exp_traj_info.setSFC(sfc);
@@ -785,7 +825,9 @@ namespace super_planner {
         if (!last_exp_traj_info.empty()) {
             StatePVAJ yaw_replan_state;
             if (!guide_yaw_traj.getState(replan_state_TT, yaw_replan_state)) {
-                ros_ptr_->warn(" -- [SUPER] Invalid traj or eval t");
+                LOG_THROTTLE([&] {
+                    ros_ptr_->warn(" -- [SUPER] Invalid traj or eval t");
+                });
                 return FAILED;
             }
             init_yaw = yaw_replan_state.row(0);
@@ -920,8 +962,11 @@ namespace super_planner {
 
         Vec3f shifted_robot_p = shifted_sfc_start_pt_.norm()> 999?robot_state_.p:shifted_sfc_start_pt_;
         if (!map_ptr_->getNearestCellNot(GridType::OCCUPIED, shifted_robot_p, shifted_robot_p, 3.0)) {
-            ros_ptr_->error(
-                    " -- [SUPER] in [PlanFromRest] Local start point is deeply occupied, which should not happened.");
+            LOG_THROTTLE([&] {
+                ros_ptr_->error(
+                        " -- [SUPER] in [PlanFromRest] Local start point is deeply occupied (cur [{}]), "
+                        "which should not happened.", robot_state_.p.transpose());
+            });
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_NO_START_POINT);
             return FAILED;
         }
@@ -929,13 +974,19 @@ namespace super_planner {
         Line line{shifted_robot_p, seed_point};
         Polytope temp_poly;
         if (!cg_ptr_->GeneratePolytopeFromLine(line, temp_poly)) {
-            ros_ptr_->warn(" -- [SUPER] GeneratePolytopeFromLine failed, force return");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] GeneratePolytopeFromLine failed, force return "
+                               "(cur [{}], seed [{}])", shifted_robot_p.transpose(), seed_point.transpose());
+            });
             return FAILED;
         }
         Eigen::Vector3d inner;
         Eigen::Matrix3Xd vPoly;
         if (!geometry_utils::findInterior(temp_poly.GetPlanes(), inner)) {
-            ros_ptr_->warn(" -- [SUPER] Cannot generate feasible backup sfc, force return");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] Cannot generate feasible backup sfc, force return "
+                               "(cur [{}], seed [{}])", shifted_robot_p.transpose(), seed_point.transpose());
+            });
             vec_Vec3f seed{back_traj_info.getRobotPos(), seed_point};
             return FAILED;
         }
@@ -943,7 +994,10 @@ namespace super_planner {
         if (cfg_.use_fov_cut) {
             if (!fov_checker_->cutPolyByFov(robot_state_.p, robot_state_.q, seed_point,
                                             temp_poly)) {
-                ros_ptr_->warn(" -- [SUPER] cutPolyByFov failed, force return");
+                LOG_THROTTLE([&] {
+                    ros_ptr_->warn(" -- [SUPER] cutPolyByFov failed, force return (cur [{}], seed [{}])",
+                                   robot_state_.p.transpose(), seed_point.transpose());
+                });
                 return FAILED;
             }
         }
@@ -951,7 +1005,10 @@ namespace super_planner {
         if (cfg_.sensing_horizon > 0 &&
             !fov_checker_->cutPolyBySensingHorizon(robot_state_.p, seed_point, cfg_.sensing_horizon,
                                                    temp_poly)) {
-            ros_ptr_->warn(" -- [SUPER] cutPolyBySensingHorizon failed, force return");
+            LOG_THROTTLE([&] {
+                ros_ptr_->warn(" -- [SUPER] cutPolyBySensingHorizon failed, force return (cur [{}], seed [{}])",
+                               robot_state_.p.transpose(), seed_point.transpose());
+            });
             vec_Vec3f seed{back_traj_info.getRobotPos(), seed_point};
             return FAILED;
         }

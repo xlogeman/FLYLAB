@@ -22,6 +22,7 @@
 */
 
 #include <super_core/ciri.h>
+#include <utils/header/print_throttle.hpp>
 using namespace color_text;
 using namespace optimization_utils;
 using namespace super_utils;
@@ -102,7 +103,11 @@ namespace super_planner {
                     if(dis < robot_r_ - 1e-2) {
 //                        infeasible_problem = true;
                         infeasible_pt_w = pt_w;
-                        cout<<YELLOW<<" -- [CIRI] WARNING! The problem is not feasible, the min dis to obstacle is only: "<<dis<<RESET<<endl;
+                        LOG_THROTTLE([&] {
+                            cout << YELLOW << " -- [CIRI] WARNING! The problem is not feasible, the min dis to "
+                                 << "obstacle is only: " << dis << ", obstacle pt: [" << pt_w.transpose() << "]"
+                                 << RESET << endl;
+                        });
                         return FAILED;
                         cout<<" -- [CIRI] dis: "<<dis<<endl;
                         cout<<" -- [CIRI] robot_r: "<<robot_r_<<endl;

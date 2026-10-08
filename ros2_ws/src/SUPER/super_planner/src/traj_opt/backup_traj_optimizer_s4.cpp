@@ -23,6 +23,7 @@
 
 #include <traj_opt/backup_traj_optimizer_s4.h>
 #include <utils/header/color_msg_utils.hpp>
+#include <utils/header/print_throttle.hpp>
 
 using namespace traj_opt;
 using namespace color_text;
@@ -546,7 +547,9 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
             cout << "\tThr: " << opt_vars.penalty_log(7) << endl;
             cout << "\tTs: " << opt_vars.ts << endl;
         }
-        ros_ptr_->warn(" -- [BackOpt] Opt failed, Omg or thr or Pos violation.");
+        LOG_THROTTLE([&] {
+            ros_ptr_->warn(" -- [BackOpt] Opt failed, Omg or thr or Pos violation.");
+        });
     }
 
     if (ret >= 0) {
@@ -578,7 +581,10 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
     } else {
         traj.clear();
         minCostFunctional = INFINITY;
-        std::cout << YELLOW << " -- [MINCO] TrajOpt failed, " << lbfgs::lbfgs_strerror(ret) << RESET << std::endl;
+        LOG_THROTTLE([&] {
+            std::cout << YELLOW << " -- [MINCO] TrajOpt failed, " << lbfgs::lbfgs_strerror(ret) << RESET
+                      << std::endl;
+        });
     }
     return minCostFunctional;
 }

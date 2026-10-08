@@ -7,8 +7,20 @@
 //       注意: AirSim 的 LidarData.pose 只是传感器相对机体的挂载外参
 //       (LidarSimple.hpp: output.pose = params_.relative_pose), 不是世界位姿!
 //       点云本体是传感器系 (UnrealLidarSensor.cpp: transformToBodyFrame)。
-//       因此本节点在抓取每帧点云时同步读取真值里程计位姿, 按挂载外参 +
-//       机体位姿手动把点云变换到 world 系后再发布。
+//       因此本节点按挂载外参 + 机体位姿手动把点云变换到 world 系后再发布。
+//       位姿对齐: 点云帧是 UE 端传感器更新 tick 的缓存快照 (age 可达 1 个更新
+//       周期 + RPC 延迟), 不能用 RPC 当下的位姿去变换, 否则旋转/平移时点云
+//       整体错位 (拖影), 幽灵障碍被写进 ROG-Map 导致规划失败/目标被挪。
+//       本节点 100Hz odom 线程把 (仿真时间戳, 位姿) 存入环形缓冲, 点云用
+//       LidarData.time_stamp 从缓冲插值出该时刻的位姿与 ROS 时间戳, 实现
+//       点云-位姿时间对齐; 点云时间戳早于缓冲范围 (过旧) 时丢弃该帧。
+//       仿真时间戳以 getMultirotorState 的服务器时钟 (每 10 次采样同步一次)
+//       为基准, 按本地时钟流逝外推, 不依赖 WSL/Windows 时钟对齐。
+//       去畸变: GPU 雷达 (SensorType 8) 是旋转扫描式, 一帧 = 一个旋转周期内
+//       多次渲染累积 (LidarCamera.cpp 转满一圈才发布), 非单时刻快照, 运动
+//       时帧内存在剪切。点由激光角 LUT 重建, 每个点的传感器系方位角 = 捕获
+//       时的扫描角度, 据此逐点反推捕获时刻并插值位姿 (deskew_en 控制)。
+//       CPU 雷达 (SensorType 6) 单 tick 一次出全帧, 无此问题。
 // 发布: /cloud_registered  (PointCloud2: x,y,z,intensity; world 系 ENU;
 //                           best_effort QoS, 与 SUPER 订阅端匹配)
 //       /lidar_slam/odom   (Odometry: world 系 ENU, SUPER 唯一的位姿来源,
@@ -26,6 +38,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -61,6 +75,13 @@ public:
         mount_roll_ = this->declare_parameter<double>("mount_roll_deg", 0.0);
         mount_pitch_ = this->declare_parameter<double>("mount_pitch_deg", 0.0);
         mount_yaw_ = this->declare_parameter<double>("mount_yaw_deg", 0.0);
+        // 去畸变 (GPU 雷达专用): 一帧点云是 UE 端一个旋转周期内多次渲染累积的,
+        // 帧内各点捕获时刻不同。按每个点的激光方位角反推捕获时刻并插值位姿,
+        // 消除旋转/平移时的帧内剪切。三个参数必须与 UE 端 settings.json 的
+        // Lidar1 配置一致: 旋转周期 = 1/RotationsPerSecond, 起始角 = HorizontalFOVStart
+        deskew_en_ = this->declare_parameter<bool>("deskew_en", true);
+        rot_period_s_ = this->declare_parameter<double>("rot_period_s", 0.1);
+        rot_start_deg_ = this->declare_parameter<double>("rot_start_deg", 0.0);
         int lidar_ms = this->declare_parameter<int>("lidar_period_ms", 100);  // 10Hz, 与 UpdateFrequency 一致
         int odom_ms = this->declare_parameter<int>("odom_period_ms", 10);     // 100Hz, SUPER 断 odom 会停止规划
 
@@ -72,7 +93,10 @@ public:
         // 3. 连接 AirSim (LiDAR / 里程计 各一条独立 RPC 通道, 互不阻塞)
         const char* ip_env = std::getenv("PX4_SIM_HOST_ADDR");
         std::string airsim_ip = ip_env ? ip_env : "172.28.144.1";
-        RCLCPP_INFO(this->get_logger(), "正在建立 SUPER 链路 LiDAR/odom 双通道直连 (IP: %s) ...", airsim_ip.c_str());
+        RCLCPP_INFO(this->get_logger(),
+            "正在建立 SUPER 链路 LiDAR/odom 双通道直连 (IP: %s) ... "
+            "[v3: 位姿按点云时刻对齐 + 逐点旋转扫描去畸变]",
+            airsim_ip.c_str());
         try {
             client_lidar_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(airsim_ip);
             client_lidar_->confirmConnection();
@@ -119,25 +143,24 @@ private:
             }
             last_sim_stamp_ = sim_stamp;
 
-            const auto stamp = this->now();
             const size_t point_stride = use_gpu_lidar_ ? 5 : 3;
             const size_t total = points.size() / point_stride;
             if (total == 0) {
                 return;
             }
 
-            // LidarData.pose 只是挂载外参 (不是世界位姿!), 点云在传感器系。
-            // 抓取点云的同一时刻同步读取真值里程计, 得到机体在 world 系 (NED) 位姿:
+            // 点云在传感器系, 需要机体在 world 系 (NED) 的位姿:
             //   传感器系 --挂载外参--> 机体系 --机体位姿--> world NED
-            const auto kinematics = client_lidar_->simGetGroundTruthKinematics(vehicle_name_);
-            const auto& vp = kinematics.pose;
-
-            // 机体位姿 (world NED): 旋转 R_v + 平移 t_v
-            tf2::Quaternion q_v(vp.orientation.x(), vp.orientation.y(),
-                                vp.orientation.z(), vp.orientation.w());
-            q_v.normalize();
+            // 位姿取点云生成时刻 (LidarData.time_stamp) 而非 RPC 当下,
+            // 从 100Hz odom 位姿缓冲插值, 保证点云-位姿时间对齐
+            tf2::Quaternion q_v;
+            tf2::Vector3 t_v;
+            rclcpp::Time stamp = this->now();
+            double cloud_age_ms = 0.0;
+            if (!getPoseAtSimTime(sim_stamp, q_v, t_v, stamp, cloud_age_ms)) {
+                return;  // 点云时间戳无法对齐 (数据过旧), 丢弃该帧
+            }
             const tf2::Matrix3x3 r_v(q_v);
-            const tf2::Vector3 t_v(vp.position.x(), vp.position.y(), vp.position.z());
 
             // 挂载外参 (NED, 机身 -> 传感器): 与 settings.json 的 X/Y/Z/Roll/Pitch/Yaw 一致
             tf2::Quaternion q_mount;
@@ -146,6 +169,42 @@ private:
                            mount_yaw_ * M_PI / 180.0);
             const tf2::Matrix3x3 r_mount(q_mount);
             const tf2::Vector3 t_mount(mount_x_, mount_y_, mount_z_);
+
+            // 去畸变准备: GPU 雷达一帧是 UE 端一个旋转周期 (rot_period_s_) 内
+            // 多次渲染累积的 (LidarCamera.cpp: 转满一圈才把 point_cloud 拷贝到
+            // point_cloud_final 并发布), 帧内各点捕获时刻不同, 单一位姿无法正确
+            // 放置整帧。点由激光角 LUT 重建 (polar_to_cartesian_lut_), 故每个点
+            // 的传感器系方位角 = 它被捕获时扫描的角度, 捕获时刻可按方位角线性
+            // 反推: t_cap = 帧时间戳 - (1 - (theta-start)/360) * 旋转周期。
+            // 位姿快照拷贝一次, 循环内免锁二分插值
+            std::vector<PoseSample> pose_snap;
+            if (deskew_en_) {
+                std::lock_guard<std::mutex> lk(pose_hist_mutex_);
+                pose_snap.assign(pose_hist_.begin(), pose_hist_.end());
+            }
+            const double rot_period_ns = rot_period_s_ * 1e9;
+            const double start_frac = rot_start_deg_ / 360.0;
+            auto poseFromSnap = [&](uint64_t t_cap,
+                                    tf2::Quaternion &q_o, tf2::Vector3 &p_o) -> bool {
+                if (pose_snap.size() < 2 ||
+                    t_cap < pose_snap.front().sim_t || t_cap > pose_snap.back().sim_t) {
+                    return false;
+                }
+                size_t lo = 0, hi = pose_snap.size() - 1;
+                while (hi - lo > 1) {
+                    const size_t mid = (lo + hi) / 2;
+                    if (pose_snap[mid].sim_t <= t_cap) lo = mid; else hi = mid;
+                }
+                const auto &s0 = pose_snap[lo];
+                const auto &s1 = pose_snap[hi];
+                const double alpha = (s1.sim_t == s0.sim_t)
+                    ? 0.0
+                    : static_cast<double>(t_cap - s0.sim_t) /
+                      static_cast<double>(s1.sim_t - s0.sim_t);
+                p_o = s0.p.lerp(s1.p, alpha);
+                q_o = s0.q.slerp(s1.q, alpha);
+                return true;
+            };
 
             // XYZI 字段 (SUPER 按 pcl::PointXYZI 解析, intensity < intensity_thresh 的点被过滤)
             struct PointXYZI { float x, y, z, intensity; };
@@ -166,9 +225,29 @@ private:
                 if (p_sensor.length() < body_filter_radius_) {
                     continue;
                 }
-                // 传感器系 -> world NED
                 const tf2::Vector3 p_body = r_mount * p_sensor + t_mount;
-                const tf2::Vector3 p_w_ned = r_v * p_body + t_v;
+
+                // 传感器系 -> world NED: 默认用帧时间戳位姿, 开启去畸变时按
+                // 每个点的方位角推算捕获时刻并插值该时刻的位姿
+                tf2::Vector3 p_w_ned;
+                bool deskewed = false;
+                if (deskew_en_) {
+                    double theta = std::atan2(p_sensor.y(), p_sensor.x());  // [-pi, pi]
+                    if (theta < 0.0) theta += 2.0 * M_PI;
+                    double frac = std::fmod(theta / (2.0 * M_PI) - start_frac + 1.0, 1.0);
+                    const uint64_t t_cap = sim_stamp -
+                        static_cast<uint64_t>((1.0 - frac) * rot_period_ns);
+                    tf2::Quaternion q_i;
+                    tf2::Vector3 t_i;
+                    if (poseFromSnap(t_cap, q_i, t_i)) {
+                        p_w_ned = tf2::Matrix3x3(q_i) * p_body + t_i;
+                        deskewed = true;
+                    }
+                }
+                if (!deskewed) {
+                    p_w_ned = r_v * p_body + t_v;
+                }
+
                 PointXYZI p;
                 // world NED -> ENU: (X,Y,Z)_enu = (Y,X,-Z)_ned
                 p.x = static_cast<float>(p_w_ned.y());
@@ -225,6 +304,56 @@ private:
             auto odom_data = client_odom_->simGetGroundTruthKinematics(vehicle_name_);
             const auto current_time = this->now();
 
+            // 仿真时钟基准: getMultirotorState 返回服务器仿真时间戳 (与
+            // LidarData.time_stamp 同一时钟), 每 10 次调用同步一次; 各样本的
+            // 仿真时间戳用本地时钟流逝从基准外推 (sim 倍速偏离 1 时误差仅为
+            // 同步间隔 x 倍速差, ~ms 级), 不依赖 WSL/Windows 时钟对齐
+            ++odom_cnt_;
+            if (odom_cnt_ % 10 == 1) {
+                const uint64_t t_ref = client_odom_->getMultirotorState().timestamp;
+                const uint64_t l_ref = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                // 估计仿真时钟相对本地时钟的速率: UE 卡顿时仿真时间流逝变慢,
+                // 按实际速率外推可避免外推值超前于真实仿真时间
+                if (sim_ref_sim_t_ > 0 && t_ref > sim_ref_sim_t_ && l_ref > sim_ref_local_ns_) {
+                    const double rate = static_cast<double>(t_ref - sim_ref_sim_t_) /
+                                        static_cast<double>(l_ref - sim_ref_local_ns_);
+                    sim_rate_ = std::min(std::max(rate, 0.25), 4.0);
+                }
+                sim_ref_sim_t_ = t_ref;
+                sim_ref_local_ns_ = l_ref;
+            }
+            const uint64_t local_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            uint64_t sample_sim_t = sim_ref_sim_t_ +
+                static_cast<uint64_t>(static_cast<double>(local_ns - sim_ref_local_ns_) * sim_rate_);
+
+            // 记录 (仿真时间戳, ROS 时刻, NED 位姿) 样本, 供 lidar 线程按点云
+            // 生成时刻插值位姿; 时间轴必须单调: 小回跳 (仿真时钟速率抖动) 钳位
+            // 处理不清缓冲, 大回跳 (>1s, UE 重启/世界重置) 才清空重建
+            {
+                tf2::Quaternion q_s(odom_data.pose.orientation.x(), odom_data.pose.orientation.y(),
+                                    odom_data.pose.orientation.z(), odom_data.pose.orientation.w());
+                q_s.normalize();
+                std::lock_guard<std::mutex> lk(pose_hist_mutex_);
+                if (!pose_hist_.empty() && sample_sim_t < pose_hist_.back().sim_t) {
+                    if (pose_hist_.back().sim_t - sample_sim_t > 1000000000ULL) {
+                        pose_hist_.clear();
+                    } else {
+                        sample_sim_t = pose_hist_.back().sim_t;
+                    }
+                }
+                pose_hist_.push_back(PoseSample{sample_sim_t, current_time,
+                                                tf2::Vector3(odom_data.pose.position.x(),
+                                                             odom_data.pose.position.y(),
+                                                             odom_data.pose.position.z()),
+                                                q_s});
+                while (pose_hist_.size() > 2 &&
+                       sample_sim_t - pose_hist_.front().sim_t > kPoseHistNs) {
+                    pose_hist_.pop_front();
+                }
+            }
+
             nav_msgs::msg::Odometry msg;
             msg.header.stamp = current_time;
             msg.header.frame_id = "world";
@@ -267,9 +396,93 @@ private:
     rclcpp::TimerBase::SharedPtr timer_lidar_, timer_odom_;
     std::string vehicle_name_, lidar_name_, cloud_topic_, odom_topic_, cloud_frame_;
     bool use_gpu_lidar_ = true;
+    bool deskew_en_ = true;
+    double rot_period_s_ = 0.1, rot_start_deg_ = 0.0;
     uint64_t last_sim_stamp_ = 0;       // 上次发布的雷达仿真 time_stamp (重复帧去重)
     double body_filter_radius_, intensity_;
     double mount_x_, mount_y_, mount_z_, mount_roll_, mount_pitch_, mount_yaw_;
+
+    // 位姿环形缓冲: odom 线程 (100Hz) 写入, lidar 线程按点云生成时刻插值读取。
+    // 解决 "当前位姿 × 旧点云快照" 在旋转/平移时的整体错位 (拖影) 问题
+    struct PoseSample {
+        uint64_t sim_t;       // AirSim TTimePoint (ns), 该位姿的仿真时间戳
+        rclcpp::Time ros_t;   // 本端抓取该位姿的时刻 (用于对齐 ROS 消息时间戳)
+        tf2::Vector3 p;       // world NED 位置
+        tf2::Quaternion q;    // world NED 姿态
+    };
+    std::deque<PoseSample> pose_hist_;
+    std::mutex pose_hist_mutex_;
+    static constexpr uint64_t kPoseHistNs = 2ULL * 1000 * 1000 * 1000;  // 缓冲保留 2s
+
+    // 仿真时钟基准 (仅 odom 线程访问): getMultirotorState 的服务器时间戳
+    // 及其对应的本地 steady_clock 时刻, 用于外推各样本的仿真时间戳
+    uint64_t odom_cnt_ = 0;
+    uint64_t sim_ref_sim_t_ = 0;
+    uint64_t sim_ref_local_ns_ = 0;
+    double sim_rate_ = 1.0;  // 仿真时钟/本地时钟 速率估计 (滑动更新)
+
+    // 按仿真时间戳插值出该时刻的机体位姿 (world NED) 与对应 ROS 时间戳。
+    // 返回 false 且调用方应丢弃该帧: 点云时间戳早于缓冲最老样本 (点云过旧,
+    // UE 端可能卡顿/暂停)。缓冲为空或时间戳无效时退回抓取当前位姿 (旧行为)
+    bool getPoseAtSimTime(uint64_t sim_stamp, tf2::Quaternion &q_out,
+                          tf2::Vector3 &p_out, rclcpp::Time &ros_t_out, double &age_ms) {
+        std::lock_guard<std::mutex> lk(pose_hist_mutex_);
+        if (sim_stamp == 0 || pose_hist_.empty()) {
+            // 回退路径: 无缓冲可用 (启动初期/时间戳无效), 抓当前位姿
+            try {
+                const auto kinematics = client_lidar_->simGetGroundTruthKinematics(vehicle_name_);
+                p_out = tf2::Vector3(kinematics.pose.position.x(), kinematics.pose.position.y(),
+                                     kinematics.pose.position.z());
+                q_out = tf2::Quaternion(kinematics.pose.orientation.x(), kinematics.pose.orientation.y(),
+                                        kinematics.pose.orientation.z(), kinematics.pose.orientation.w());
+                q_out.normalize();
+                ros_t_out = this->now();
+                age_ms = -1.0;  // 年龄未知
+                return true;
+            } catch (const rpc::rpc_error& e) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                    "抓取位姿失败: RPC 通信异常! (%s)", e.what());
+                return false;
+            }
+        }
+        const auto &front = pose_hist_.front();
+        const auto &back = pose_hist_.back();
+        if (sim_stamp < front.sim_t) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "点云落后位姿缓冲 %.0f ms, 已过旧, 丢弃该帧 (检查 UE 端帧率/Lidar UpdateFrequency)",
+                (front.sim_t - sim_stamp) / 1e6);
+            return false;
+        }
+        if (sim_stamp >= back.sim_t) {
+            p_out = back.p;
+            q_out = back.q;
+            ros_t_out = back.ros_t;
+            age_ms = 0.0;
+            return true;
+        }
+        // sim_stamp 落在缓冲范围内: 找相邻两样本做插值
+        for (size_t i = pose_hist_.size() - 1; i > 0; --i) {
+            const auto &s0 = pose_hist_[i - 1];
+            const auto &s1 = pose_hist_[i];
+            if (s0.sim_t <= sim_stamp && sim_stamp <= s1.sim_t) {
+                const double alpha = (s1.sim_t == s0.sim_t)
+                    ? 0.0
+                    : static_cast<double>(sim_stamp - s0.sim_t) /
+                      static_cast<double>(s1.sim_t - s0.sim_t);
+                p_out = s0.p.lerp(s1.p, alpha);
+                q_out = s0.q.slerp(s1.q, alpha);
+                ros_t_out = s0.ros_t + rclcpp::Duration::from_seconds(
+                    alpha * (s1.ros_t - s0.ros_t).seconds());
+                age_ms = (back.sim_t - sim_stamp) / 1e6;  // 点云生成至今的年龄
+                return true;
+            }
+        }
+        p_out = back.p;
+        q_out = back.q;
+        ros_t_out = back.ros_t;
+        age_ms = 0.0;
+        return true;
+    }
 };
 
 int main(int argc, char** argv) {

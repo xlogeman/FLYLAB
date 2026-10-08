@@ -24,6 +24,7 @@
 #include <traj_opt/exp_traj_optimizer_s4.h>
 #include <utils/optimization/lbfgs.h>
 #include <ros_interface/ros_interface.hpp>
+#include <utils/header/print_throttle.hpp>
 
 #define POS_IDX 1
 #define VEL_IDX 2
@@ -446,8 +447,11 @@ bool ExpTrajOpt::processCorridorWithGuideTraj() {
         const double dis = geometry_utils::findInteriorDist(curIH, interior) / 2;
         if (dis < 0.0 || std::isinf(dis)) {
 
-            cout << YELLOW << " -- [SUPER] in [ GcopterExpS4::processCorridor]: Failed findInteriorDist Vs." <<
-                 RESET << endl;
+            LOG_THROTTLE([&] {
+                cout << YELLOW << " -- [SUPER] in [ GcopterExpS4::processCorridor]: Failed findInteriorDist Vs."
+                     << " (corridor " << i << "/" << opt_vars.hPolytopes.size()
+                     << ", adjacent polytopes not connected)" << RESET << endl;
+            });
             return false;
         }
         geometry_utils::enumerateVs(curIH, interior, curIV);
@@ -623,13 +627,15 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
 
     /* 2) check the initial value of the optimization varibles */
     if (opt_vars.times.minCoeff() < 1e-3) {
-        cout << YELLOW << " -- [TrajOpt] Error, the init times have zero, force return." << RESET << endl;
-        cout << " -- Head PVAJ: " << endl;
-        cout << opt_vars.headPVAJ << endl;
-        cout << " -- Head PVAJ: " << endl;
-        cout << opt_vars.tailPVAJ << endl;
-        cout << " -- Times: " << endl;
-        cout << opt_vars.times.transpose() << endl;
+        LOG_THROTTLE([&] {
+            cout << YELLOW << " -- [TrajOpt] Error, the init times have zero, force return." << RESET << endl;
+            cout << " -- Head PVAJ: " << endl;
+            cout << opt_vars.headPVAJ << endl;
+            cout << " -- Head PVAJ: " << endl;
+            cout << opt_vars.tailPVAJ << endl;
+            cout << " -- Times: " << endl;
+            cout << opt_vars.times.transpose() << endl;
+        });
         return INFINITY;
     }
 
@@ -729,7 +735,9 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
             cout << "\tThr: " << opt_vars.penalty_log(7) << endl;
             cout << "\tOptimized Time: " << opt_vars.times.transpose() << endl;
         }
-        ros_ptr_->warn(" -- [ExpOpt] Opt failed, Omg or thr or Pos violation.");
+        LOG_THROTTLE([&] {
+            ros_ptr_->warn(" -- [ExpOpt] Opt failed, Omg or thr or Pos violation.");
+        });
         ret = -1;
     }
 
@@ -753,7 +761,9 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
     } else {
         traj.clear();
         minCostFunctional = INFINITY;
-        cout << YELLOW << " -- [MINCO] TrajOpt failed, " << lbfgs::lbfgs_strerror(ret) << RESET << endl;
+        LOG_THROTTLE([&] {
+            cout << YELLOW << " -- [MINCO] TrajOpt failed, " << lbfgs::lbfgs_strerror(ret) << RESET << endl;
+        });
 //        cout << "Init times: " << times_init.transpose() << endl;
     }
     return minCostFunctional + ret;
@@ -904,7 +914,9 @@ bool ExpTrajOpt::optimize(const StatePVAJ &headPVAJ, const StatePVAJ &tailPVAJ,
     }
 
     if (!setupProblemAndCheck()) {
-        cout << YELLOW << " -- [SUPER] Minco corridor preprocess error." << RESET << endl;
+        LOG_THROTTLE([&] {
+            cout << YELLOW << " -- [SUPER] Minco corridor preprocess error." << RESET << endl;
+        });
         success = false;
     }
 
@@ -912,7 +924,9 @@ bool ExpTrajOpt::optimize(const StatePVAJ &headPVAJ, const StatePVAJ &tailPVAJ,
 
 
     if (success && std::isinf(optimize(out_traj, cfg_.opt_accuracy))) {
-        cout << YELLOW << " -- [SUPER] Minco exp_traj opt failed." << RESET << endl;
+        LOG_THROTTLE([&] {
+            cout << YELLOW << " -- [SUPER] Minco exp_traj opt failed." << RESET << endl;
+        });
         success = false;
     }
 

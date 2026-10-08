@@ -22,6 +22,7 @@
 */
 
 #include <rog_map/prob_map.h>
+#include <chrono>
 using namespace rog_map;
 using namespace super_utils;
 
@@ -317,13 +318,25 @@ void ProbMap::updateProbMap(const PointCloud& cloud, const Pose& pose) {
     }
 
     if (pos.z() > cfg_.virtual_ceil_height) {
-        std::cout << YELLOW << " -- [ROGMapCore] Odom above virtual ceil, please check map parameter -- ." << RESET
-            << std::endl;
+        static double last_ceil_warn_t = -1e18;
+        double now_t = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now_t - last_ceil_warn_t > 1.0) {
+            last_ceil_warn_t = now_t;
+            std::cout << YELLOW << " -- [ROGMapCore] Odom above virtual ceil (" << pos.z()
+                << " > " << cfg_.virtual_ceil_height << "), please check map parameter -- ." << RESET << std::endl;
+        }
         return;
     }
     else if (pos.z() < cfg_.virtual_ground_height) {
-        std::cout << YELLOW << " -- [ROGMapCore] Odom below virtual ground, please check map parameter -- ." << RESET
-            << std::endl;
+        static double last_ground_warn_t = -1e18;
+        double now_t = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now_t - last_ground_warn_t > 1.0) {
+            last_ground_warn_t = now_t;
+            std::cout << YELLOW << " -- [ROGMapCore] Odom below virtual ground (" << pos.z()
+                << " < " << cfg_.virtual_ground_height << "), please check map parameter -- ." << RESET << std::endl;
+        }
         return;
     }
 

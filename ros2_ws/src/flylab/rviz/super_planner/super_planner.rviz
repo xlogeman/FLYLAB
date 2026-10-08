@@ -39,7 +39,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Queue Size: 3
       Selectable: true
-      Size (m): 0.05
+      Size (m): 0.15
       Size (Pixels): 2
       Style: Flat Squares
       Topic:

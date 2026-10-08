@@ -27,7 +27,8 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
 | VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
 | ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
-| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（16 线仿真雷达），`/map_save` 保存 PCD |
+| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（GPULidar，参数对齐 Livox Mid-360） |
+| SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划（ROG-Map 占据地图）→ 桥接 → PX4 跟踪；与 EGO 共用 tracker 链路，`tracker:=mavros\|px4` 选择跟踪链路 |
 
 ### C++ 节点（flylab/src，sensors = AirSim 传感器链路，control = 飞行控制）
 
@@ -35,7 +36,9 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 |---|---|
 | `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
 | `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
-| `airsim_sensor_lidar` | FAST-LIO 链路传感器：3D LiDAR（按方位角合成逐点时间戳）+ IMU，NED→FLU |
+| `airsim_sensor_lidar` | FAST-LIO 链路传感器：GPULidar（单时刻瞬时快照，统一时间戳/去重）+ IMU，NED→FLU；`use_gpu_lidar:=false` 切回 CPU 雷达 |
+| `airsim_sensor_super` | SUPER 链路传感器：3D LiDAR（真值位姿变换到 world 系 ENU）+ 真值里程计 100Hz；支持 GPU/CPU 雷达 |
+| `super_cmd_bridge` | SUPER 输出桥接：mars PositionCommand → 标准 PositionCommand（对接 tracker） |
 | `tracker_px4` | 轨迹跟踪 + PX4 混控（uXRCE-DDS 链路），链路状态彩色提示，断链自动检测 |
 | `tracker_mavros` | 轨迹跟踪 + PX4 混控（MAVROS 链路），与 tracker_px4 共用控制逻辑 |
 | `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
@@ -48,7 +51,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 |---|---|
 | ROS2 Humble + PX4 SITL v1.15.2 | PX4 消息经 MicroXRCEAgent（`udp4 -p 8888`）桥接 |
 | Cosys-AirSim 5.8 | UE 端仿真器，场景按链路选用 `configs/` 下的 json |
-| ego_planner / ov_msckf / orbslam3 / fast_lio | 工作空间内移植的算法包（fast_lio 依赖 livox_ros_driver2，需先 source） |
+| ego_planner / ov_msckf / orbslam3 / fast_lio / super_planner | 工作空间内移植的算法包（fast_lio 依赖 livox_ros_driver2） |
 
 ---
 
@@ -69,6 +72,8 @@ MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (tracker:=px4 链
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
 ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 uXRCE-DDS 跟踪)
 ros2 launch flylab fly_ego.launch.py tracker:=mavros # EGO 避障 (MAVROS 跟踪, 用专属端口 14542)
+ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar, 需 configs/fast_lio/settings.json)
+ros2 launch flylab fast_lio.launch.py                # FAST-LIO 建图 (GPULidar)
 ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 ```
 
@@ -103,10 +108,12 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 | UDP 8888 | uXRCE-DDS（`tracker:=px4` 链路） | MicroXRCEAgent |
 | TCP 41451 | AirSim RPC API（传感器/相机直连） | airsim_sensor_* / flylab_tools |
 
-**坑 1：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580。
+**坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580。
 
 ## 注意事项
 
+- **GPULidar 与 CPU 雷达配置**：`configs/fast_lio/settings.json` 为 GPU 雷达（`SensorType: 8`，参数对齐 Livox Mid-360），FAST-LIO 与 SUPER 链路共用，对应 launch 默认 `gpu_lidar:=true`；`configs/settings.json` 为 CPU 雷达（`SensorType: 6`，**必须带 `LimitPoints: false`**，否则每 tick 扫描被 5000 点上限截断，一圈分片采样导致帧内拼接错位且实际帧率掉到 ~1.7Hz）。仿真无法复现 Mid-360 的非重复菱形扫描，以每帧均匀网格 ~2 万点近似
+- **雷达时间戳约定**：AirSim 点云是单时刻瞬时快照（整帧同一位姿一次生成，无扫描内运动畸变），传感器节点统一填 `time = 1/rotation_hz` 并以 `LidarData.time_stamp` 标定 ROS 偏移，LiDAR/IMU 映射到同一时间轴；逐点合成时间会反向注入运动剪切导致平移漂移，勿改回
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
 - **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
 - **airsim_ros_pkgs 为官方原版**：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`。

@@ -22,6 +22,7 @@
 */
 
 #include <super_core/corridor_generator.h>
+#include <utils/header/print_throttle.hpp>
 
 using namespace super_utils;
 
@@ -114,7 +115,9 @@ namespace super_planner {
                 return false;
             }
             if (!GeneratePolytopeFromLine(seed_lines.back(), temp_poly)) {
-                cout << YELLOW << " -- [SUPER] GeneratePolytopeFromLine failed." << RESET << endl;
+                LOG_THROTTLE([&] {
+                    cout << YELLOW << " -- [SUPER] GeneratePolytopeFromLine failed." << RESET << endl;
+                });
                 return false;
             }
 
@@ -129,15 +132,19 @@ namespace super_planner {
                 temp_poly.interior_pt_with_last_one = interior_pt;
                 if (interior_depth < min_overlap_threshold_) {
                     if (!GeneratePolytopeFromPoint(path[first_id], temp_poly_fix_p)) {
-                        cout << YELLOW << " -- [SUPER] GeneratePolytopeFromPoint failed." << RESET << endl;
+                        LOG_THROTTLE([&] {
+                            cout << YELLOW << " -- [SUPER] GeneratePolytopeFromPoint failed." << RESET << endl;
+                        });
                         return false;
                     }
                     overlap = sfcs.back().CrossWith(temp_poly_fix_p);
                     interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
                     if (interior_depth <= 0.01) {
-                        ros_ptr_->warn(
-                                " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
-                                interior_depth);
+                        LOG_THROTTLE([&] {
+                            ros_ptr_->warn(
+                                    " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
+                                    interior_depth);
+                        });
 // viz for debug
 //                        ros_ptr_->vizCiriPointCloud(latest_pc);
 //                        usleep(100000);
@@ -150,9 +157,11 @@ namespace super_planner {
                     overlap = sfcs.back().CrossWith(temp_poly);
                     interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
                     if (interior_depth <= 0.01) {
-                        ros_ptr_->warn(
-                                " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
-                                interior_depth);
+                        LOG_THROTTLE([&] {
+                            ros_ptr_->warn(
+                                    " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
+                                    interior_depth);
+                        });
                         // viz for debug
 //                        ros_ptr_->vizCiriPointCloud(latest_pc);
 //                        usleep(100000);
@@ -255,10 +264,12 @@ namespace super_planner {
             polytope.SetSeedLine(Line{pt, pt});
             return true;
         } else {
-            cout << YELLOW << " -- [SUPER] CSpaceFiri failed." << RESET << endl;
-            cout << YELLOW << "\t box_min =" << box_min.transpose() << endl;
-            cout << YELLOW << "\t box_max = " << box_max.transpose() << endl;
-            cout << YELLOW << "\t seed pt = " << pt.transpose() << endl;
+            LOG_THROTTLE([&] {
+                cout << YELLOW << " -- [SUPER] CSpaceFiri failed." << RESET << endl;
+                cout << YELLOW << "\t box_min =" << box_min.transpose() << endl;
+                cout << YELLOW << "\t box_max = " << box_max.transpose() << endl;
+                cout << YELLOW << "\t seed pt = " << pt.transpose() << endl;
+            });
             polytope.Reset();
             return false;
         }
@@ -353,10 +364,12 @@ namespace super_planner {
             return true;
         } else {
             polytope.Reset();
-            cout << YELLOW << "\t box_min = " << box_min.transpose() << RESET << endl;
-            cout << YELLOW << "\t box_max =" << box_max.transpose() << RESET << endl;
-            cout << YELLOW << "\t seed line =" << line.first.transpose() << " --> " << line.second.transpose()
-                 << RESET << endl;
+            LOG_THROTTLE([&] {
+                cout << YELLOW << "\t box_min = " << box_min.transpose() << RESET << endl;
+                cout << YELLOW << "\t box_max =" << box_max.transpose() << RESET << endl;
+                cout << YELLOW << "\t seed line =" << line.first.transpose() << " --> " << line.second.transpose()
+                     << RESET << endl;
+            });
 
 //            failed_traj_log << 889900 << endl;
 //            failed_traj_log << bd << endl;

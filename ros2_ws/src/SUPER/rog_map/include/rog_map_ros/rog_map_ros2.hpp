@@ -98,12 +98,21 @@ namespace rog_map {
 
         void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg) {
             if (!robot_state_.rcv) {
-                std::cout << YELLOW << " -- [ROS] No odom received, skip cloud callback." << RESET << std::endl;
+                static double last_no_odom_t = -1e18;
+                double now_t = nh_->get_clock()->now().seconds();
+                if (now_t - last_no_odom_t > 1.0) {
+                    last_no_odom_t = now_t;
+                    std::cout << YELLOW << " -- [ROS] No odom received, skip cloud callback." << RESET << std::endl;
+                }
                 return;
             }
             double cbk_t = nh_->get_clock()->now().seconds();
             if (cbk_t - robot_state_.rcv_time > cfg_.odom_timeout) {
-                std::cout << YELLOW << " -- [ROS] Odom timeout, skip cloud callback." << RESET << std::endl;
+                static double last_timeout_t = -1e18;
+                if (cbk_t - last_timeout_t > 1.0) {
+                    last_timeout_t = cbk_t;
+                    std::cout << YELLOW << " -- [ROS] Odom timeout, skip cloud callback." << RESET << std::endl;
+                }
                 return;
             }
             PointCloud temp_pc;
@@ -132,9 +141,14 @@ namespace rog_map {
             }
 
             if (rc_.unfinished_frame_cnt > 1) {
-                std::cout << YELLOW <<
-                    " -- [ROG WARN] Unfinished frame cnt > 1, the map may not work in real-time" << RESET
-                    << std::endl;
+                static double last_unfinished_warn_t = -1e18;
+                double now_t = nh_->get_clock()->now().seconds();
+                if (now_t - last_unfinished_warn_t > 1.0) {
+                    last_unfinished_warn_t = now_t;
+                    std::cout << YELLOW <<
+                        " -- [ROG WARN] Unfinished frame cnt > 1, the map may not work in real-time" << RESET
+                        << std::endl;
+                }
             }
             static PointCloud temp_pc;
             static Pose temp_pose;

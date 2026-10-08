@@ -24,6 +24,7 @@
 #include <cmath>
 using std::isnan;
 #include <fsm/fsm.h>
+#include <utils/header/print_throttle.hpp>
 #include <memory>
 
 using namespace super_utils;
@@ -69,7 +70,11 @@ namespace fsm {
         RET_CODE ret_code = planner_ptr_->ReplanOnce(gi_.goal_p, gi_.goal_yaw, gi_.new_goal);
         if (ret_code == FAILED) {
 //            cout << YELLOW << " -- [Fsm] ReplanOnce failed." << RESET << endl;
-        } else { cout << GREEN << " -- [Fsm] ReplanOnce succeed." << RESET << endl; }
+        } else {
+            LOG_THROTTLE([&] {
+                cout << GREEN << " -- [Fsm] ReplanOnce succeed." << RESET << endl;
+            });
+        }
 
         if (ret_code == EMER) {
             ChangeState("ReplanTimerCallback", EMER_STOP);
@@ -116,9 +121,7 @@ namespace fsm {
                 if (!started_) {
                     return;
                 }
-                if ((!robot_state_.rcv || (ros_ptr_->getSimTime() - robot_state_.rcv_time) > 0.1)) {
-                    cout << YELLOW << " -- [Fsm] No odom." << RESET << endl;
-                }
+                // "No odom" 已由 callMainFsmOnce 顶部 1Hz 节流块打印, 此处不再重复
                 ChangeState("MainFsmCallback", WAIT_GOAL);
                 break;
             }
@@ -140,7 +143,11 @@ namespace fsm {
                 }
                 int retcode = planner_ptr_->PlanFromRest(gi_.goal_p, gi_.goal_yaw, gi_.new_goal);
                 if (!planner_ptr_->goalValid()) {
-                    cout << YELLOW << " -- [Fsm] Goal is invalid, skip this goal." << RESET << endl;
+                    LOG_THROTTLE([&] {
+                        cout << YELLOW << " -- [Fsm] Goal is invalid, skip this goal. cur ["
+                             << std::fixed << std::setprecision(2) << robot_state_.p.transpose()
+                             << "], goal [" << gi_.goal_p.transpose() << "]" << RESET << endl;
+                    });
                     ChangeState("MainFsmCallback", WAIT_GOAL);
                     return;
                 }
@@ -156,7 +163,11 @@ namespace fsm {
 
                     ChangeState("MainFsmCallback", FOLLOW_TRAJ);
                 } else {
-                    cout << YELLOW << " -- [Fsm] PlanFromRest failed, try replan." << RESET << endl;
+                    LOG_THROTTLE([&] {
+                        cout << YELLOW << " -- [Fsm] PlanFromRest failed [" << RET_CODE_STR[retcode]
+                             << "], cur [" << std::fixed << std::setprecision(2) << robot_state_.p.transpose()
+                             << "], goal [" << gi_.goal_p.transpose() << "], try replan." << RESET << endl;
+                    });
                     // ros::Duration(0.1).sleep();
                 }
                 replan_logs_.push_back(planner_ptr_->getLatestReplanLog());
