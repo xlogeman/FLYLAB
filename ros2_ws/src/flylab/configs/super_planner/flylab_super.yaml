@@ -126,14 +126,16 @@ rog_map:
   inflation_step: 2
   unk_inflation_en: false
   unk_inflation_step: 1
-  map_size: [ 50,50,6 ]
+  map_size: [ 50,50,12 ]
   # If the map rolling is disable, the map origin [m] should be set.
   fix_map_origin: [ 0,0,1.5 ]
   frontier_extraction_en: false
 
   # Virtual ceil and ground
-  virtual_ceil_height: 3.5
-  virtual_ground_height: -0.1
+  # 有效值 = (floor(值/0.2) -/+ inflation_step) * 0.2 -/+ 0.1
+  # 7.0  -> 有效天花板 6.5 m ;  -1.5 -> 有效地面 -1.1 m
+  virtual_ceil_height: 7.0
+  virtual_ground_height: -1.5
 
   load_pcd_en: false
 

@@ -67,7 +67,7 @@
           "HorizontalFOVEnd": 360,
           "VerticalFOVUpper": 52,
           "VerticalFOVLower": -7,
-          "Range": 70,
+          "Range": 40,
           "GenerateNoise": true,
           "MinNoiseStandardDeviation": 0.02,
           "NoiseDistanceScale": 1.0,

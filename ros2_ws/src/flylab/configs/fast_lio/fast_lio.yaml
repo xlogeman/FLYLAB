@@ -29,7 +29,7 @@
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
             fov_degree:    360.0
-            det_range:     70.0          # 与 settings.json 中 Range 一致 (Mid-360 @80% 反射率 70m)
+            det_range:     40.0          # 与 settings.json 中 Range 一致 (量程 40m)
             extrinsic_est_en:  false     # LiDAR 与 IMU 同装于机体原点, 外参精确已知, 关闭在线估计
             # 外参 = LiDAR 在 IMU body 系 (FLU) 下的位姿, 与 settings.json 挂载参数 (NED) 对应
             extrinsic_T: [ 0., 0., 0.]

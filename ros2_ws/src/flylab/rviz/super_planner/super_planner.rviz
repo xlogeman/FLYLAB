@@ -59,8 +59,8 @@ Visualization Manager:
       Head Diameter: 0.3
       Head Length: 0.2
       Length: 0.3
-      Line Style: Lines
-      Line Width: 0.03
+      Line Style: Billboards
+      Line Width: 0.12
       Name: FSM Path
       Offset: {X: 0, Y: 0, Z: 0}
       Pose Style: None
@@ -103,7 +103,7 @@ Visualization Manager:
       Shape:
         Alpha: 1
         Axes Length: 0.5
-        Axes Radius: 0.05
+        Axes Radius: 0.08
         Color: 255; 25; 0
         Head Length: 0.3
         Head Radius: 0.1
@@ -139,9 +139,9 @@ Visualization Manager:
       Distance: 30
       Focal Point: {X: 0, Y: 0, Z: 0}
       Name: Current View
-      Pitch: 0.7
+      Pitch: 0.9
       Target Frame: <Fixed Frame>
-      Yaw: 0.9
+      Yaw: -0.785
     Saved: ~
 Window Geometry:
   Displays:

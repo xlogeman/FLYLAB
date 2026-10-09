@@ -19,7 +19,11 @@
 //       去畸变: GPU 雷达 (SensorType 8) 是旋转扫描式, 一帧 = 一个旋转周期内
 //       多次渲染累积 (LidarCamera.cpp 转满一圈才发布), 非单时刻快照, 运动
 //       时帧内存在剪切。点由激光角 LUT 重建, 每个点的传感器系方位角 = 捕获
-//       时的扫描角度, 据此逐点反推捕获时刻并插值位姿 (deskew_en 控制)。
+//       时的扫描角度。捕获时刻优先取插件逐段上报的真实渲染时刻
+//       (GPULidarData.segment_stamps: 段起始扫角/跨度 + 渲染瞬间, 修复旋转
+//       时点云整体随转偏移的问题 —— 根因是异步渲染管线里深度图比扫描角记账
+//       晚 1~2 个 UE 帧); 无段数据 (旧插件/CPU 雷达) 回退按方位角均匀旋转
+//       反推。逐点插值位姿 (deskew_en 控制)。
 //       CPU 雷达 (SensorType 6) 单 tick 一次出全帧, 无此问题。
 // 发布: /cloud_registered  (PointCloud2: x,y,z,intensity; world 系 ENU;
 //                           best_effort QoS, 与 SUPER 订阅端匹配)
@@ -95,7 +99,7 @@ public:
         std::string airsim_ip = ip_env ? ip_env : "172.28.144.1";
         RCLCPP_INFO(this->get_logger(),
             "正在建立 SUPER 链路 LiDAR/odom 双通道直连 (IP: %s) ... "
-            "[v3: 位姿按点云时刻对齐 + 逐点旋转扫描去畸变]",
+            "[v4: 位姿按点云时刻对齐 + 段级真实渲染时刻去畸变]",
             airsim_ip.c_str());
         try {
             client_lidar_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(airsim_ip);
@@ -126,10 +130,18 @@ private:
             // 未命中点同为 (0,0,0) 占位
             uint64_t sim_stamp = 0;
             std::vector<float> points;
+            // 段级真实渲染时刻 (插件端 LidarCamera 异步捕获段上报): 每段记录
+            // 起始扫角/扫角跨度 (度, 与激光角同坐标系) + 该段渲染瞬间 (AirSim 时钟)
+            struct SegStamp { double start_deg, sweep_deg; uint64_t t_ns; };
+            std::vector<SegStamp> seg_stamps;
             if (use_gpu_lidar_) {
                 auto d = client_lidar_->getGPULidarData(lidar_name_, vehicle_name_);
                 sim_stamp = d.time_stamp;
                 points = std::move(d.point_cloud);
+                seg_stamps.reserve(d.segment_stamps.size());
+                for (const auto& s : d.segment_stamps) {
+                    seg_stamps.push_back({s.start_angle, s.sweep_angle, s.time_stamp});
+                }
             } else {
                 auto d = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
                 sim_stamp = d.time_stamp;
@@ -174,8 +186,12 @@ private:
             // 多次渲染累积的 (LidarCamera.cpp: 转满一圈才把 point_cloud 拷贝到
             // point_cloud_final 并发布), 帧内各点捕获时刻不同, 单一位姿无法正确
             // 放置整帧。点由激光角 LUT 重建 (polar_to_cartesian_lut_), 故每个点
-            // 的传感器系方位角 = 它被捕获时扫描的角度, 捕获时刻可按方位角线性
-            // 反推: t_cap = 帧时间戳 - (1 - (theta-start)/360) * 旋转周期。
+            // 的传感器系方位角 = 它被捕获时扫描的角度。捕获时刻确定方式:
+            //   1. 优先用插件上报的段级真实渲染时刻: 点方位角落在某段的
+            //      [start_angle, start_angle+sweep) 扫角区间内, 则该点渲染于
+            //      该段 time_stamp 瞬间 (消除 UE 异步渲染一帧延迟的系统性偏差);
+            //   2. 回退按方位角均匀旋转反推: t_cap = 帧时间戳
+            //      - (1 - (theta-start)/360) * 旋转周期 (CPU 雷达/旧插件版本)。
             // 位姿快照拷贝一次, 循环内免锁二分插值
             std::vector<PoseSample> pose_snap;
             if (deskew_en_) {
@@ -184,6 +200,31 @@ private:
             }
             const double rot_period_ns = rot_period_s_ * 1e9;
             const double start_frac = rot_start_deg_ / 360.0;
+            // 按点方位角 (度, [0,360)) 查所属捕获段的真实渲染时刻; 找不到
+            // (方位角与段边界舍入误差) 回退到扫角中心最近的段
+            auto segTimeForAzimuth = [&](double theta_deg) -> uint64_t {
+                if (seg_stamps.empty()) {
+                    return 0;
+                }
+                uint64_t t_best = 0;
+                double dist_best = 1e9;
+                for (const auto& s : seg_stamps) {
+                    const double sweep = std::max(s.sweep_deg, 1e-3);
+                    // 扫描方向上相对段起始角的前向距离 (0..360)
+                    const double fwd = std::fmod(theta_deg - s.start_deg + 720.0, 360.0);
+                    if (fwd < sweep) {
+                        return s.t_ns;
+                    }
+                    // 兜底: 与段扫角中心的圆周距离
+                    const double center = std::fmod(s.start_deg + sweep / 2.0, 360.0);
+                    const double dist = std::fabs(std::fmod(theta_deg - center + 540.0, 360.0) - 180.0);
+                    if (dist < dist_best) {
+                        dist_best = dist;
+                        t_best = s.t_ns;
+                    }
+                }
+                return t_best;
+            };
             auto poseFromSnap = [&](uint64_t t_cap,
                                     tf2::Quaternion &q_o, tf2::Vector3 &p_o) -> bool {
                 if (pose_snap.size() < 2 ||
@@ -228,15 +269,25 @@ private:
                 const tf2::Vector3 p_body = r_mount * p_sensor + t_mount;
 
                 // 传感器系 -> world NED: 默认用帧时间戳位姿, 开启去畸变时按
-                // 每个点的方位角推算捕获时刻并插值该时刻的位姿
+                // 每个点的方位角确定捕获时刻 (优先段级真实渲染时刻, 回退均匀
+                // 旋转反推) 并插值该时刻的位姿
                 tf2::Vector3 p_w_ned;
                 bool deskewed = false;
                 if (deskew_en_) {
                     double theta = std::atan2(p_sensor.y(), p_sensor.x());  // [-pi, pi]
                     if (theta < 0.0) theta += 2.0 * M_PI;
-                    double frac = std::fmod(theta / (2.0 * M_PI) - start_frac + 1.0, 1.0);
-                    const uint64_t t_cap = sim_stamp -
-                        static_cast<uint64_t>((1.0 - frac) * rot_period_ns);
+                    uint64_t t_cap = 0;
+                    if (!seg_stamps.empty()) {
+                        // 优先: 插件上报的段级真实渲染时刻
+                        t_cap = segTimeForAzimuth(theta * 180.0 / M_PI);
+                    }
+                    if (t_cap == 0) {
+                        // 回退: 按旋转周期均匀假设由方位角反推
+                        const double frac =
+                            std::fmod(theta / (2.0 * M_PI) - start_frac + 1.0, 1.0);
+                        t_cap = sim_stamp -
+                            static_cast<uint64_t>((1.0 - frac) * rot_period_ns);
+                    }
                     tf2::Quaternion q_i;
                     tf2::Vector3 t_i;
                     if (poseFromSnap(t_cap, q_i, t_i)) {

@@ -29,6 +29,22 @@ Panels:
 Visualization Manager:
   Class: ""
   Displays:
+    # 网格 (与 super_planner.rviz 一致, 随 Fixed Frame camera_init 移动)
+    - Alpha: 0.3
+      Cell Size: 5
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
     # TF: fast_lio 发布 camera_init -> body (地图系 -> 机体系)
     - Class: rviz_default_plugins/TF
       Enabled: true
@@ -226,7 +242,7 @@ Visualization Manager:
       Value: true
   Enabled: true
   Global Options:
-    Background Color: 75; 75; 75
+    Background Color: 35; 38; 46
     Fixed Frame: camera_init
     Frame Rate: 30
   Name: root
@@ -270,25 +286,12 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 80
-      Enable Stereo Rendering:
-        Stereo Eye Separation: 0.05999999865889549
-        Stereo Focal Distance: 1
-        Swap Stereo Eyes: false
-        Value: false
-      Focal Point:
-        X: 0
-        Y: 0
-        Z: 1
-      Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05000000074505806
-      Invert Z Axis: false
+      Distance: 30
+      Focal Point: {X: 0, Y: 0, Z: 0}
       Name: Current View
-      Near Clip Distance: 0.009999999776482582
-      Pitch: 1.100000023841858
+      Pitch: 0.9
       Target Frame: <Fixed Frame>
-      Value: Orbit (rviz_default_plugins)
-      Yaw: 4.71238899230957
+      Yaw: -0.785
     Saved: ~
 Window Geometry:
   Displays:

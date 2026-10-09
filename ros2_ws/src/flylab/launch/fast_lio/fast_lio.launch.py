@@ -45,6 +45,18 @@ def generate_launch_description():
     declare_gpu_lidar = DeclareLaunchArgument(
             'gpu_lidar', default_value='true',
             description='UE 端是否使用 GPULidar (需 settings.json 中 Lidar1 SensorType=8)')
+    # UE 端 Lidar1 配置 (必须与 settings.json 一致, 影响 ring 重建与时间模型):
+    #   num_channels = NumberOfChannels, measurements_per_cycle = MeasurementsPerCycle,
+    #   rotation_frequency = RotationsPerSecond
+    declare_num_channels = DeclareLaunchArgument(
+            'num_channels', default_value='64',
+            description='UE 端 Lidar1 NumberOfChannels (settings.json)')
+    declare_meas_per_cycle = DeclareLaunchArgument(
+            'measurements_per_cycle', default_value='320',
+            description='UE 端 Lidar1 MeasurementsPerCycle (settings.json)')
+    declare_rotation_hz = DeclareLaunchArgument(
+            'rotation_frequency', default_value='10.0',
+            description='UE 端 Lidar1 RotationsPerSecond (settings.json)')
     run_fast_lio = Node(
             package='fast_lio',
             executable='fastlio_mapping',
@@ -52,8 +64,10 @@ def generate_launch_description():
             output='screen',
             parameters=[PathJoinSubstitution([config_path, config_file])])
 
-    # 启动 FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR(单时刻瞬时快照, 无伪逐点时间) + IMU
-    # 参数默认值与 configs/fast_lio/settings.json 一致 (16线/1800点每转/10Hz)
+    # 启动 FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR + IMU
+    #   - CPU 雷达: 单 tick 瞬时快照, 统一 per-point time = 旋转周期
+    #   - GPU 雷达: 旋转扫描多段渲染累积, 用插件上报的段级真实渲染时刻生成
+    #     真实逐点时间, FAST-LIO 据此做逐点运动畸变校正 (与 SUPER 链路同源修复)
     # gpu_lidar:=true 需 UE 端 settings.json 中 Lidar1 SensorType=8
     airsim_sensor_lidar = Node(
             package='flylab',
@@ -61,9 +75,9 @@ def generate_launch_description():
             name='airsim_sensor_lidar',
             output='screen',
             parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar'),
-                         'num_channels': 64,
-                         'measurements_per_cycle': 320,
-                         'rotation_frequency': 10.0}])
+                         'num_channels': LaunchConfiguration('num_channels'),
+                         'measurements_per_cycle': LaunchConfiguration('measurements_per_cycle'),
+                         'rotation_frequency': LaunchConfiguration('rotation_frequency')}])
 
     ld = LaunchDescription()
 
@@ -72,6 +86,9 @@ def generate_launch_description():
     ld.add_action(declare_config_path)
     ld.add_action(declare_config_file)
     ld.add_action(declare_gpu_lidar)
+    ld.add_action(declare_num_channels)
+    ld.add_action(declare_meas_per_cycle)
+    ld.add_action(declare_rotation_hz)
     ld.add_action(airsim_sensor_lidar)
     ld.add_action(run_fast_lio)
     ld.add_action(fast_lio_rviz_node)

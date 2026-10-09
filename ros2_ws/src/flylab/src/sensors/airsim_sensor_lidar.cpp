@@ -2,8 +2,15 @@
 //
 // 功能: 通过 RPC 直连 Cosys-AirSim 采集 3D LiDAR + IMU 数据并发布 ROS2 话题,
 //       供 FAST-LIO (fast_lio.launch.py) 使用, 不依赖 airsim_ros_pkgs。
-//       Cosys-AirSim LiDAR 输出无逐点时间戳、无 intensity (整帧只有一个时间戳),
-//       本节点按旋转方位角合成 velodyne 风格 per-point time, 供 FAST-LIO 运动畸变校正;
+//       Cosys-AirSim LiDAR 输出无逐点时间戳、无 intensity (整帧只有一个时间戳)。
+//       时间模型按雷达类型区分:
+//       - CPU 雷达 (SensorType 6): 单 tick 瞬时快照, 整帧同一位姿, 统一填
+//         sweep_dur, header = 快照时刻 - sweep_dur (窗口末 = 真实成像时刻);
+//       - GPU 雷达 (SensorType 8): 旋转扫描式, 一帧 = 一个旋转周期内多段渲染
+//         累积, 各点真实捕获时刻不同。使用插件逐段上报的真实渲染时刻
+//         (GPULidarData.segment_stamps) 生成真实逐点时间: 点方位角落在某段
+//         扫角区间内, 则该点 time = 段渲染时刻 - 帧首段渲染时刻, FAST-LIO
+//         据此做逐点运动畸变校正; 无段数据 (旧插件) 回退 CPU 雷达同款快照模型。
 //       未命中的 (0,0,0) 点被过滤, intensity/ring 以参数填充。
 // 发布: /airsim/lidar/points  (PointCloud2: x,y,z,intensity,ring,time; FLU; frame=lidar_link)
 //       /airsim/imu/data      (IMU, FRD->FLU 转换后, 200Hz)
@@ -73,7 +80,8 @@ public:
         // 4. 连接 AirSim (LiDAR/IMU 各一条独立 RPC 通道)
         const char* ip_env = std::getenv("PX4_SIM_HOST_ADDR");
         std::string airsim_ip = ip_env ? ip_env : "172.28.144.1";
-        RCLCPP_INFO(this->get_logger(), "正在建立 LiDAR/IMU 双通道直连 (IP: %s) ...", airsim_ip.c_str());
+        RCLCPP_INFO(this->get_logger(), "正在建立 LiDAR/IMU 双通道直连 (IP: %s) ... "
+            "[v2: GPU 雷达段级真实逐点时间]", airsim_ip.c_str());
         try {
             client_lidar_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(airsim_ip);
             client_lidar_->confirmConnection();
@@ -131,13 +139,20 @@ private:
     void grab_lidar() {
         try {
             // 读取点云: GPU 雷达 (SensorType 8, getGPULidarData) 或 CPU 雷达 (SensorType 6),
-            // 两者数据结构同构 (time_stamp + point_cloud), 点云均为传感器局部 NED 系
+            // 点云均为传感器局部 NED 系; GPU 雷达附带段级真实渲染时刻列表
             uint64_t sim_stamp = 0;
             std::vector<float> points;
+            // 段级真实渲染时刻: 起始扫角/扫角跨度 (度, 与激光角同坐标系) + 渲染瞬间
+            struct SegStamp { double start_deg, sweep_deg; uint64_t t_ns; };
+            std::vector<SegStamp> seg_stamps;
             if (use_gpu_lidar_) {
                 auto d = client_lidar_->getGPULidarData(lidar_name_, vehicle_name_);
                 sim_stamp = d.time_stamp;
                 points = std::move(d.point_cloud);
+                seg_stamps.reserve(d.segment_stamps.size());
+                for (const auto& s : d.segment_stamps) {
+                    seg_stamps.push_back({s.start_angle, s.sweep_angle, s.time_stamp});
+                }
             } else {
                 auto d = client_lidar_->getLidarData(lidar_name_, vehicle_name_);
                 sim_stamp = d.time_stamp;
@@ -160,8 +175,18 @@ private:
             // 用墙钟而雷达用仿真时钟, FAST-LIO 会按墙钟间隔积分仿真间隔内的运动, 系统性
             // 过积分 → 平移漂移. 两路统一 stamp = 偏移 + 仿真时间, 时间轴内部速率一致
             // (仿真卡顿时时间轴暂停, 不产生数据空洞), 墙钟帧率只影响延迟不影响正确性.
+            // GPU 雷达有段级时刻时: header = 最早段渲染时刻 (真实帧首), 各点 time =
+            // 所属段渲染时刻 - header (纯仿真轴差值, 经时间轴线性映射不变).
+            bool use_seg_times = !seg_stamps.empty() && sim_stamp > 0;
+            uint64_t t_header_ns = 0;
             double header_s;
-            if (sim_stamp > 0) {
+            if (use_seg_times) {
+                t_header_ns = UINT64_MAX;
+                for (const auto& s : seg_stamps) {
+                    t_header_ns = std::min(t_header_ns, s.t_ns);
+                }
+                header_s = calib_sim_to_ros(t_header_ns * 1e-9, wall_s);
+            } else if (sim_stamp > 0) {
                 const double sim_s = static_cast<double>(sim_stamp) * 1e-9;
                 header_s = calib_sim_to_ros(sim_s, wall_s) - sweep_dur;
             } else {
@@ -177,15 +202,38 @@ private:
                 return;
             }
 
-            // per-point time 语义: AirSim 整帧点云是 UE 单时刻瞬时快照 (同一机体位姿一次性
-            // 射线检测, 无扫描内运动畸变). 统一填 sweep_dur (而非 0~sweep_dur 递增):
+            // per-point time 回退语义 (无段级时刻时): AirSim 整帧点云按单时刻快照
+            // 处理, 统一填 sweep_dur (而非 0~sweep_dur 递增):
             //   - header.stamp = 成像时刻 - sweep_dur (扫描"起始"), FAST-LIO 窗口末点
             //     = header + max(time) = 成像时刻, 恰为快照真实位姿 → 零运动剪切;
             //   - 不能填 0: 会触发 FAST-LIO "按方位角反推时间"兜底, 重新注入伪畸变;
-            //   - 不能填递增值: 快照无畸变, 递增时间会反向注入最大 sweep_dur*速度 的剪切
-            //     (平移时里程计系统性漂移的根源).
+            //   - 不能填递增值: 伪逐点时间会反向注入最大 sweep_dur*速度 的剪切.
+            // 有段级时刻时: time = 真实捕获时刻 - header, FAST-LIO 按真实时刻做
+            // 逐点畸变校正 (GPU 帧本就是一个旋转周期的多次渲染累积, 非快照).
             const float kPointTime = static_cast<float>(
                 (rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1);
+            // 按点方位角 (度, [0,360)) 查所属捕获段的真实渲染时刻; 找不到
+            // (方位角与段边界舍入误差) 回退到扫角中心最近的段
+            auto segTimeForAzimuth = [&](double theta_deg) -> uint64_t {
+                uint64_t t_best = 0;
+                double dist_best = 1e9;
+                for (const auto& s : seg_stamps) {
+                    const double sweep = std::max(s.sweep_deg, 1e-3);
+                    // 扫描方向上相对段起始角的前向距离 (0..360)
+                    const double fwd = std::fmod(theta_deg - s.start_deg + 720.0, 360.0);
+                    if (fwd < sweep) {
+                        return s.t_ns;
+                    }
+                    // 兜底: 与段扫角中心的圆周距离
+                    const double center = std::fmod(s.start_deg + sweep / 2.0, 360.0);
+                    const double dist = std::fabs(std::fmod(theta_deg - center + 540.0, 360.0) - 180.0);
+                    if (dist < dist_best) {
+                        dist_best = dist;
+                        t_best = s.t_ns;
+                    }
+                }
+                return t_best;
+            };
 
             // velodyne 风格字段: x,y,z,intensity (float32), ring (uint16), time (float32)
             struct PointXYZIRT { float x, y, z, intensity; uint16_t ring; float time; };
@@ -202,6 +250,18 @@ private:
                     continue;
                 }
                 const uint16_t ring = static_cast<uint16_t>(i % num_channels_);
+                // 逐点时间: 有段级时刻按真实捕获时刻, 否则快照模型统一 sweep_dur
+                float time_s = kPointTime;
+                if (use_seg_times) {
+                    double theta = std::atan2(py, px);  // [-pi, pi], 与激光角同坐标系
+                    if (theta < 0.0) theta += 2.0 * M_PI;
+                    const uint64_t t_seg = segTimeForAzimuth(theta * 180.0 / M_PI);
+                    if (t_seg > 0) {
+                        time_s = static_cast<float>((t_seg - t_header_ns) * 1e-9);
+                        // 避免恰为 0 触发 FAST-LIO 的方位角反推时间特判
+                        if (time_s < 1e-3f) time_s = 1e-3f;
+                    }
+                }
                 PointXYZIRT p;
                 // 雷达局部 NED -> 雷达局部 FLU
                 p.x = px;
@@ -209,7 +269,7 @@ private:
                 p.z = -pz;
                 p.intensity = static_cast<float>(intensity_);
                 p.ring = ring;
-                p.time = kPointTime;
+                p.time = time_s;
                 pts.push_back(p);
                 ++hits;
             }
@@ -218,7 +278,7 @@ private:
             }
 
             sensor_msgs::msg::PointCloud2 msg;
-            msg.header.stamp = stamp;               // ≈ 扫描结束时刻
+            msg.header.stamp = stamp;               // 帧首段渲染时刻 (快照模型: 成像-周期)
             msg.header.frame_id = cloud_frame_;     // FLU 语义
             msg.height = 1;
             msg.width = static_cast<uint32_t>(pts.size());
