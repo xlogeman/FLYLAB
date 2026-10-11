@@ -5,8 +5,8 @@
 //       启动一个实例并按需配置; 多相机在同一次 RPC 请求中采集 (硬件同步),
 //       共用同一时间戳。
 // 参数:
-//   camera_names    相机名列表, 逗号分隔 (默认 "left,right", 需与 UE 端
-//                   settings.json 中的相机名一致)
+//   camera_names    相机名列表, 逗号分隔 (默认 "left_cam,front_cam,right_cam",
+//                   需与 UE 端 settings.json 中的相机名一致)
 //   image_type      AirSim ImageType 枚举值 (0=Scene 1=DepthPlanar
 //                   2=DepthPerspective 3=DepthVis ...), 对所有相机生效
 //   pixels_as_float -1=自动 (Scene 用 uint8, 深度类用 float32), 或显式 0/1
@@ -37,7 +37,7 @@ public:
         // 1. 参数
         vehicle_name_ = this->declare_parameter<std::string>("vehicle_name", "PX4");
         const std::string names_str =
-            this->declare_parameter<std::string>("camera_names", "left_cam,right_cam");
+            this->declare_parameter<std::string>("camera_names", "left_cam,front_cam,right_cam");
         const int image_type = this->declare_parameter<int>("image_type", 0);  // 0 = Scene
         const int pixels_as_float = this->declare_parameter<int>("pixels_as_float", -1);
         grayscale_ = this->declare_parameter<bool>("grayscale", false);

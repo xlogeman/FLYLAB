@@ -1,0 +1,107 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Image_left1
+        - /Image_right1
+      Splitter Ratio: 0.5
+    Tree Height: 549
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: ""
+Visualization Manager:
+  Class: ""
+  Displays:
+    # 相机画面 (Scene=bgr8 彩图; image_type 换成深度类时显示 32FC1 灰度)
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image_left
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /airsim/cam/left_cam/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image_front
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /airsim/cam/front_cam/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image_right
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /airsim/cam/right_cam/image_raw
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 25
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.7
+      Target Frame: <Fixed Frame>
+      Yaw: 3.5
+    Saved: ~
+Window Geometry:
+  QMainWindow State: 000000ff00000000fd00000003000000000000012c000003effc0200000001fb000000100044006900730070006c0061007900730100000000000003ef0000001300ffffff0000000100000514000003effc0200000003fb000000140049006d006100670065005f006c00650066007401000000000000014c0000001300fffffffb000000160049006d006100670065005f00660072006f006e007401000001520000014b0000001300fffffffb000000160049006d006100670065005f0072006900670068007401000002a30000014c0000001300ffffff00000003000007800000001efc0100000001fb0000000800540069006d00650100000000000007800000003a00ffffff00000134000003ef00000004000000040000000800000008fc00000000
+  Displays:
+    collapsed: false
+  Height: 1043
+  Image_left:
+    collapsed: false
+  Image_front:
+    collapsed: false
+  Image_right:
+    collapsed: false
+  Width: 1920
+  X: 0
+  Y: 27

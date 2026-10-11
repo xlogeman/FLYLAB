@@ -158,7 +158,25 @@
             }
           ],
           "X": 0.4,
-          "Y": -0.08,
+          "Y": -0.15,
+          "Z": 0.0,
+          "Pitch": -36.86989764584402,
+          "Roll": 0,
+          "Yaw": 0
+        },
+        "front_cam": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 400,
+              "Height": 300,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 100,
+              "AutoExposureBias": 0
+            }
+          ],
+          "X": 0.4,
+          "Y": 0.0,
           "Z": 0.0,
           "Pitch": -36.86989764584402,
           "Roll": 0,
@@ -176,7 +194,7 @@
             }
           ],
           "X": 0.4,
-          "Y": 0.08,
+          "Y": 0.15,
           "Z": 0.0,
           "Pitch": -36.86989764584402,
           "Roll": 0,

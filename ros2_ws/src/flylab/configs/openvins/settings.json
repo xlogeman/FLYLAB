@@ -14,7 +14,7 @@
             "LocalHostIp": "0.0.0.0",
             "ControlPortLocal": 14030,
             "ControlPortRemote": 14280,
-            "ControlIp": "remote",
+            "ControlIp": "172.26.53.153",
             "UseSerial": false,
             "SerialBaudRate": 2000000,
             "SerialPort": "COM8",
