@@ -46,14 +46,10 @@ def generate_launch_description():
             'gpu_lidar', default_value='true',
             description='UE 端是否使用 GPULidar (需 settings.json 中 Lidar1 SensorType=8)')
     # UE 端 Lidar1 配置 (必须与 settings.json 一致, 影响 ring 重建与时间模型):
-    #   num_channels = NumberOfChannels, measurements_per_cycle = MeasurementsPerCycle,
-    #   rotation_frequency = RotationsPerSecond
+    #   num_channels = NumberOfChannels, rotation_frequency = RotationsPerSecond
     declare_num_channels = DeclareLaunchArgument(
             'num_channels', default_value='64',
             description='UE 端 Lidar1 NumberOfChannels (settings.json)')
-    declare_meas_per_cycle = DeclareLaunchArgument(
-            'measurements_per_cycle', default_value='320',
-            description='UE 端 Lidar1 MeasurementsPerCycle (settings.json)')
     declare_rotation_hz = DeclareLaunchArgument(
             'rotation_frequency', default_value='10.0',
             description='UE 端 Lidar1 RotationsPerSecond (settings.json)')
@@ -64,20 +60,32 @@ def generate_launch_description():
             output='screen',
             parameters=[PathJoinSubstitution([config_path, config_file])])
 
-    # 启动 FAST-LIO 链路 AirSim 传感器节点: 3D LiDAR + IMU
-    #   - CPU 雷达: 单 tick 瞬时快照, 统一 per-point time = 旋转周期
-    #   - GPU 雷达: 旋转扫描多段渲染累积, 用插件上报的段级真实渲染时刻生成
-    #     真实逐点时间, FAST-LIO 据此做逐点运动畸变校正 (与 SUPER 链路同源修复)
+    # FAST-LIO 链路数据源 (可插拔): 传感器节点 + 输入适配桥接
+    #   - airsim_lidar: 原始点云 (传感器系 NED, 逐点时间模型; CPU 雷达快照模型 /
+    #     GPU 雷达段级真实渲染时刻), 参数须与 UE 端 settings.json 的 Lidar1 一致
+    #   - airsim_imu: FLU IMU 200Hz (与点云同一时间轴)
+    #   - bridge_fastlio: 点云 NED->FLU + 雷达挂载外参静态 TF, 输出
+    #     /airsim/lidar/points 供 fast_lio.yaml 消费
     # gpu_lidar:=true 需 UE 端 settings.json 中 Lidar1 SensorType=8
-    airsim_sensor_lidar = Node(
+    airsim_lidar = Node(
             package='flylab',
-            executable='airsim_sensor_lidar',
-            name='airsim_sensor_lidar',
+            executable='airsim_lidar',
+            name='airsim_lidar',
             output='screen',
             parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar'),
                          'num_channels': LaunchConfiguration('num_channels'),
-                         'measurements_per_cycle': LaunchConfiguration('measurements_per_cycle'),
                          'rotation_frequency': LaunchConfiguration('rotation_frequency')}])
+    airsim_imu = Node(
+            package='flylab',
+            executable='airsim_imu',
+            name='airsim_imu',
+            output='screen',
+            parameters=[{'period_ms': 5}])
+    bridge_fastlio = Node(
+            package='flylab',
+            executable='bridge_fastlio',
+            name='bridge_fastlio',
+            output='screen')
 
     ld = LaunchDescription()
 
@@ -87,9 +95,10 @@ def generate_launch_description():
     ld.add_action(declare_config_file)
     ld.add_action(declare_gpu_lidar)
     ld.add_action(declare_num_channels)
-    ld.add_action(declare_meas_per_cycle)
     ld.add_action(declare_rotation_hz)
-    ld.add_action(airsim_sensor_lidar)
+    ld.add_action(airsim_lidar)
+    ld.add_action(airsim_imu)
+    ld.add_action(bridge_fastlio)
     ld.add_action(run_fast_lio)
     ld.add_action(fast_lio_rviz_node)
     return ld

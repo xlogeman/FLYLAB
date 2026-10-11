@@ -23,12 +23,20 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 启动 AirSim 直连传感器节点 (flylab 自研, 发布 /airsim/* 系列话题)
-    airsim_ros_topic_node = launch_ros.actions.Node(
+    # AirSim 直连传感器节点 (可插拔): 双目灰度相机 + FLU IMU, 供 ORB-SLAM3 使用
+    airsim_camera = launch_ros.actions.Node(
         package='flylab',
-        executable='airsim_sensor_orb',
-        name='airsim_sensor_orb',
-        output='screen'
+        executable='airsim_camera',
+        name='airsim_camera_stereo',
+        output='screen',
+        parameters=[{'camera_names': 'left_cam,right_cam', 'grayscale': True}]
+    )
+    airsim_imu = launch_ros.actions.Node(
+        package='flylab',
+        executable='airsim_imu',
+        name='airsim_imu',
+        output='screen',
+        parameters=[{'period_ms': 5}]
     )
 
     # 启动 ORB SLAM3 双目+IMU
@@ -45,15 +53,16 @@ def generate_launch_description():
             'false'  # 不显示pangolin可视化窗口；AirSim 理想平行双目无需预校正 (do_rectify)
         ],
         remappings=[
-            ('/camera/left', '/airsim/left_cam/image_raw'),
-            ('/camera/right', '/airsim/right_cam/image_raw'),
-            ('/imu', '/airsim/imu_ros2/data')
+            ('/camera/left', '/airsim/cam/left_cam/image_raw'),
+            ('/camera/right', '/airsim/cam/right_cam/image_raw'),
+            ('/imu', '/airsim/imu/data')
         ]
     )
 
     # Create the launch description and populate
     ld = LaunchDescription()
-    ld.add_action(airsim_ros_topic_node)
+    ld.add_action(airsim_camera)
+    ld.add_action(airsim_imu)
     ld.add_action(orb_slam3_rviz_node)
     ld.add_action(orbslam3_node)
     return ld

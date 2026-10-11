@@ -14,8 +14,8 @@ def generate_launch_description():
     flight_type = LaunchConfiguration('flight_type', default=1)                               # 飞行模式：1为目标点飞行，2为预设航点巡航
 
     # ============================= 话题参数 =============================
-    odometry_topic = LaunchConfiguration('odometry_topic', default='/airsim/true_odom/data')  # 里程计，目前使用真值里程计，后续更换为ORB-SLAM3或者VINS等提供的里程计
-    depth_topic = LaunchConfiguration('depth_topic', default='/airsim/depth_cam/image_raw')   # 深度相机话题
+    odometry_topic = LaunchConfiguration('odometry_topic', default='/airsim/odom')            # 里程计，目前使用真值里程计，后续更换为ORB-SLAM3或者VINS等提供的里程计
+    depth_topic = LaunchConfiguration('depth_topic', default='/airsim/cam/depth_cam/image_raw')  # 深度相机话题
     camera_pose_topic = LaunchConfiguration('camera_pose_topic', default='/nouse/camera_pose')# 相机位置话题，这里不使用。通过tf获取相机位置
     cloud_topic = LaunchConfiguration('cloud_topic', default='/nouse/cloud')                  # 点云话题。我们使用深度相机，不使用点云
 
@@ -94,8 +94,8 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(DeclareLaunchArgument('drone_id', default_value='0', description='Drone ID'))
     ld.add_action(DeclareLaunchArgument('flight_type', default_value='1', description='1: manual goal, 2: waypoints'))
-    ld.add_action(DeclareLaunchArgument('odometry_topic', default_value='/airsim/true_odom/data'))
-    ld.add_action(DeclareLaunchArgument('depth_topic', default_value='/airsim/depth_cam/image_raw'))
+    ld.add_action(DeclareLaunchArgument('odometry_topic', default_value='/airsim/odom'))
+    ld.add_action(DeclareLaunchArgument('depth_topic', default_value='/airsim/cam/depth_cam/image_raw'))
     ld.add_action(DeclareLaunchArgument('camera_pose_topic', default_value='/nouse/camera_pose'))
     ld.add_action(DeclareLaunchArgument('cloud_topic', default_value='/nouse/cloud'))
     ld.add_action(ego_planner_node)

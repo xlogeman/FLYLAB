@@ -10,7 +10,8 @@ from launch_ros.actions import Node
 #   ros2 launch flylab fly_super.launch.py                     # 默认 uXRCE-DDS 链路
 #   ros2 launch flylab fly_super.launch.py tracker:=mavros     # MAVROS 链路
 # 等价于同时启动以下组件:
-#   1. airsim_sensor_super       AirSim 直连传感器节点 (LiDAR -> world 系点云 + 真值里程计)
+#   1. airsim_lidar + airsim_odom + bridge_super
+#                        AirSim 直连传感器节点 (原始点云/真值里程计) + SUPER 输入适配桥接
 #   2. fsm_node                  SUPER 规划器 (hku-mars), 目标点来自 tracker 转发的 /goal_pose_3d
 #   3. super_cmd_bridge          SUPER 输出桥接: mars PositionCommand -> 标准 PositionCommand
 #   4. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
@@ -61,14 +62,31 @@ def generate_launch_description():
             condition=IfCondition(start_xrce),
         ),
 
-        # 1. AirSim 直连传感器节点: LiDAR -> world 系点云 + 真值里程计
+        # 1. AirSim 直连传感器节点 (可插拔) + SUPER 输入适配桥接:
+        #    airsim_lidar  原始点云 (传感器系 NED, 逐点时间模型)
+        #    airsim_odom   真值里程计 100Hz (与点云同一时间轴)
+        #    bridge_super  点云 NED->world ENU (位姿时间对齐 + 去畸变 + 机身过滤)
+        #                  并把 /airsim/odom 转发为 SUPER 的 /lidar_slam/odom
         #    gpu_lidar:=true (默认) 走 GPULidar (SensorType 8, 与 fast_lio 链路共用同一 UE 配置)
         Node(
             package='flylab',
-            executable='airsim_sensor_super',
-            name='airsim_sensor_super_node',
+            executable='airsim_lidar',
+            name='airsim_lidar',
             output='screen',
             parameters=[{'use_gpu_lidar': LaunchConfiguration('gpu_lidar')}],
+        ),
+        Node(
+            package='flylab',
+            executable='airsim_odom',
+            name='airsim_odom',
+            output='screen',
+            parameters=[{'odom_period_ms': 10}],
+        ),
+        Node(
+            package='flylab',
+            executable='bridge_super',
+            name='bridge_super',
+            output='screen',
         ),
 
         # 2. SUPER 规划器 (配置真源: flylab/configs/super_planner/flylab_super.yaml,

@@ -39,11 +39,26 @@ def generate_launch_description():
             output='screen',
             parameters=[{'config_path': config_path}])
 
-    # 启动 VIO 链路 AirSim 传感器节点: 双目相机+IMU, 供 MSCKF 使用
-    airsim_sensor_vio = Node(
+    # VIO 链路数据源 (可插拔): 传感器节点 + 门控桥接
+    #   - airsim_camera: 双目灰度图 (grayscale=true, 单次 RPC 硬件同步)
+    #   - airsim_imu: FRD 原生 IMU (/airsim/imu/data_raw, 与 kalibr 配置对齐)
+    #   - bridge_vio: 断桨门控 (降落停发/解锁恢复), 输出 /vio/* 供 OpenVINS 订阅
+    airsim_camera = Node(
             package='flylab',
-            executable='airsim_sensor_vio',
-            name='airsim_sensor_vio',
+            executable='airsim_camera',
+            name='airsim_camera_stereo',
+            output='screen',
+            parameters=[{'camera_names': 'left_cam,right_cam', 'grayscale': True}])
+    airsim_imu = Node(
+            package='flylab',
+            executable='airsim_imu',
+            name='airsim_imu',
+            output='screen',
+            parameters=[{'period_ms': 5}])
+    bridge_vio = Node(
+            package='flylab',
+            executable='bridge_vio',
+            name='bridge_vio',
             output='screen')
 
     # Create the launch description and populate
@@ -51,7 +66,9 @@ def generate_launch_description():
 
     # Create the launch description and populate
     ld.add_action(declare_config_path)
-    ld.add_action(airsim_sensor_vio)
+    ld.add_action(airsim_camera)
+    ld.add_action(airsim_imu)
+    ld.add_action(bridge_vio)
     ld.add_action(run_subscribe_msckf)
     ld.add_action(openvins_msckf_rviz_node)
     return ld

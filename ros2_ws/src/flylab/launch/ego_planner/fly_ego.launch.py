@@ -11,7 +11,8 @@ from launch_ros.actions import Node
 #   ros2 launch flylab fly_ego.launch.py                     # 默认 uXRCE-DDS 链路
 #   ros2 launch flylab fly_ego.launch.py tracker:=mavros     # MAVROS 链路
 # 等价于同时启动以下组件:
-#   1. airsim_sensor_ego         AirSim 直连传感器节点 (深度图/IMU/里程计/GPS/气压计/磁力计 + TF)
+#   1. airsim_camera/airsim_imu/airsim_odom/airsim_nav
+#                               AirSim 直连传感器节点 (可插拔: 深度图/IMU/里程计/GPS/气压计/磁力计)
 #   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
 #   3. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
 #      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
@@ -61,12 +62,35 @@ def generate_launch_description():
             condition=IfCondition(start_xrce),
         ),
 
-        # 1. AirSim 直连传感器节点
+        # 1. AirSim 直连传感器节点 (可插拔, 按需启动):
+        #    深度相机 (image_type=1 DepthPlanar) / IMU / 真值里程计(含TF) / 低频导航
         Node(
             package='flylab',
-            executable='airsim_sensor_ego',
-            name='airsim_sensor_ego_node',
+            executable='airsim_camera',
+            name='airsim_camera_depth',
             output='screen',
+            parameters=[{'camera_names': 'depth_cam', 'image_type': 1}],
+        ),
+        Node(
+            package='flylab',
+            executable='airsim_imu',
+            name='airsim_imu',
+            output='screen',
+            parameters=[{'period_ms': 5}],
+        ),
+        Node(
+            package='flylab',
+            executable='airsim_odom',
+            name='airsim_odom',
+            output='screen',
+            parameters=[{'odom_period_ms': 10}],
+        ),
+        Node(
+            package='flylab',
+            executable='airsim_nav',
+            name='airsim_nav',
+            output='screen',
+            parameters=[{'period_ms': 20}],
         ),
 
         # 2. EGO-Planner 规划器 + 轨迹服务器 (参数见 configs/ego_planner/ego_planner.yaml)

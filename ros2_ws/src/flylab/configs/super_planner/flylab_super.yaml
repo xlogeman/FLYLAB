@@ -2,8 +2,8 @@
 #
 # 真源位于 flylab/configs/super_planner/ (编译后安装到 flylab/share),
 # 由 fly_super.launch.py 以绝对路径传给 fsm_node 的 config_name 参数。
-#   点云: /cloud_registered  (world 系 ENU, 由 flylab/airsim_sensor_super 发布)
-#   里程计: /lidar_slam/odom (world 系 ENU, 同上)
+#   点云: /cloud_registered  (world 系 ENU, 由 flylab/bridge_super 发布)
+#   里程计: /lidar_slam/odom (world 系 ENU, 由 bridge_super 转发 flylab/airsim_odom)
 #   目标点: /goal_pose_3d    (tracker 拦截 RViz /goal_pose 后转发, 与 EGO 链路一致)
 #   输出: /super/pos_cmd     (mars PositionCommand, 由 flylab/super_cmd_bridge
 #                             转成标准消息发到 /planning/pos_cmd 给 tracker)

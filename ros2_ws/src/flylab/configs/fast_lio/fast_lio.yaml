@@ -11,13 +11,13 @@
         map_file_path: "./fastlio_map.pcd"
 
         common:
-            lid_topic:  "/airsim/lidar/points"   # airsim_sensor_lidar 发布
-            imu_topic:  "/airsim/imu/data"       # airsim_sensor_lidar 发布 (FLU, 200Hz)
+            lid_topic:  "/airsim/lidar/points"   # bridge_fastlio 发布 (airsim_lidar 原始 NED 点云 -> FLU)
+            imu_topic:  "/airsim/imu/data"       # airsim_imu 发布 (FLU, 200Hz)
             time_sync_en: false                  # LiDAR/IMU 同源仿真时钟, 无需软件同步
             time_offset_lidar_to_imu: 0.0
 
         preprocess:
-            lidar_type: 2                # 2 = Velodyne (标准 PointCloud2 路径), airsim_sensor_lidar 输出 velodyne 风格字段
+            lidar_type: 2                # 2 = Velodyne (标准 PointCloud2 路径), airsim_lidar 输出 velodyne 风格字段
             scan_line: 64                # settings.json 中 NumberOfChannels = 64 (Mid-360 仿真垂直采样数)
             scan_rate: 10                # RotationsPerSecond / UpdateFrequency = 10Hz
             timestamp_unit: 0            # time 字段单位: 0-秒 (统一 sweep_dur 值, 单时刻瞬时快照)

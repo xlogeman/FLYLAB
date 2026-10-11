@@ -21,7 +21,6 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
-| 仿真飞行 | `ros2 launch flylab sim_fly.launch.py` | `configs/fly.json` | 基础场景：手动 offboard 速度控制 |
 | 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图 |
 | EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|px4` 选择跟踪链路 |
 | OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
@@ -30,20 +29,25 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（GPULidar，参数对齐 Livox Mid-360） |
 | SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划（ROG-Map 占据地图）→ 桥接 → PX4 跟踪；与 EGO 共用 tracker 链路，`tracker:=mavros\|px4` 选择跟踪链路 |
 
-### C++ 节点（flylab/src，sensors = AirSim 传感器链路，control = 飞行控制）
+### C++ 节点（airsim 传感器可插拔架构 + control = 飞行控制）
 
-| 节点 | 功能 |
-|---|---|
-| `airsim_sensor_ego` | EGO 链路传感器：深度图 + IMU + 真值里程计 + GPS/气压计/磁力计 + TF |
-| `airsim_sensor_vio` | VIO 链路传感器：双目相机 + IMU；断桨自动停发、解锁自动恢复 |
-| `airsim_sensor_lidar` | FAST-LIO 链路传感器：GPULidar（单时刻瞬时快照，统一时间戳/去重）+ IMU，NED→FLU；`use_gpu_lidar:=false` 切回 CPU 雷达 |
-| `airsim_sensor_super` | SUPER 链路传感器：3D LiDAR（真值位姿变换到 world 系 ENU）+ 真值里程计 100Hz；支持 GPU/CPU 雷达 |
-| `super_cmd_bridge` | SUPER 输出桥接：mars PositionCommand → 标准 PositionCommand（对接 tracker） |
-| `tracker_px4` | 轨迹跟踪 + PX4 混控（uXRCE-DDS 链路），链路状态彩色提示，断链自动检测 |
-| `tracker_mavros` | 轨迹跟踪 + PX4 混控（MAVROS 链路），与 tracker_px4 共用控制逻辑 |
-| `move_velocity` | 通用 offboard 速度控制器（Twist 输入） |
-| `octomap_dynamic` | 建图链路 octomap 动态清理 |
-| `vins_arming_switch` | VINS-Fusion 起飞联动开关 |
+传感器层 (`src/sensors/`) 与算法完全解耦：每种传感器一份代码，哪个算法需要什么数据就由其 launch 启动对应实例；算法特化的适配（坐标系/门控/时间对齐）下沉到桥接层 (`src/bridges/`)，纯 ROS 实现、不依赖 AirSim。
+
+| 传感器节点 | 发布话题 | 说明 |
+|---|---|---|
+| `airsim_camera` | `/airsim/cam/<名>/image_raw` | 通用相机（深度/双目/单目参数化），多相机同次 RPC 硬件同步；`grayscale:=true` 输出 mono8；`image_type` 选 AirSim 图像类型 |
+| `airsim_imu` | `/airsim/imu/data_raw`（FRD 原生）<br>`/airsim/imu/data`（FLU 标准） | 200Hz；时间戳统一映射仿真时钟；重复采样去重；`inject_bias` 可选偏置注入 |
+| `airsim_odom` | `/airsim/odom`（world 系 ENU）+ TF | 真值里程计 100Hz；时间戳与 LiDAR/IMU 同一时间轴（点云位姿插值的前提） |
+| `airsim_nav` | `/airsim/gps` `/airsim/baro` `/airsim/mag` | 低频导航传感器 50Hz |
+| `airsim_lidar` | `/airsim/lidar/points_raw` | 原始点云（传感器系 NED）+ 逐点时间模型（CPU 快照 / GPU 段级真实渲染时刻），坐标变换交给桥接 |
+
+| 桥接节点 | 输入 → 输出 | 说明 |
+|---|---|---|
+| `bridge_vio` | 相机+原始 IMU → `/vio/*` | OpenVINS 断桨门控：降落停发、解锁恢复；数据原样转发 |
+| `bridge_fastlio` | `points_raw` → `/airsim/lidar/points` | NED→FLU + 雷达挂载外参静态 TF（FAST-LIO 链路） |
+| `bridge_super` | `points_raw`+odom → `/cloud_registered` `/lidar_slam/odom` | 点云→world 系 ENU：位姿按点云时刻插值对齐 + 逐点去畸变 + 机身回波过滤（SUPER 链路） |
+
+其他节点：`tracker_px4`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|px4` 选择链路）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）。
 
 ### 环境依赖
 
@@ -117,4 +121,5 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 - **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
 - **链路状态颜色**：黄色日志 = 飞控数据未收到/断链，绿色 = 链路正常/到达目标点
 - **airsim_ros_pkgs 为官方原版**：话题为官方命名（如 `PX4/left_cam_Scene/image`、`PX4/odom_local`），数据为 ENU/FLU 语义，世界坐标系 `world`。
-- 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/`（`sensors/`、`control/`）下各 `.cpp` 文件头注释
+- 各节点详细话题/参数说明见 `ros2_ws/src/flylab/src/`（`sensors/`、`bridges/`、`control/`）下各 `.cpp` 文件头注释
+- **传感器时间轴约定**：`airsim_imu`/`airsim_lidar`/`airsim_odom` 的时间戳统一经 `SimClockSync` 映射（ros = offset + 仿真时间，见 `src/sensors/airsim_common.hpp`），三路数据落同一时间轴；跨节点混用（如 bridge_super 对点云插值 odom 位姿、FAST-LIO 融合雷达+IMU）都依赖这一约定，自定义新传感器节点请保持
