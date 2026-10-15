@@ -1,0 +1,44 @@
+{
+  "_description": "X450 轻载构型: 轴距450mm, 2212 920KV电机+10寸桨(3S), 起飞重量2.0kg, 推重比约1.5。经典 F450 轻量科研构型, 悬停油门偏高(0.67), 机动余量小, 适合验证跟踪/规划在低推重比下的表现。使用方法: 把 PhysicsParams 段复制进 settings.json 的 Vehicles.PX4 下替换现有 PhysicsParams, 重启 UE 生效; PX4 侧按 _px4_params 新建机型文件(可复制 70003_fucker_x450 改)或临时 param set。",
+  "_airframe": "70004_fucker_2000g_tw15 (SYS_AUTOSTART=70004, 启动: bash scripts/run-px4.sh none_fucker_2000g_tw15 --clean)",
+  "_formulas": {
+    "单桨最大推力N": "CT * 1.225 * (MaxRPM/60)^2 * PropDiameter^4 = 0.116*1.225*111.67^2*0.254^4 ≈ 7.37",
+    "推重比": "RotorCount * 单桨最大推力 / (Mass * 9.81) = 4*7.37/(2.0*9.81) ≈ 1.50",
+    "悬停油门": "Mass*9.81/4/单桨最大推力 = 1/推重比 ≈ 0.67 (Cosys-AirSim 推力与油门线性: RotorActuator.hpp thrust = control_signal * max_thrust)",
+    "反扭矩系数KM": "CP/CT * PropDiameter/(2*pi) = 0.048/0.116*0.254/(2*pi) ≈ 0.017",
+    "电机坐标PX_PY": "ArmLengths/sqrt(2) = 0.225/sqrt(2) ≈ 0.1591",
+    "最大上升加速度": "(RotorCount*单桨最大推力 - Mass*9.81)/Mass ≈ 4.9 m/s²"
+  },
+  "_px4_params": {
+    "CA_AIRFRAME": 0,
+    "CA_ROTOR_COUNT": 4,
+    "CA_ROTOR0_PX": 0.1591,
+    "CA_ROTOR0_PY": 0.1591,
+    "CA_ROTOR0_KM": 0.017,
+    "MPC_THR_HOVER": 0.67,
+    "MPC_TILTMAX_AIR": 30.0,
+    "MPC_XY_VEL_MAX": 8.0,
+    "MPC_Z_VEL_MAX_UP": 3.0,
+    "MPC_Z_VEL_MAX_DN": 2.0,
+    "MPC_ACC_HOR_MAX": 5.0,
+    "MPC_ACC_UP_MAX": 4.0,
+    "MPC_ACC_DOWN_MAX": 3.0,
+    "MPC_THR_MIN": 0.10,
+    "MPC_THR_MAX": 0.95
+  },
+  "PhysicsParams": {
+    "Mass": 2.000,
+    "MotorAssemblyWeight": 0.065,
+    "RotorCount": 4,
+    "ArmLengths": 0.225,
+    "RotorZ": 0.020,
+    "BodyBoxX": 0.180,
+    "BodyBoxY": 0.180,
+    "BodyBoxZ": 0.080,
+    "CT": 0.116,
+    "CP": 0.048,
+    "MaxRPM": 6700,
+    "PropDiameter": 0.254,
+    "DragCoefficient": 0.325
+  }
+}

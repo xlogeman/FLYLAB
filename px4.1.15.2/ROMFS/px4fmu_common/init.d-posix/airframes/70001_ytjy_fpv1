@@ -13,15 +13,19 @@
 # ==================================================================================================================
 param set-default CA_AIRFRAME 0                 # 设置机架类型为通用四轴; 范围[0-20]
 param set-default CA_ROTOR_COUNT 4              # 设置电机数量为4; 范围[2-12]
+
 param set-default CA_ROTOR0_PX 0.1515           # 电机0(前右)X坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR0_PY 0.245            # 电机0(前右)Y坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR0_KM 0.05             # 电机0力矩系数(CCW转向); 范围[-0.1, 0.1]
+
 param set-default CA_ROTOR1_PX -0.1515          # 电机1(后左)X坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR1_PY -0.1875          # 电机1(后左)Y坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR1_KM 0.05             # 电机1力矩系数(CCW转向); 范围[-0.1, 0.1]
+
 param set-default CA_ROTOR2_PX 0.1515           # 电机2(前左)X坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR2_PY -0.245           # 电机2(前左)Y坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR2_KM -0.05            # 电机2力矩系数(CW转向); 范围[-0.1, 0.1]
+
 param set-default CA_ROTOR3_PX -0.1515          # 电机3(后右)X坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR3_PY 0.1875           # 电机3(后右)Y坐标(米); 范围[-1, 1]
 param set-default CA_ROTOR3_KM -0.05            # 电机3力矩系数(CW转向); 范围[-0.1, 0.1]

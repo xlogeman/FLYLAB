@@ -1,0 +1,111 @@
+#!/bin/sh
+#
+# @name Fucker 2.0kg TW1.5 (轴距450mm, 起飞重量2.0kg, 2212 920KV+10寸桨 3S, 推重比约1.5)
+#
+# @type Quadrotor Wide
+#
+
+. ${R}etc/init.d/rc.mc_defaults
+
+
+# ==================================================================================================================
+# 0. AirSim 机体和电机的几何描述 (与 configs/vehicles/fucker_2.0kg_tw1.5.json 的 PhysicsParams 一一对应)
+#    轴距 450mm => 机臂长 0.225m; X 型布局电机坐标 = 0.225/sqrt(2) = 0.1591m
+#    KM = CP/CT * D/(2π) = 0.048/0.116 * 0.254/(2π) ≈ 0.017 (反扭矩系数)
+# ==================================================================================================================
+param set-default CA_AIRFRAME 0                 # 通用四轴 X 布局; 范围[0-20]
+param set-default CA_ROTOR_COUNT 4              # 电机数量 4
+
+param set-default CA_ROTOR0_PX 0.1591           # 电机0(前右)X坐标(米)
+param set-default CA_ROTOR0_PY 0.1591           # 电机0(前右)Y坐标(米)
+param set-default CA_ROTOR0_KM 0.017            # 电机0反扭矩系数(CCW转向)
+
+param set-default CA_ROTOR1_PX -0.1591          # 电机1(后左)X坐标(米)
+param set-default CA_ROTOR1_PY -0.1591          # 电机1(后左)Y坐标(米)
+param set-default CA_ROTOR1_KM 0.017            # 电机1反扭矩系数(CCW转向)
+
+param set-default CA_ROTOR2_PX 0.1591           # 电机2(前左)X坐标(米)
+param set-default CA_ROTOR2_PY -0.1591          # 电机2(前左)Y坐标(米)
+param set-default CA_ROTOR2_KM -0.017           # 电机2反扭矩系数(CW转向)
+
+param set-default CA_ROTOR3_PX -0.1591          # 电机3(后右)X坐标(米)
+param set-default CA_ROTOR3_PY 0.1591           # 电机3(后右)Y坐标(米)
+param set-default CA_ROTOR3_KM -0.017           # 电机3反扭矩系数(CW转向)
+
+param set-default PWM_MAIN_FUNC1 101            # 映射输出通道1为电机1功能; 101=Motor 1
+param set-default PWM_MAIN_FUNC2 102            # 映射输出通道2为电机2功能; 102=Motor 2
+param set-default PWM_MAIN_FUNC3 103            # 映射输出通道3为电机3功能; 103=Motor 3
+param set-default PWM_MAIN_FUNC4 104            # 映射输出通道4为电机4功能; 104=Motor 4
+
+
+# ==================================
+# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 油门【线性】, 源码 RotorActuator.hpp:
+#    thrust = control_signal * max_thrust, 与 PhysicsParams 联动:
+#    单桨最大推力 = CT×1.225×(MaxRPM/60)²×D⁴ ≈ 7.37N
+#    悬停油门 = 2.0×9.81/4 / 7.37 ≈ 0.67, 即 1/推重比)
+# ==================================
+param set MPC_USE_HTE 0
+param set MPC_THR_HOVER 0.67
+param set MPC_THR_MIN 0.10
+param set MPC_THR_MAX 0.95
+
+# 最大倾斜角 (推重比 1.5, 30° 时水平可用加速度 ≈ 5.7 m/s²)
+param set MPC_TILTMAX_AIR 30.0
+
+
+# ==================================
+# 2. 速度与加速度限制 (按推重比 1.5 折算, 余量小需保守)
+# ==================================
+param set MPC_XY_VEL_MAX 8.0
+param set MPC_Z_VEL_MAX_UP 3.0
+param set MPC_Z_VEL_MAX_DN 2.0
+param set MPC_ACC_HOR_MAX 5.0
+param set MPC_ACC_UP_MAX 4.0
+param set MPC_ACC_DOWN_MAX 3.0
+
+
+# ==================================
+# 3. 位置控制器
+# ==================================
+param set MPC_XY_P 0.95
+param set MPC_Z_P 1.0
+param set MPC_XY_ERR_MAX 2.0
+param set MPC_XY_TRAJ_P 0.5
+
+
+# ==================================
+# 4. 速度控制器
+# ==================================
+param set MPC_XY_VEL_P_ACC 1.8
+param set MPC_XY_VEL_I_ACC 0.4
+param set MPC_XY_VEL_D_ACC 0.2
+param set MPC_Z_VEL_P_ACC 1.0
+param set MPC_Z_VEL_I_ACC 2.0
+param set MPC_Z_VEL_D_ACC 0.0
+
+
+# ==================================
+# 5. 姿态与角速度控制器 (轻载小电机, 限速率 + 中等增益)
+# ==================================
+param set MC_ROLL_P 10.0
+param set MC_PITCH_P 10.0
+param set MC_YAW_P 4.0
+param set MC_ROLLRATE_MAX 400.0
+param set MC_PITCHRATE_MAX 400.0
+param set MC_YAWRATE_MAX 180.0
+
+param set MC_ROLLRATE_FF 0.1
+param set MC_ROLLRATE_K 1.0
+param set MC_ROLLRATE_P 0.12
+param set MC_ROLLRATE_I 0.20
+param set MC_ROLLRATE_D 0.0015
+param set MC_PITCHRATE_FF 0.1
+param set MC_PITCHRATE_K 1.0
+param set MC_PITCHRATE_P 0.12
+param set MC_PITCHRATE_I 0.20
+param set MC_PITCHRATE_D 0.0015
+param set MC_YAWRATE_FF 0.0
+param set MC_YAWRATE_K 1.0
+param set MC_YAWRATE_P 0.25
+param set MC_YAWRATE_I 0.25
+param set MC_YAWRATE_D 0.00

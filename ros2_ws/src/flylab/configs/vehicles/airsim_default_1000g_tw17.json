@@ -1,0 +1,36 @@
+{
+  "_description": "Cosys-AirSim 出厂默认载具 (QuadX/F450 构型): GWS 9x5 桨 (UIUC 风洞数据) + MT2212 电机, Mass 1.0kg。即 settings.json 中【不写 PhysicsParams 段】(或整段删除) 时的生效参数, 也与 settings.json 最初未改时的值一致。对应 PX4 侧用官方 10016_none_iris 机型即可。",
+  "_airframe": "10016_none_iris (SYS_AUTOSTART=10016, 启动: bash scripts/run-px4.sh --clean)",
+  "_source": "Cosys-AirSim/AirLib/include/vehicles/multirotor/MultiRotorParams.hpp (setupFrameGenericQuad) + RotorParams.hpp (GWS 9x5 默认桨)",
+  "_formulas": {
+    "单桨最大推力N": "CT * 1.225 * (MaxRPM/60)^2 * PropDiameter^4 = 0.109919*1.225*106.61^2*0.2286^4 ≈ 4.18 (源码 max_thrust=4.179)",
+    "推重比": "4 * 4.18 / (1.0 * 9.81) ≈ 1.70",
+    "悬停油门": "1/推重比 ≈ 0.59 (Cosys-AirSim 推力与油门线性: RotorActuator.hpp thrust = control_signal * max_thrust)",
+    "反扭矩系数KM": "CP/CT * PropDiameter/(2*pi) = 0.040164/0.109919*0.2286/(2*pi) ≈ 0.0133",
+    "电机坐标PX_PY": "ArmLengths/sqrt(2) = 0.2275/sqrt(2) ≈ 0.1609"
+  },
+  "_px4_params": {
+    "CA_AIRFRAME": 0,
+    "CA_ROTOR_COUNT": 4,
+    "CA_ROTOR0_PX": 0.1609,
+    "CA_ROTOR0_PY": 0.1609,
+    "CA_ROTOR0_KM": 0.0133,
+    "MPC_THR_HOVER": 0.59,
+    "MPC_TILTMAX_AIR": 35.0
+  },
+  "PhysicsParams": {
+    "Mass": 1.0,
+    "MotorAssemblyWeight": 0.055,
+    "RotorCount": 4,
+    "ArmLengths": 0.2275,
+    "RotorZ": 0.025,
+    "BodyBoxX": 0.180,
+    "BodyBoxY": 0.110,
+    "BodyBoxZ": 0.040,
+    "CT": 0.109919,
+    "CP": 0.040164,
+    "MaxRPM": 6396.667,
+    "PropDiameter": 0.2286,
+    "DragCoefficient": 0.325
+  }
+}

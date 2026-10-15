@@ -1,20 +1,32 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 一键启动 PX4 SITL (机型: 10016_none_iris)
+# 一键启动 PX4 SITL
 # 用法:
-#   ./run-px4.sh            正常启动
-#   ./run-px4.sh --clean    先删参数缓存再启动
+#   ./run-px4.sh                        正常启动 (默认机型 none_iris)
+#   ./run-px4.sh none_ytjy_x450         指定机型启动
+#   ./run-px4.sh --clean                先删参数缓存再启动
+#   ./run-px4.sh none_ytjy_x450 --clean 指定机型 + 清参数缓存
 # 说明: make 已编译过时是秒级直接启动; 需要先开 Windows 端 UE/AirSim
 # ============================================================================
 set -e
 
 PX4_DIR="/root/flylab/px4.1.15.2"
 
+# 解析参数: 机型名 或 --clean (可任意顺序)
+MODEL="none_iris"
+CLEAN=""
+for arg in "$@"; do
+    case "$arg" in
+        --clean) CLEAN="--clean" ;;
+        *) MODEL="$arg" ;;
+    esac
+done
+
 # ROS2 环境 (lesson1.sh 同款, 对 PX4 本身无害)
 [ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash
 
 # --clean: 删 PX4 参数缓存 (parameters*.bson), 否则上次改的机型参数/状态会残留
-if [ "$1" = "--clean" ]; then
+if [ "$CLEAN" = "--clean" ]; then
     echo "[run-px4] 清理 PX4 参数缓存..."
     rm -f "$PX4_DIR/parameters.bson" "$PX4_DIR/parameters_backup.bson"
 fi
@@ -34,4 +46,4 @@ export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
 echo "[run-px4] PX4_SIM_HOST_ADDR=$PX4_SIM_HOST_ADDR"
 
 cd "$PX4_DIR"
-make px4_sitl_default none_iris
+make px4_sitl_default "$MODEL"

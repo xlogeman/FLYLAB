@@ -1,0 +1,39 @@
+{
+  "_description": "X450 重载构型: 轴距450mm, 28系电机+12寸桨(4S), 起飞重量3.12kg, 推重比约2.3。对应 PX4 机型 70003_fucker_3120g_tw23 (SYS_AUTOSTART=70003), 即当前 settings.json 中生效的配置。",
+  "_airframe": "70003_fucker_3120g_tw23 (SYS_AUTOSTART=70003, 启动: bash scripts/run-px4.sh none_fucker_3120g_tw23 --clean)",
+  "_formulas": {
+    "单桨最大推力N": "CT * 1.225 * (MaxRPM/60)^2 * PropDiameter^4 = 0.130*1.225*113.33^2*0.3048^4 ≈ 17.6",
+    "推重比": "RotorCount * 单桨最大推力 / (Mass * 9.81) = 4*17.6/(3.12*9.81) ≈ 2.31",
+    "悬停油门": "Mass*9.81/4/单桨最大推力 = 1/推重比 ≈ 0.43 (Cosys-AirSim 推力与油门线性: RotorActuator.hpp thrust = control_signal * max_thrust)",
+    "反扭矩系数KM": "CP/CT * PropDiameter/(2*pi) ≈ 0.02",
+    "电机坐标PX_PY": "ArmLengths/sqrt(2) = 0.225/sqrt(2) ≈ 0.1591"
+  },
+  "_px4_params": {
+    "CA_AIRFRAME": 0,
+    "CA_ROTOR_COUNT": 4,
+    "CA_ROTOR0_PX": 0.1591,
+    "CA_ROTOR0_PY": 0.1591,
+    "CA_ROTOR0_KM": 0.02,
+    "MPC_THR_HOVER": 0.43,
+    "MPC_TILTMAX_AIR": 35.0,
+    "MPC_XY_VEL_MAX": 12.0,
+    "MPC_ACC_HOR_MAX": 7.0,
+    "MPC_ACC_UP_MAX": 8.0,
+    "MPC_ACC_DOWN_MAX": 6.0
+  },
+  "PhysicsParams": {
+    "Mass": 3.120,
+    "MotorAssemblyWeight": 0.090,
+    "RotorCount": 4,
+    "ArmLengths": 0.225,
+    "RotorZ": 0.030,
+    "BodyBoxX": 0.200,
+    "BodyBoxY": 0.200,
+    "BodyBoxZ": 0.100,
+    "CT": 0.130,
+    "CP": 0.055,
+    "MaxRPM": 6800,
+    "PropDiameter": 0.3048,
+    "DragCoefficient": 0.4
+  }
+}

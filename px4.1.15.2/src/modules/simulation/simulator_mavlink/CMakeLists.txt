@@ -71,3 +71,26 @@ add_custom_target(none_iris
 		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/10016_none_iris
 	COMMENT "launching px4 none_iris (SYS_AUTOSTART=10016)"
 )
+
+# 自定义机型: make px4_sitl_default none_fucker_3120g_tw23
+# 注意: 机型文件名不能含点号, rcS 会把带点的文件当 .post 附件忽略
+add_custom_target(none_fucker_3120g_tw23
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70003 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70003_fucker_3120g_tw23
+	COMMENT "launching px4 none_fucker_3120g_tw23 (SYS_AUTOSTART=70003)"
+)
+
+# 自定义机型: make px4_sitl_default none_fucker_2000g_tw15
+add_custom_target(none_fucker_2000g_tw15
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70004 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70004_fucker_2000g_tw15
+	COMMENT "launching px4 none_fucker_2000g_tw15 (SYS_AUTOSTART=70004)"
+)

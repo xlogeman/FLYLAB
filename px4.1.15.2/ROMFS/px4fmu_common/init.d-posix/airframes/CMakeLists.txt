@@ -102,6 +102,10 @@ px4_add_romfs_files(
 
 	17001_flightgear_tf-g1
 	17002_flightgear_tf-g2
-	
+
 	# [22000, 22999] Reserve for custom models
+
+	# 自定义机型 (注册后才会拷入 build/etc, 运行时才能被 SYS_AUTOSTART 找到)
+	70003_fucker_3120g_tw23
+	70004_fucker_2000g_tw15
 )
