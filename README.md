@@ -1,6 +1,6 @@
 # FLYLAB —— PX4 + AirSim SITL 无人机仿真实验平台
 
-WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做无人机自主飞行研究：感知建图、视觉惯导、避障规划与 offboard 控制全链路打通。
+WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做无人机自主飞行研究：感知建图、视觉惯导、避障规划与 offboard 控制
 
 ## 工作区总体
 
@@ -44,10 +44,10 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | 桥接节点 | 输入 → 输出 | 说明 |
 |---|---|---|
 | `bridge_vio` | 相机+原始 IMU → `/vio/*` | OpenVINS 断桨门控：降落停发、解锁恢复；数据原样转发 |
-| `bridge_fastlio` | `points_raw` → `/airsim/lidar/points` | NED→FLU + 挂载外参静态 TF `base_link→lidar_link` + 恒等 TF `body→base_link`（把 FAST-LIO 的 `camera_init→body` 与挂载链接通，避免 RViz 报 "No transform from base_link to camera_init"） |
-| `bridge_super` | `points_raw`+odom → `/cloud_registered` `/lidar_slam/odom` | 点云→world 系 ENU：位姿按点云时刻插值对齐 + 逐点去畸变 + 机身回波过滤（SUPER 链路） |
+| `bridge_fastlio` | `points_raw` → `/airsim/lidar/points` | NED→FLU + 挂载外参静态 TF `base_link→lidar_link` + 恒等 TF `body→base_link` |
+| `bridge_super` | `points_raw`+odom → `/cloud_registered` `/lidar_slam/odom` | 点云→world 系 ENU：位姿按点云时刻插值对齐 + 逐点去畸变 + 机身回波过滤 |
 
-其他节点：`tracker_px4`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|px4` 选择链路）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）。
+其他节点：`tracker_px4`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|px4` 选择链路）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）
 
 ### 环境依赖
 
@@ -154,7 +154,7 @@ ros2 run flylab_tools camera_view --ros-args -p host:=<UE主机IP>  # 跨主机�
 
 PX4 侧机型文件在 `px4.1.15.2/ROMFS/px4fmu_common/init.d-posix/airframes/`，与 `PhysicsParams` 严格联动：电机坐标 `±ArmLengths/√2`、反扭矩系数 `KM = CP/CT × D/2π`、`MPC_THR_HOVER = 1/推重比`，速度/加速度限制按推重比折算。
 
-**新增一架机型的 checklist（4 处必须同步）**：
+**新增一架机型的步骤**：
 
 1. 新建机型文件 `airframes/700XX_fucker_<重量>_<推重比>`（**文件名禁止含点号 `.`**——rcS 会把带点的文件当 `xxx.post` 附加文件忽略，导致启动报 "no autostart file found"；小数点一律去掉，如 `tw23` 而非 `tw2.3`）
 2. 在 `airframes/CMakeLists.txt` 的 `px4_add_romfs_files` 中注册（不注册不会拷入 `build/etc`，运行时找不到）
@@ -180,13 +180,13 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 | UDP 8888 | uXRCE-DDS（`tracker:=px4` 链路） | MicroXRCEAgent |
 | TCP 41451 | AirSim RPC API（传感器/相机直连） | airsim_sensor_* / flylab_tools |
 
-**坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580。
+**坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580
 
 ## 注意事项
 
-- **PhysicsParams 改质量后**：必须同步重算 PX4 的 `MPC_THR_HOVER`（公式见上节），否则悬停漂移；settings.json 改动复制到 Windows 端 `Documents\AirSim\` 后重启 UE 生效，无需重编译
+- **PhysicsParams 改质量后**：必须同步重算 PX4 的 `MPC_THR_HOVER`，否则悬停漂移；settings.json 改动复制到 Windows 端 `Documents\AirSim\` 后重启 UE 生效，无需重编译
 - **GPULidar 与 CPU 雷达配置**：`configs/fast_lio/settings.json` 为 GPU 雷达（`SensorType: 8`，参数对齐 Livox Mid-360），FAST-LIO 与 SUPER 链路共用，对应 launch 默认 `gpu_lidar:=true`；`configs/settings.json` 为 CPU 雷达（`SensorType: 6`，**必须带 `LimitPoints: false`**，否则每 tick 扫描被 5000 点上限截断，一圈分片采样导致帧内拼接错位且实际帧率掉到 ~1.7Hz）。仿真无法复现 Mid-360 的非重复菱形扫描，以每帧均匀网格 ~2 万点近似
 - **雷达时间戳约定**：AirSim 点云是单时刻瞬时快照（整帧同一位姿一次生成，无扫描内运动畸变），传感器节点统一填 `time = 1/rotation_hz` 并以 `LidarData.time_stamp` 标定 ROS 偏移，LiDAR/IMU 映射到同一时间轴；逐点合成时间会反向注入运动剪切导致平移漂移，勿改回
-- **MSCKF 初始化**：静止时不会初始化，起飞后让无人机平移/转动（视差 ≥15、陀螺变化 ≥7°）即可
-- **FAST-LIO 链路 TF 树**：`camera_init → body → base_link → lidar_link`（`body→base_link` 由 `bridge_fastlio` 补发的恒等 TF），自定义新桥接节点时保持树连通，否则 RViz 会刷 "No transform" 警告
 - **传感器时间轴约定**：`airsim_imu`/`airsim_lidar`/`airsim_odom` 的时间戳统一经 `SimClockSync` 映射（ros = offset + 仿真时间，见 `src/sensors/airsim_common.hpp`），三路数据落同一时间轴；跨节点混用（如 bridge_super 对点云插值 odom 位姿、FAST-LIO 融合雷达+IMU）都依赖这一约定，自定义新传感器节点请保持
+- **WSL 系统时钟漂移**：WSL2 高负载下系统时钟漂移可达秒级（`chronyc tracking` 实测 RMS offset ~4.3s），`systemd-timesyncd` 纠偏采用"步进"跳变（实测一次向后跳 2.29s），导致 IMU/LiDAR/odom 时间戳整体跳变且三路重标定时刻不一致（相差可达百 ms）→ bridge_super 去畸变整帧拖影、FAST-LIO 收到倒退时间戳强制 reset、RViz 卡顿后涌出积压旧帧。**已改用 chrony slew 模式根治**（渐变调时钟速率，时钟永不跳变，`makestep 1 3` 仅启动初期允许步进），timesyncd 已 disable+mask。验证：`chronyc tracking` 的 `System time` 应为毫秒级
+- **点云链路抗卡顿设计**：实时传感器流不允许积压回放——`airsim_lidar` 发布 QoS 为 `KeepLast(2) reliable`（下游卡顿只丢帧不补发旧帧），两个 bridge 订阅/发布同样限深 2；GPU 雷达过滤**跨卡顿帧**（UE 卡顿恢复后同一旋转周期累积停顿前后两段渲染，段时刻跨度 > 3× 扫描周期的帧直接丢弃，否则逐点去畸变按停顿间隔摆点 → 整帧拖影）；RViz 全部点云显示 `Queue Size: 1`（默认 0 为无界，渲染一卡就积压回放）。诊断依据：`ros2 topic hz` 的 **min 为负 = 系统时钟被步进**（接收间隔不可能为负），max 飙到秒级 = 发布端真断流

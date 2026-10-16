@@ -58,9 +58,10 @@ public:
                         mount_yaw_ * M_PI / 180.0);
 
         // 2. 发布/订阅 (SUPER 订阅端为 best_effort, 发布端用同款 QoS 匹配;
-        //    内部订阅传感器流用 reliable, 不丢帧)
-        auto qos_in = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
-        auto qos_out = rclcpp::QoS(rclcpp::KeepLast(5)).best_effort();
+        //    内部订阅传感器流用 reliable, 不丢帧; 深度压到 2, 上游卡顿时
+        //    reliable 积压会在恢复后一次性补发旧帧, 不给积压留空间)
+        auto qos_in = rclcpp::QoS(rclcpp::KeepLast(2)).reliable();
+        auto qos_out = rclcpp::QoS(rclcpp::KeepLast(2)).best_effort();
         pub_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/cloud_registered", qos_out);
         pub_odom_ = this->create_publisher<nav_msgs::msg::Odometry>(

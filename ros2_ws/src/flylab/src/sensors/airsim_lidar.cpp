@@ -46,7 +46,10 @@ public:
         cloud_frame_ = this->declare_parameter<std::string>("cloud_frame_id", "lidar_ned");
         const int lidar_ms = this->declare_parameter<int>("lidar_period_ms", 100);  // 10Hz
 
-        auto qos = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
+        // KeepLast(2): 实时传感器流不缓存旧帧。深度 5 时下游(RViz/桥接)一旦卡顿,
+        // reliable 语义会积压 5 帧并在恢复后一次性补发, 点云爆发导致下游失效;
+        // 压到 2 后卡顿只损失数据, 不产生积压回放
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable();
         pub_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/airsim/lidar/points_raw", qos);
 
@@ -151,6 +154,25 @@ private:
                 header_s = wall_s - sweep_dur;
             }
             const auto stamp = rclcpp::Time(static_cast<int64_t>(header_s * 1e9), RCL_ROS_TIME);
+
+            // 跨卡顿帧过滤: UE 卡顿恢复后, GPU 雷达在同一旋转周期内累积了停顿前后
+            // 两段渲染, 段时刻跨度远超一个扫描周期。这种帧的逐点 time 跨越停顿
+            // 间隔, 下游按时间去畸变/对齐会把停顿期当真实运动处理 -> 整帧拖影,
+            // 定位/建图失效, 直接丢弃。正常帧跨度 = sweep_dur, 3 倍容差覆盖参数
+            // 舍入与渲染抖动
+            if (use_seg_times) {
+                uint64_t t_max = 0;
+                for (const auto& s : seg_stamps) {
+                    t_max = std::max(t_max, s.t_ns);
+                }
+                const double span_s = static_cast<double>(t_max - t_header_ns) * 1e-9;
+                if (span_s > 3.0 * sweep_dur) {
+                    RCLCPP_WARN(this->get_logger(),
+                                "丢弃跨卡顿帧: 段时刻跨度 %.2fs > 3x 扫描周期 %.2fs (UE 端卡顿)",
+                                span_s, sweep_dur);
+                    return;
+                }
+            }
             // 每点 float 数: CPU 雷达 3 (x,y,z); GPU 雷达 5 (x,y,z,分割rgb,intensity)
             const size_t point_stride = use_gpu_lidar_ ? 5 : 3;
             const size_t total = points.size() / point_stride;

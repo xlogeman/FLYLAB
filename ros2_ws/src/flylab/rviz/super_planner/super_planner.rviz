@@ -37,7 +37,7 @@ Visualization Manager:
       Enabled: true
       Name: LiDAR (world)
       Position Transformer: XYZ
-      Queue Size: 3
+      Queue Size: 1
       Selectable: true
       Size (m): 0.15
       Size (Pixels): 2

@@ -10,12 +10,6 @@
 #   - odom:=false (默认): 静态 TF world -> lidar_ned 零位, 点云固定在原点
 #   - odom:=true: 启动 airsim_odom 提供 world -> base_link TF, 静态 TF 改为
 #     base_link -> lidar_ned, 点云随无人机一起移动, 便于对照真值检查点云位置
-#
-# 排查:
-#   - 话题静默无输出: 大概率 settings.json 里雷达名不是 Lidar1, 用
-#     lidar_sensor_name:=<实际名> 改; 或点云全被过滤 (周围无物体)
-#   - 每 2 秒 "抓取 LiDAR 失败: RPC 通信异常": gpu_lidar 参数与实际雷达类型不符
-#   - `ros2 topic hz /airsim/lidar/points_raw` 期望 ~rotation_frequency
 import os
 
 from launch import LaunchDescription

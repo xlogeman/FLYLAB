@@ -34,7 +34,8 @@ public:
         mount_pitch_ = this->declare_parameter<double>("mount_pitch_deg", 0.0);
         mount_yaw_ = this->declare_parameter<double>("mount_yaw_deg", 0.0);
 
-        auto qos = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
+        // KeepLast(2): 上游卡顿时 reliable 积压会在恢复后一次性补发旧帧, 深度压到 2
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable();
         pub_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/airsim/lidar/points", qos);
         sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
