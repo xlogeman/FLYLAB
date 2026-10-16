@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'camera_view = flylab_tools.camera_view:main',
+            'ground_station = flylab_tools.ground_station:main',
         ],
     },
 )

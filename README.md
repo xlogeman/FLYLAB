@@ -2,7 +2,7 @@
 
 WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做无人机自主飞行研究：感知建图、视觉惯导、避障规划与 offboard 控制
 
-## 工作区总体
+## 1. 工作区总体
 
 | 目录 | 说明 |
 |---|---|
@@ -15,9 +15,9 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 ---
 
-## flylab 核心包
+## 2. flylab 核心包
 
-### 功能链路一览
+### 2.1. 功能链路一览
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
@@ -29,7 +29,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（GPULidar，参数对齐 Livox Mid-360） |
 | SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划（ROG-Map 占据地图）→ 桥接 → PX4 跟踪；与 EGO 共用 tracker 链路，`tracker:=mavros\|px4` 选择跟踪链路 |
 
-### C++ 节点
+### 2.2. C++ 节点
 
 传感器层 (`src/sensors/`) 与算法完全解耦：算法特化的适配（坐标系/门控/时间对齐）下沉到桥接层 (`src/bridges/`)
 
@@ -49,7 +49,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 其他节点：`tracker_px4`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|px4` 选择链路）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）
 
-### 环境依赖
+### 2.3. 环境依赖
 
 | 依赖 | 说明 |
 |---|---|
@@ -59,7 +59,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 ---
 
-## 快速开始
+## 3. 快速开始
 
 ```bash
 # 1. 编译
@@ -85,23 +85,37 @@ ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 
 ---
 
-## flylab_tools 视觉算法实验区
+## 4. flylab_tools 视觉算法实验区
 
-独立小工具（`ros2_ws/src/flylab_tools`），**直连 AirSim RPC** 实时查看任意相机画面
+可视化与算法实验工具集（`ros2_ws/src/flylab_tools`），模块化结构：界面 / 抓取 / ROS 三层解耦
 
-- **按需拉取**：每帧只向 AirSim 请求当前选中的那一路相机（30Hz），切换下拉框即时生效，其余相机零开销
-- **深度伪彩**：名字含 `depth` 的相机自动伪彩显示（红近蓝远，0.2~20m）
-- **断线重连**：UE 重启后自动接上；只保留最新帧，不积压
-- 前提：相机需在 UE 端 `settings.json` 中配置过（`configs/settings.json` 已含全部相机）
+| 模块 | 说明 |
+|---|---|
+| `config.py` | 全局配置：按钮、话题、端口，改这里 |
+| `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 模型标注叠加 |
+| `camera_grabber.py` | 抓取线程：AirSim RPC / 本机 V4L2 摄像头 / 视频文件，三源统一 |
+| `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条（进度/时长/暂停/停止） |
+| `ros_node.py` | ROS 节点：指令与目标框发布、模型标注订阅 |
+| `overlay.py` | 模型输出叠加接口（标注 schema） |
+| `main_window.py` | 地面站主窗口：左画面右功能区 |
 
 ```bash
-ros2 run flylab_tools camera_view                                # 本机 UE / 已设 PX4_SIM_HOST_ADDR
-ros2 run flylab_tools camera_view --ros-args -p host:=<UE主机IP>  # 跨主机指定
+ros2 run flylab_tools ground_station   # 地面站总界面
 ```
 
-依赖：`pip install msgpack-rpc-python`；AirSim 客户端复用 `Cosys-AirSim/PythonClient`。
+**输入源**：UE 相机（RPC 直连）/ 本机摄像头（`/dev/video*`，WSL2 需 usbipd 透传）/ 视频文件（mp4 等循环播放，可暂停/拖进度）。
 
-## 载具物理参数配置化（PhysicsParams）
+**模型接入**：任何模型的输出发 JSON 到 `/flylab/annotations` 即自动叠加到画面，无需改界面：
+
+```json
+[{"type": "bbox", "box": [x, y, w, h], "label": "car", "color": [0,255,0]},
+ {"type": "point", "point": [x, y], "label": "..."},
+ {"type": "text", "pos": [x, y], "text": "..."}]
+```
+
+**其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧不积压；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——其自带 Qt 与 PyQt5 冲突）。
+
+## 5. 载具物理参数配置化（PhysicsParams）
 
 多旋翼物理参数已从源码硬编码改为 settings.json 配置：在载具段下加 `PhysicsParams` 即可换机型/挂载荷/调推重比，改完**无需重编译**，重启仿真生效。改动只存在于 Windows 侧 UE 项目（`BeimingSim/Plugins/AirSim/`），`Model` 字段继续作为基础机架模板，`PhysicsParams` 在其上覆盖，未写的键沿用模板默认值，向后兼容。
 
@@ -142,7 +156,7 @@ ros2 run flylab_tools camera_view --ros-args -p host:=<UE主机IP>  # 跨主机�
 - `DragCoefficient` 是绝对值（默认机架 0.325、Flamewheel 系 1.3），不是倍数写法
 - 限制：转子布局仅支持对称 X 型（QuadX/HexX/OctoX）、机臂统一长度；六/八轴配置时 UE 外观仍是四旋翼模型（物理正确但视觉不符）
 
-## 机型库与 PX4 机型文件
+## 6. 机型库与 PX4 机型文件
 
 自研机型的完整参数档案存放在 `ros2_ws/src/flylab/configs/vehicles/`，每个 json 一架飞机，含 `PhysicsParams`、PX4 侧配套参数和推导公式：
 
@@ -167,7 +181,7 @@ PX4 侧机型文件在 `px4.1.15.2/ROMFS/px4fmu_common/init.d-posix/airframes/`�
    cd px4.1.15.2 && make px4_sitl_default
    ```
 
-## SITL 链路与端口分配
+## 7. SITL 链路与端口分配
 
 PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1.15.2/ROMFS/px4fmu_common/init.d-posix/px4-rc.mavlink` 与 Windows 端 `settings.json`）：
 
@@ -182,7 +196,7 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 
 **坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580
 
-## 注意事项
+## 8. 注意事项
 
 - **PhysicsParams 改质量后**：必须同步重算 PX4 的 `MPC_THR_HOVER`，否则悬停漂移；settings.json 改动复制到 Windows 端 `Documents\AirSim\` 后重启 UE 生效，无需重编译
 - **GPULidar 与 CPU 雷达配置**：`configs/fast_lio/settings.json` 为 GPU 雷达（`SensorType: 8`，参数对齐 Livox Mid-360），FAST-LIO 与 SUPER 链路共用，对应 launch 默认 `gpu_lidar:=true`；`configs/settings.json` 为 CPU 雷达（`SensorType: 6`，**必须带 `LimitPoints: false`**，否则每 tick 扫描被 5000 点上限截断，一圈分片采样导致帧内拼接错位且实际帧率掉到 ~1.7Hz）。仿真无法复现 Mid-360 的非重复菱形扫描，以每帧均匀网格 ~2 万点近似
