@@ -18,6 +18,9 @@ BBOX_TOPIC = '/target/bbox'
 # 界面自动叠加到画面上。schema 见 overlay.py 文档。
 ANNOTATION_TOPIC = '/flylab/annotations'
 
+# ---------- 云台 (AirSim 相机视角旋转, 经 simSetCameraPose) ----------
+GIMBAL_STEP_DEG = 5.0     # 每次按键步进角度 (按钮支持按住连发)
+
 # ---------- 工具按钮 (可切换: 按下=启动, 再按=停止) ----------
 # name=按钮文字, start/stop=对应发布的指令
 TOOLS = [

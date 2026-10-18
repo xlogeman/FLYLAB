@@ -2,8 +2,10 @@
 """AirSim 相机抓取器 —— 直连 AirSim RPC 拉图 + 本机 V4L2 摄像头，与界面解耦。
 
 被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
+附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)。
 """
 import glob
+import math
 import os
 import threading
 import time
@@ -35,6 +37,48 @@ DEPTH_MIN_M, DEPTH_MAX_M = 0.2, 20.0
 DEFAULT_CAMERAS = ['left_cam', 'front_cam', 'right_cam', 'depth_cam']
 LOCAL_PREFIX = 'local:'   # 本机摄像头在下拉框里的条目前缀, 如 local:/dev/video0
 FILE_PREFIX = 'file:'     # 视频文件源前缀, 如 file:/path/to/demo.mp4 (循环播放)
+
+GIMBAL_PITCH_LIMIT = 90.0  # 云台俯仰限位(度), 正=向上; 偏航不设限, 按 ±180 归一化
+
+
+def _gimbal_quat(yaw_deg, pitch_deg):
+    """云台角度 -> NED 四元数 (相对机体: 先绕 z 偏航, 再绕 y 俯仰)。
+    yaw 正=向右 (绕 NED +z, 即向下轴的右手旋转), pitch 正=向上 (绕 +y)。
+    回中 (0,0) 即单位四元数 (相对安装姿态不动)。"""
+    y1, p2 = math.radians(yaw_deg) / 2, math.radians(pitch_deg) / 2
+    c1, s1, c2, s2 = math.cos(y1), math.sin(y1), math.cos(p2), math.sin(p2)
+    # qz(yaw) ⊗ qy(pitch) 的 Hamilton 积, 注意 z 分量是 s1*c2 (此前的 c1*s1
+    # 是代数错误, 四元数未归一化, 实际转角/轴向全错)
+    return airsim.Quaternionr(-s1 * s2, c1 * s2, s1 * c2, c1 * c2)
+
+
+def _quat_mul(a, b):
+    """四元数 Hamilton 积 a⊗b: 相对机体的组合旋转, 先施 b 再施 a。"""
+    ax, ay, az, aw = a.x_val, a.y_val, a.z_val, a.w_val
+    bx, by, bz, bw = b.x_val, b.y_val, b.z_val, b.w_val
+    return airsim.Quaternionr(
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz)
+
+
+def _quat_conj(q):
+    """四元数共轭 (单位四元数下即逆旋转)。"""
+    return airsim.Quaternionr(-q.x_val, -q.y_val, -q.z_val, q.w_val)
+
+
+def _quat_rot_vec(q, v):
+    """向量 v 按单位四元数 q 旋转 (v' = q v q*)。"""
+    x, y, z = v.x_val, v.y_val, v.z_val
+    qx, qy, qz, qw = q.x_val, q.y_val, q.z_val, q.w_val
+    tx = 2 * (qy * z - qz * y)
+    ty = 2 * (qz * x - qx * z)
+    tz = 2 * (qx * y - qy * x)
+    return airsim.Vector3r(
+        x + qw * tx + (qy * tz - qz * ty),
+        y + qw * ty + (qz * tx - qx * tz),
+        z + qw * tz + (qx * ty - qy * tx))
 
 
 def _to_np(data, dtype):
@@ -104,6 +148,13 @@ class Grabber(threading.Thread):
         self.file_seek = None           # 0..1, 待跳转的相对位置
         self.file_pos, self.file_total = 0.0, 0.0
         self.file_fps = 30.0
+        # 软件云台: 全局角度 (yaw, pitch), 同步作用于所有 AirSim 相机
+        self._gimbal = (0.0, 0.0)
+        self._gimbal_dirty = False
+        # 相机名 -> 首改前的安装位姿 (position, orientation)。相机在 settings.json
+        # 里常带下俯安装角 (如 front_cam pitch=-36.87°), 云台旋转必须叠加在
+        # 安装姿态之上, 回中才等价于恢复安装角; 不能用单位四元数当回中态
+        self._gimbal_mount = {}
         self.running = True
 
     def set_camera(self, name):
@@ -143,6 +194,80 @@ class Grabber(threading.Thread):
             if self.camera.startswith(FILE_PREFIX) and self.cap_dev is not None:
                 return self.file_pos, self.file_total, self.file_paused, self.file_fps
         return None
+
+    # ---------- 软件云台 (界面线程调用, 角度由抓取线程经 RPC 写入相机) ----------
+
+    def gimbal_step(self, dyaw, dpitch):
+        """步进云台角度 (yaw 正=向右, pitch 正=向上), 同步作用到所有 AirSim
+        相机 (left/front/right/depth 一起转)。本机/视频文件源为空操作。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return
+            yaw, pitch = self._gimbal
+            yaw = (yaw + dyaw + 180.0) % 360.0 - 180.0
+            pitch = max(-GIMBAL_PITCH_LIMIT,
+                        min(GIMBAL_PITCH_LIMIT, pitch + dpitch))
+            self._gimbal = (yaw, pitch)
+            self._gimbal_dirty = True
+
+    def gimbal_reset(self):
+        """云台回中 (恢复所有相机挂载原始姿态)。"""
+        with self.lock:
+            self._gimbal = (0.0, 0.0)
+            self._gimbal_dirty = True
+
+    def get_gimbal(self):
+        """当前云台角度 (yaw, pitch)；非 AirSim 源返回 None。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return None
+            return self._gimbal
+
+    def _capture_mount(self, client, cam):
+        """缓存相机安装位姿 (机体系)。
+
+        注意 AirSim 的坐标系陷阱: simGetCameraInfo 返回的是世界系位姿
+        (位置相对出生点、姿态为世界姿态, 见 PIPCamera.cpp getCameraInfo 的
+        toLocalNed/toNed), 而 simSetCameraPose 按"机体相对位姿"解释输入
+        (SetActorRelativeLocation/Rotation)。直接把 get 的结果 set 回去,
+        飞机一旦起飞/偏航/移动, 相机会被瞬移甩歪。必须先取机体当前世界
+        位姿 (simGetGroundTruthKinematics), 把相机位姿换算到机体系。"""
+        info = client.simGetCameraInfo(cam, VEHICLE)
+        kin = client.simGetGroundTruthKinematics(VEHICLE)
+        q_b, p_b = kin.orientation, kin.position   # KinematicsState 字段是扁平的
+        p_c, q_c = info.pose.position, info.pose.orientation
+        # 安装姿态 (机体系): q_mount = q_body⁻¹ ⊗ q_cam_world
+        q_rel = _quat_mul(_quat_conj(q_b), q_c)
+        # 安装位置 (机体系): p_mount = R_body⁻¹ · (p_cam - p_body)
+        d = airsim.Vector3r(p_c.x_val - p_b.x_val,
+                            p_c.y_val - p_b.y_val,
+                            p_c.z_val - p_b.z_val)
+        p_rel = _quat_rot_vec(_quat_conj(q_b), d)
+        return p_rel, q_rel
+
+    def _apply_gimbal(self, client, yaw_deg, pitch_deg):
+        """把云台角度经 simSetCameraPose 同步写到所有 AirSim 相机。
+        姿态 = 云台角度 ⊗ 安装姿态 (角度按机体系解释, 叠加在 settings.json
+        的安装角之上), 位置沿用安装偏移; 单个相机不存在不影响其余相机。"""
+        try:
+            for cam in DEFAULT_CAMERAS:
+                if cam not in self._gimbal_mount:
+                    try:
+                        self._gimbal_mount[cam] = self._capture_mount(client, cam)
+                    except Exception as e:
+                        self._gimbal_mount[cam] = None   # 该相机不可用, 跳过
+                        self.log(f'云台: 获取 {cam} 安装位姿失败, 跳过: {e}')
+                mount = self._gimbal_mount[cam]
+                if mount is None:
+                    continue
+                pos, ori = mount
+                q = _quat_mul(_gimbal_quat(yaw_deg, pitch_deg), ori)
+                client.simSetCameraPose(cam, airsim.Pose(pos, q), VEHICLE)
+        except Exception as e:
+            # 失败不置回 dirty: 避免每帧重试刷屏; 重连或下次按键会重新下发
+            self.log(f'云台控制失败: {e}')
+        finally:
+            self._gimbal_dirty = False
 
     def _commit(self, arr, is_depth):
         """写入最新帧并统计 fps。"""
@@ -259,8 +384,15 @@ class Grabber(threading.Thread):
                     client = airsim.VehicleClient(ip=self.host, port=self.port)
                     client.confirmConnection()
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
+                    # 用户转过云台 (非回中) 时重连后重新下发, 保持视角;
+                    # 未动过则完全不碰相机, 保留 settings.json 的安装角
+                    self._gimbal_dirty = self._gimbal != (0.0, 0.0)
 
                 is_depth = 'depth' in cam.lower()
+                with self.lock:
+                    gim_dirty, gim = self._gimbal_dirty, self._gimbal
+                if gim_dirty:
+                    self._apply_gimbal(client, *gim)
                 # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
                 # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
                 # PF_FloatRGBA ensure 断言并返回无效数据 (NaN/Inf)

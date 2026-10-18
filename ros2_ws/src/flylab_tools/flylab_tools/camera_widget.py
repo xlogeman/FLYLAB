@@ -6,19 +6,23 @@
   - 视频文件: 下拉选"打开视频文件..."弹出文件对话框 (mp4 等, 循环播放)
 
 布局两种模式：
-  默认上下排列 (camera_view 独立窗口用)
-  side_panel=True 左右排列: 画面在左, 输入源/状态在右, 外部可用
-  add_side_widget() 往右栏插工具按钮 (ground_station 用)
+默认上下排列 (camera_view 独立窗口用)
+side_panel=True 左右排列: 画面在左, 输入源/状态在右, 外部可用
+add_side_widget() 往右栏插工具按钮 (ground_station 用)
+
+云台面板: AirSim 相机源可用, 方向键步进旋转视角 (按住连发) + 回中,
+经 simSetCameraPose 实现, 仅影响画面不影响飞机姿态。
 """
 import os
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout,
-                             QLabel, QPushButton, QSlider, QVBoxLayout,
-                             QWidget)
+from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout,
+                           QHBoxLayout, QLabel, QPushButton, QSlider,
+                           QVBoxLayout, QWidget)
 
+from . import config
 from .camera_grabber import (DEFAULT_CAMERAS, FILE_PREFIX, LOCAL_PREFIX,
-                             Grabber, colorize_depth, list_local_cameras)
+                           Grabber, colorize_depth, list_local_cameras)
 from .video_label import VideoLabel
 
 FILE_OPEN_ITEM = '打开视频文件...'
@@ -78,6 +82,7 @@ class CameraViewWidget(QWidget):
         ctrl_layout.addWidget(self.slider, stretch=1)
         ctrl_layout.addWidget(self.time_label)
         self.file_ctrl.setEnabled(False)
+        self._build_gimbal()
 
         src_label = QLabel('输入源:')
         if side_panel:                       # 左画面+控制条 / 右栏 (地面站)
@@ -96,6 +101,8 @@ class CameraViewWidget(QWidget):
             panel.addWidget(self.combo)
             self._panel = panel
             self._panel_stretch_index = panel.count()
+            panel.addWidget(self.gimbal)
+            self._panel_stretch_index += 1
             panel.addStretch(1)
             panel.addWidget(self.status)
         else:                                # 上下排列 (独立调试窗口)
@@ -106,6 +113,7 @@ class CameraViewWidget(QWidget):
             layout.addLayout(row)
             layout.addWidget(self.video)
             layout.addWidget(self.file_ctrl)
+            layout.addWidget(self.gimbal)
             layout.addWidget(self.status)
 
         self.timer = QTimer(self)
@@ -117,6 +125,39 @@ class CameraViewWidget(QWidget):
         if hasattr(self, '_panel'):
             self._panel.insertWidget(self._panel_stretch_index, w)
             self._panel_stretch_index += 1
+
+    def _build_gimbal(self):
+        """云台控制面板: 方向键步进 + 回中 + 角度读数。
+        仅 AirSim 相机源可用 (本机/文件源在 _refresh 里置灰)。"""
+        step = config.GIMBAL_STEP_DEG
+
+        def dir_btn(text, tip, dyaw, dpitch):
+            b = QPushButton(text)
+            b.setToolTip(f'{tip} (可按住连发)')
+            b.setAutoRepeat(True)          # 按住连续步进, 模拟连续转动
+            b.setAutoRepeatDelay(300)
+            b.setAutoRepeatInterval(100)
+            b.clicked.connect(
+                lambda: self.grabber.gimbal_step(dyaw, dpitch))
+            return b
+
+        self.gimbal = QWidget()
+        g = QGridLayout(self.gimbal)
+        g.setContentsMargins(0, 0, 0, 0)
+        title = QLabel('云台:')
+        self.gimbal_angle = QLabel('航向 +0° 俯仰 +0°')
+        self.gimbal_angle.setStyleSheet(
+            'color: #444; font-family: monospace;')
+        g.addWidget(title, 0, 0, 1, 3)
+        g.addWidget(dir_btn('↑', f'俯仰上 {step}°', 0, +step), 1, 1)
+        g.addWidget(dir_btn('←', f'偏航左 {step}°', -step, 0), 2, 0)
+        btn_center = QPushButton('回中')
+        btn_center.setToolTip('云台回中 (恢复挂载原始姿态)')
+        btn_center.clicked.connect(self.grabber.gimbal_reset)
+        g.addWidget(btn_center, 2, 1)
+        g.addWidget(dir_btn('→', f'偏航右 {step}°', +step, 0), 2, 2)
+        g.addWidget(dir_btn('↓', f'俯仰下 {step}°', 0, -step), 3, 1)
+        g.addWidget(self.gimbal_angle, 4, 0, 1, 3)
 
     def _on_source_changed(self):
         text = self.combo.currentText().strip()
@@ -163,6 +204,11 @@ class CameraViewWidget(QWidget):
 
     def _refresh(self):
         self._refresh_playback()
+        gim = self.grabber.get_gimbal()
+        self.gimbal.setEnabled(gim is not None)   # 仅 AirSim 源可用
+        if gim is not None:
+            yaw, pitch = gim
+            self.gimbal_angle.setText(f'航向 {yaw:+.0f}° 俯仰 {pitch:+.0f}°')
         frame, src, fps = self.grabber.get()
         if frame is None:
             self.status.setText(f'[{src}] 等待图像...')
