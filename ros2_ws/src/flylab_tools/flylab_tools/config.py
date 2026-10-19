@@ -8,6 +8,13 @@ AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
 # 视觉功能选项卡显示的图像话题 (airsim_camera 等节点发布)
 CAMERA_TOPICS = ['/airsim/front_cam/image_raw']
 
+# ---------- 显示画面转发 (算法节点的图像输入) ----------
+# 地面站把"当前显示的帧"发布到该话题 —— 无论是 AirSim 相机、本机摄像头
+# 还是视频文件源, 算法节点订阅它即可处理用户正在看的画面 (深度伪彩帧除外)。
+# 分辨率保持原图, 保证标注叠加坐标对齐。
+DISPLAY_IMAGE_TOPIC = '/flylab/display/image_raw'
+DISPLAY_IMAGE_HZ = 30      # 转发频率上限 (0 = 关闭转发)
+
 # 算法启停指令话题：按钮按下/抬起时发布 std_msgs/String，算法节点自行订阅执行
 CMD_TOPIC = '/flylab/vision_cmd'
 
@@ -34,9 +41,16 @@ GIMBAL_YAW_LIMIT_DEG = 45.0      # 偏航限位 ±45°
 GIMBAL_PITCH_MIN_DEG = -53.13    # 俯仰下限 (绝对 -90°, 垂直向下)
 GIMBAL_PITCH_MAX_DEG = 126.87    # 俯仰上限 (绝对 +90°, 垂直向上)
 
-# ---------- 工具按钮 (可切换: 按下=启动, 再按=停止) ----------
-# name=按钮文字, start/stop=对应发布的指令
-TOOLS = [
+# ---------- 算法选择 (下拉框 + 运行/取消按钮) ----------
+# name=下拉框显示文字, start/stop=运行/取消时发布的指令。
+# cmd=算法节点启动命令 (可选): 填了则地面站点"运行"时自动拉起进程、点"取消"
+# 时自动回收; 不填则假定节点已在外部运行, 只发启停指令。
+# 界面交互对所有算法统一: 新算法只要遵循"收到 start 指令开始、收到 stop
+# 指令停止"的约定, 在这里加一项即可出现在下拉框里。
+ALGORITHMS = [
+    {'name': 'ArUco检测',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node'],
+     'start': 'aruco_start', 'stop': 'aruco_stop'},
     {'name': '目标检测', 'start': 'detect_start', 'stop': 'detect_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]

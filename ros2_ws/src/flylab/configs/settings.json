@@ -145,15 +145,15 @@
           "CaptureSettings": [
             {
               "ImageType": 1,
-              "Width": 400,
-              "Height": 300,
+              "Width": 640,
+              "Height": 480,
               "FOV_Degrees": 90
             }
           ],
           "X": 0.5,
           "Y": 0.0,
           "Z": -0.05,
-          "Pitch": 0.0,
+          "Pitch": -36.86989764584402,
           "Roll": 0.0,
           "Yaw": 0.0
         },

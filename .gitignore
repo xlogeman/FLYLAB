@@ -47,5 +47,5 @@ ros2_ws/src/FAST_LIO_ROS2/doc/
 ros2_ws/src/SUPER/misc/
 
 # ---- 模型权重 (体积大, 按需单独下载) ----
-ros2_ws/src/flylab_tools/models/**/*.pt
-ros2_ws/src/flylab_tools/models/**/*.onnx
+ros2_ws/src/flylab_vision/models/**/*.pt
+ros2_ws/src/flylab_vision/models/**/*.onnx

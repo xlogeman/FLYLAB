@@ -6,7 +6,7 @@
 """
 import numpy as np
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter
+from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter, QPolygonF
 from PyQt5.QtWidgets import QLabel
 
 
@@ -178,29 +178,40 @@ class VideoLabel(QLabel):
         dy = (self.height() - h * scale) / 2
         lw = max(1, round(2 * scale))
         for a in self._annotations:
-            c = QColor(*a['color'])
+            c = QColor(*a.get('color', [0, 255, 0]))
+            label = a.get('label', '')
             if a['type'] == 'bbox':
                 x, y, bw, bh = a['box']
                 r = QRectF(dx + x * scale, dy + y * scale,
                            bw * scale, bh * scale)
                 painter.setPen(QPen(c, lw))
                 painter.drawRect(r)
-                if a['label']:
+                if label:
                     painter.setPen(QPen(c))
                     painter.drawText(
-                        int(r.left()), int(r.top()) - 4, a['label'])
+                        int(r.left()), int(r.top()) - 4, label)
             elif a['type'] == 'point':
                 px, py = a['point']
                 painter.setPen(QPen(c, lw))
                 painter.drawEllipse(
                     QPointF(dx + px * scale, dy + py * scale), lw * 2, lw * 2)
-                if a['label']:
+                if label:
                     painter.setPen(QPen(c))
                     painter.drawText(
                         int(dx + px * scale) + 6, int(dy + py * scale) - 4,
-                        a['label'])
+                        label)
+            elif a['type'] == 'polyline':
+                pts = a['points']
+                if len(pts) < 2:
+                    continue
+                qpts = [QPointF(dx + px * scale, dy + py * scale)
+                        for px, py in pts]
+                painter.setPen(QPen(c, lw))
+                painter.drawPolyline(QPolygonF(qpts))
+                if a.get('close'):
+                    painter.drawLine(qpts[-1], qpts[0])
             elif a['type'] == 'text':
                 tx, ty = a['pos']
                 painter.setPen(QPen(c))
                 painter.drawText(int(dx + tx * scale), int(dy + ty * scale),
-                                 a['text'])
+                                 a.get('text', ''))

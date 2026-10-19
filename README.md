@@ -6,7 +6,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 | 目录 | 说明 |
 |---|---|
-| `ros2_ws/` | ROS2 工作空间，核心是 `src/flylab` 包，其余为各算法移植包  |
+| `ros2_ws/` | ROS2 工作空间，核心是 `src/flylab` 包（飞行链路）与 `src/flylab_vision` 包（视觉算法），其余为各算法移植包  |
 | `Cosys-AirSim/` | UE 端仿真器 |
 | `px4.1.15.2/` | PX4 SITL v1.15.2 源码（默认机型 `none_iris`，自定义机型见下方"机型库与 PX4 机型文件"） |
 | `ORB_SLAM3_FIXED/` | ORB-SLAM3 运行时库 |
@@ -85,35 +85,80 @@ ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 
 ---
 
-## 4. flylab_tools 视觉算法实验区
+## 4. 视觉算法实验区（flylab_tools 地面站 + flylab_vision 算法包）
+
+### 4.1. flylab_tools 地面站
 
 可视化与算法实验工具集（`ros2_ws/src/flylab_tools`），模块化结构：界面 / 抓取 / ROS 三层解耦
 
 | 模块 | 说明 |
 |---|---|
-| `config.py` | 全局配置：按钮、话题、端口，改这里 |
-| `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 模型标注叠加 |
+| `config.py` | 全局配置：算法注册表（`ALGORITHMS`）、话题、端口，改这里 |
+| `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 模型标注叠加（bbox/point/polyline/text 四种图元） |
 | `camera_grabber.py` | 抓取线程：AirSim RPC / 本机 V4L2 摄像头 / 视频文件，三源统一 |
 | `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条（进度/时长/暂停/停止）+ 云台方向键（AirSim 相机视角 yaw/pitch 步进/回中，经 `simSetCameraPose`，**世界系参考**——机体倾斜时偏航仍绕竖直轴、俯仰仍水平，不会斜着转；**限位** 航向 ±45°/俯仰垂直上下即停，`config.py` 可调，到限即停不回绕到机尾；**平滑回中**——按恒定角速度转回机头正前方而非瞬跳，按方向键可打断；**记忆与重置**——地面站重启沿用上次视角，连接时比对相机实际姿态检测 UE 重新 play，play 过自动回中；**全部相机同步转动**，仅影响画面不影响飞机姿态；状态存于 `~/.flylab_gimbal.json`，删掉即恢复出厂回中） |
-| `ros_node.py` | ROS 节点：指令与目标框发布、模型标注订阅 |
-| `overlay.py` | 模型输出叠加接口（标注 schema） |
-| `main_window.py` | 地面站主窗口：左画面右功能区 |
+| `ros_node.py` | ROS 节点：算法启停指令发布、显示画面转发、按算法分组的标注订阅 |
+| `overlay.py` | 模型输出叠加接口（按算法分组的消息 + 标注 schema） |
+| `main_window.py` | 主窗口：左画面 + 右侧算法面板（下拉框选算法 + 运行/取消按钮），管理算法进程生命周期 |
 
 ```bash
 ros2 run flylab_tools ground_station   # 地面站总界面
 ```
 
-**输入源**：UE 相机（RPC 直连）/ 本机摄像头（`/dev/video*`，WSL2 需 usbipd 透传）/ 视频文件（mp4 等循环播放，可暂停/拖进度）。
+**算法运行**：
 
-**模型接入**：任何模型的输出发 JSON 到 `/flylab/annotations` 即自动叠加到画面，无需改界面：
+1. 右栏输入源选画面：UE 相机（RPC 直连）/ 本机摄像头（`/dev/video*`，WSL2 需 usbipd 透传）/ 视频文件（mp4 等循环播放，可暂停/拖进度）
+2. 算法下拉框选算法 → 点「运行」：地面站自动拉起算法进程（`cmd` 字段）→ 延迟 1s（等 DDS 发现）发 start 指令 → 结果自动叠加到画面；进程崩溃自动提示并复位
+3. 点「取消」：发 stop 指令 + 立即清空标注 + 回收进程；运行中可直接切换算法（无缝替换）
+
+**新算法接入**（约定式，界面零改动）：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
+
+**显示画面转发**：地面站把当前显示帧（深度伪彩帧除外）以 30Hz 原分辨率发到 `/flylab/display/image_raw`，算法节点订阅它即可处理「用户正在看的画面」——无论输入源是 UE 相机、本机摄像头还是视频文件，切换对算法透明。无订阅者时自动跳过序列化不占 CPU；算法要吃原始相机话题时用 `-p image_topic:=/airsim/cam/front_cam/image_raw` 覆盖。
+
+**标注接口**（`overlay.py`）：消息按算法分组，各组独立替换/清屏，多算法同时叠加互不干扰。坐标一律原图像素，算法停止前发 `{"algo": ..., "items": []}` 清自己的组；旧格式纯列表仍向后兼容：
 
 ```json
-[{"type": "bbox", "box": [x, y, w, h], "label": "car", "color": [0,255,0]},
- {"type": "point", "point": [x, y], "label": "..."},
- {"type": "text", "pos": [x, y], "text": "..."}]
+{"algo": "yolo", "items": [
+  {"type": "bbox",     "box": [x, y, w, h],   "label": "car 0.92", "color": [0,255,0]},
+  {"type": "point",    "point": [x, y],       "label": "..."},
+  {"type": "polyline", "points": [[x,y]],     "close": true, "color": [0,255,0]},
+  {"type": "text",     "pos": [x, y],         "text": "..."}]}
 ```
 
 **其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧不积压；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——其自带 Qt 与 PyQt5 冲突）。
+
+### 4.2. flylab_vision 算法包（C++）
+
+ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解耦：核心库纯 OpenCV 不依赖 ROS，节点只是薄壳。
+
+```
+flylab_vision/
+├── include/aruco/aruco_detector.hpp   # 核心库接口 (无 ROS 依赖)
+├── src/aruco/aruco_detector.cpp       # 检测 / IPPE_SQUARE 位姿 / 标注 JSON
+├── src/aruco/aruco_node.cpp           # ROS2 节点
+├── models/<task>/                     # 预训练权重按任务分类 (体积大, gitignore, 按需下载)
+└── CMakeLists.txt / package.xml
+```
+
+| 目标 | 说明 |
+|---|---|
+| `libaruco_detector` | 纯算法库：检测 + 位姿解算（等价 legacy `estimatePoseSingleMarkers`）+ 分组标注 JSON；兼容 OpenCV 4.5（Humble 系统源）与 4.7+ 双 API |
+| `aruco_node` | 订阅显示帧话题 + 启停指令，检测结果转 JSON 标注回传；每 2s 自检——收不到帧主动告警（地面站未运行/画面源无图/话题不一致） |
+
+```bash
+ros2 run flylab_vision aruco_node --ros-args \
+    -p image_topic:=/flylab/display/image_raw \   # 算法图像输入 (默认地面站转发帧)
+    -p dict_name:=DICT_4X4_1000 \                 # 码型字典 (Prometheus 6x6 码用 DICT_6X6_250)
+    -p marker_length:=0.2 \                       # 码物理边长(米), 影响 3D 位姿尺度
+    -p calib:=/path/to/calib.yaml                 # 相机标定 (可选; 无则按 FOV 估算, 位姿仅供参考)
+```
+
+节点可视化输出（每个码 7 个图元）：绿色四边形轮廓（贴码真实形状）+ 红/蓝/绿三条位姿轴 + 红中心点 + 红首角点 + 黄色 `id=z距离` 文字，全部经统一标注接口叠加到地面站画面。
+
+**新增算法**：并列建 `include/<算法>/` + `src/<算法>/`，CMake 加对应库/可执行目标，`config.ALGORITHMS` 注册即可——复用标注接口与地面站交互，体验与 ArUco 完全一致。
+
+**独立调试 CLI**：根目录 `python3 aruco_detector.py --image/--video/--camera/--gen`（图像/视频/摄像头检测与测试图生成），功能与包内节点共用同一套检测参数约定。
+
 
 ## 5. 载具物理参数配置化（PhysicsParams）
 
