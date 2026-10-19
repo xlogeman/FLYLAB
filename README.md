@@ -94,7 +94,7 @@ ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 | `config.py` | 全局配置：按钮、话题、端口，改这里 |
 | `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 模型标注叠加 |
 | `camera_grabber.py` | 抓取线程：AirSim RPC / 本机 V4L2 摄像头 / 视频文件，三源统一 |
-| `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条（进度/时长/暂停/停止）+ 云台方向键（AirSim 相机视角 yaw/pitch 步进/回中，经 `simSetCameraPose`，**全部相机同步转动**，仅影响画面不影响飞机姿态） |
+| `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条（进度/时长/暂停/停止）+ 云台方向键（AirSim 相机视角 yaw/pitch 步进/回中，经 `simSetCameraPose`，**世界系参考**——机体倾斜时偏航仍绕竖直轴、俯仰仍水平，不会斜着转；**限位** 航向 ±45°/俯仰垂直上下即停，`config.py` 可调，到限即停不回绕到机尾；**平滑回中**——按恒定角速度转回机头正前方而非瞬跳，按方向键可打断；**记忆与重置**——地面站重启沿用上次视角，连接时比对相机实际姿态检测 UE 重新 play，play 过自动回中；**全部相机同步转动**，仅影响画面不影响飞机姿态；状态存于 `~/.flylab_gimbal.json`，删掉即恢复出厂回中） |
 | `ros_node.py` | ROS 节点：指令与目标框发布、模型标注订阅 |
 | `overlay.py` | 模型输出叠加接口（标注 schema） |
 | `main_window.py` | 地面站主窗口：左画面右功能区 |

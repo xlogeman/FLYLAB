@@ -130,8 +130,10 @@ class CameraViewWidget(QWidget):
         """云台控制面板: 方向键步进 + 回中 + 角度读数。
         仅 AirSim 相机源可用 (本机/文件源在 _refresh 里置灰)。"""
         step = config.GIMBAL_STEP_DEG
+        self._gimbal_btns = {}   # 方向键 -> 按钮 (到限位标红), 见 _update_gimbal_limit
+        self._btn_styles = {}    # 按钮当前样式缓存, 避免每帧重复 setStyleSheet
 
-        def dir_btn(text, tip, dyaw, dpitch):
+        def dir_btn(key, text, tip, dyaw, dpitch):
             b = QPushButton(text)
             b.setToolTip(f'{tip} (可按住连发)')
             b.setAutoRepeat(True)          # 按住连续步进, 模拟连续转动
@@ -139,25 +141,46 @@ class CameraViewWidget(QWidget):
             b.setAutoRepeatInterval(100)
             b.clicked.connect(
                 lambda: self.grabber.gimbal_step(dyaw, dpitch))
+            self._gimbal_btns[key] = b
             return b
 
         self.gimbal = QWidget()
         g = QGridLayout(self.gimbal)
         g.setContentsMargins(0, 0, 0, 0)
+        limit_tip = (f'限位: 航向 ±{config.GIMBAL_YAW_LIMIT_DEG:.0f}°, '
+                     f'俯仰 {config.GIMBAL_PITCH_MIN_DEG:.0f}°'
+                     f'~+{config.GIMBAL_PITCH_MAX_DEG:.0f}° (到限位该方向键标红)')
         title = QLabel('云台:')
         self.gimbal_angle = QLabel('航向 +0° 俯仰 +0°')
         self.gimbal_angle.setStyleSheet(
             'color: #444; font-family: monospace;')
+        self.gimbal_angle.setToolTip(limit_tip)
         g.addWidget(title, 0, 0, 1, 3)
-        g.addWidget(dir_btn('↑', f'俯仰上 {step}°', 0, +step), 1, 1)
-        g.addWidget(dir_btn('←', f'偏航左 {step}°', -step, 0), 2, 0)
+        g.addWidget(dir_btn('pitch+', '↑', f'俯仰上 {step}°', 0, +step), 1, 1)
+        g.addWidget(dir_btn('yaw-', '←', f'偏航左 {step}°', -step, 0), 2, 0)
         btn_center = QPushButton('回中')
-        btn_center.setToolTip('云台回中 (恢复挂载原始姿态)')
+        btn_center.setToolTip('云台回中 (平滑转动到挂载原始姿态, 按方向键可打断)')
         btn_center.clicked.connect(self.grabber.gimbal_reset)
         g.addWidget(btn_center, 2, 1)
-        g.addWidget(dir_btn('→', f'偏航右 {step}°', +step, 0), 2, 2)
-        g.addWidget(dir_btn('↓', f'俯仰下 {step}°', 0, -step), 3, 1)
+        g.addWidget(dir_btn('yaw+', '→', f'偏航右 {step}°', +step, 0), 2, 2)
+        g.addWidget(dir_btn('pitch-', '↓', f'俯仰下 {step}°', 0, -step), 3, 1)
         g.addWidget(self.gimbal_angle, 4, 0, 1, 3)
+
+    def _update_gimbal_limit(self, yaw, pitch):
+        """到限位提示: 该方向不能再转的方向键标红 (不禁用, 保持按住回转的
+        手感); 样式只在变化时更新。"""
+        eps = 1e-3
+        blocked = {
+            'yaw+': yaw >= config.GIMBAL_YAW_LIMIT_DEG - eps,
+            'yaw-': yaw <= -config.GIMBAL_YAW_LIMIT_DEG + eps,
+            'pitch+': pitch >= config.GIMBAL_PITCH_MAX_DEG - eps,
+            'pitch-': pitch <= config.GIMBAL_PITCH_MIN_DEG + eps,
+        }
+        for key, btn in self._gimbal_btns.items():
+            style = 'color: #d9534f; font-weight: bold;' if blocked[key] else ''
+            if self._btn_styles.get(key) != style:
+                btn.setStyleSheet(style)
+                self._btn_styles[key] = style
 
     def _on_source_changed(self):
         text = self.combo.currentText().strip()
@@ -209,6 +232,7 @@ class CameraViewWidget(QWidget):
         if gim is not None:
             yaw, pitch = gim
             self.gimbal_angle.setText(f'航向 {yaw:+.0f}° 俯仰 {pitch:+.0f}°')
+            self._update_gimbal_limit(yaw, pitch)
         frame, src, fps = self.grabber.get()
         if frame is None:
             self.status.setText(f'[{src}] 等待图像...')

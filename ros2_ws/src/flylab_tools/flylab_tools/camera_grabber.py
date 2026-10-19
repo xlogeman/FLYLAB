@@ -2,9 +2,12 @@
 """AirSim 相机抓取器 —— 直连 AirSim RPC 拉图 + 本机 V4L2 摄像头，与界面解耦。
 
 被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
-附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)。
+附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)，
+世界系参考：偏航绕世界竖直轴、俯仰绕水平轴，机体倾斜时方向依然端正，
+地平线不滚动（详见 _apply_gimbal）。
 """
 import glob
+import json
 import math
 import os
 import threading
@@ -29,6 +32,8 @@ except ImportError:
     sys.path.insert(0, '/root/flylab/Cosys-AirSim/PythonClient')
     import cosysairsim as airsim
 
+from . import config
+
 VEHICLE = 'PX4'
 GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RPC往返延迟))
 LOCAL_HZ = 30       # 本机摄像头拉取频率上限
@@ -38,12 +43,71 @@ DEFAULT_CAMERAS = ['left_cam', 'front_cam', 'right_cam', 'depth_cam']
 LOCAL_PREFIX = 'local:'   # 本机摄像头在下拉框里的条目前缀, 如 local:/dev/video0
 FILE_PREFIX = 'file:'     # 视频文件源前缀, 如 file:/path/to/demo.mp4 (循环播放)
 
-GIMBAL_PITCH_LIMIT = 90.0  # 云台俯仰限位(度), 正=向上; 偏航不设限, 按 ±180 归一化
+def _clamp_gimbal(yaw, pitch):
+    """按 config 限位夹紧云台角度 (config.GIMBAL_*_LIMIT_DEG)。"""
+    yaw = max(-config.GIMBAL_YAW_LIMIT_DEG,
+              min(config.GIMBAL_YAW_LIMIT_DEG, yaw))
+    pitch = max(config.GIMBAL_PITCH_MIN_DEG,
+                min(config.GIMBAL_PITCH_MAX_DEG, pitch))
+    return yaw, pitch
+
+
+# 云台状态持久化文件。地面站重启时沿用上次视角与安装基准 (UE 端相机并没
+# 被动过); 连接建立时对比相机实际姿态与上次下发值即可判断 UE 是否重新
+# play 过 —— play 过则回中重采基准, 没过则保持记忆 (见 _restore_or_reset)。
+_GIMBAL_STATE_FILE = os.path.join(os.path.expanduser('~'), '.flylab_gimbal.json')
+
+# 判定 UE 重新 play 的阈值 (度): 相机实际姿态与上次下发值相差超过该值
+_GIMBAL_REPLAY_THRESHOLD_DEG = 2.0
+
+
+def _load_gimbal_state():
+    """读取持久化的云台角度/安装位姿/上次下发姿态; 没有或损坏时返回空。"""
+    try:
+        with open(_GIMBAL_STATE_FILE) as f:
+            state = json.load(f)
+        gimbal = state.get('gimbal', [0.0, 0.0])
+        mounts = {}
+        for cam, (p, q) in state.get('mounts', {}).items():
+            try:
+                mounts[cam] = (airsim.Vector3r(*p), airsim.Quaternionr(*q))
+            except Exception:
+                pass
+        last_applied = {}
+        for cam, q in state.get('last_applied', {}).items():
+            try:
+                last_applied[cam] = airsim.Quaternionr(*q)
+            except Exception:
+                pass
+        return (_clamp_gimbal(float(gimbal[0]), float(gimbal[1])),
+                mounts, last_applied)
+    except Exception:
+        return (0.0, 0.0), {}, {}
+
+
+def _save_gimbal_state(gimbal, mounts, last_applied):
+    """持久化云台状态; 失败静默, 不影响主流程。"""
+    try:
+        data = {'gimbal': list(gimbal), 'mounts': {}, 'last_applied': {}}
+        for cam, mount in mounts.items():
+            if mount is None:
+                continue
+            pos, ori = mount
+            data['mounts'][cam] = [
+                [pos.x_val, pos.y_val, pos.z_val],
+                [ori.x_val, ori.y_val, ori.z_val, ori.w_val]]
+        for cam, q in last_applied.items():
+            data['last_applied'][cam] = [q.x_val, q.y_val, q.z_val, q.w_val]
+        with open(_GIMBAL_STATE_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception:
+        pass
 
 
 def _gimbal_quat(yaw_deg, pitch_deg):
-    """云台角度 -> NED 四元数 (相对机体: 先绕 z 偏航, 再绕 y 俯仰)。
+    """云台角度 -> NED 四元数 (先绕 z 偏航, 再绕 y 俯仰)。
     yaw 正=向右 (绕 NED +z, 即向下轴的右手旋转), pitch 正=向上 (绕 +y)。
+    在 _apply_gimbal 中按世界系轴解释: 偏航绕世界竖直轴, 俯仰绕水平轴。
     回中 (0,0) 即单位四元数 (相对安装姿态不动)。"""
     y1, p2 = math.radians(yaw_deg) / 2, math.radians(pitch_deg) / 2
     c1, s1, c2, s2 = math.cos(y1), math.sin(y1), math.cos(p2), math.sin(p2)
@@ -148,13 +212,15 @@ class Grabber(threading.Thread):
         self.file_seek = None           # 0..1, 待跳转的相对位置
         self.file_pos, self.file_total = 0.0, 0.0
         self.file_fps = 30.0
-        # 软件云台: 全局角度 (yaw, pitch), 同步作用于所有 AirSim 相机
-        self._gimbal = (0.0, 0.0)
+        # 软件云台: 全局角度 (yaw, pitch), 同步作用于所有 AirSim 相机。
+        # 状态持久化: 地面站重启沿用上次视角; 仅检测到 UE 重新 play 才回中,
+        # 见 _restore_or_reset (连接建立时调用)
+        (self._gimbal,
+         self._gimbal_mount,
+         self._gimbal_last) = _load_gimbal_state()
+        self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
+        self._anim_t_prev = 0.0
         self._gimbal_dirty = False
-        # 相机名 -> 首改前的安装位姿 (position, orientation)。相机在 settings.json
-        # 里常带下俯安装角 (如 front_cam pitch=-36.87°), 云台旋转必须叠加在
-        # 安装姿态之上, 回中才等价于恢复安装角; 不能用单位四元数当回中态
-        self._gimbal_mount = {}
         self.running = True
 
     def set_camera(self, name):
@@ -199,22 +265,27 @@ class Grabber(threading.Thread):
 
     def gimbal_step(self, dyaw, dpitch):
         """步进云台角度 (yaw 正=向右, pitch 正=向上), 同步作用到所有 AirSim
-        相机 (left/front/right/depth 一起转)。本机/视频文件源为空操作。"""
+        相机 (left/front/right/depth 一起转)。限位见 config.GIMBAL_*_LIMIT_DEG,
+        到限位后不再动作 (不会回绕到机尾)。本机/视频文件源为空操作。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
             yaw, pitch = self._gimbal
-            yaw = (yaw + dyaw + 180.0) % 360.0 - 180.0
-            pitch = max(-GIMBAL_PITCH_LIMIT,
-                        min(GIMBAL_PITCH_LIMIT, pitch + dpitch))
-            self._gimbal = (yaw, pitch)
+            self._gimbal = _clamp_gimbal(yaw + dyaw, pitch + dpitch)
+            self._gimbal_anim = None   # 手动操作打断回中动画
             self._gimbal_dirty = True
+            _save_gimbal_state(self._gimbal, self._gimbal_mount,
+                               self._gimbal_last)
 
     def gimbal_reset(self):
-        """云台回中 (恢复所有相机挂载原始姿态)。"""
+        """云台回中: 启动平滑回中动画 (非瞬跳), 角速度见
+        config.GIMBAL_SLEW_RATE_DEG_S; 按任意方向键可打断。"""
         with self.lock:
-            self._gimbal = (0.0, 0.0)
-            self._gimbal_dirty = True
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                self._gimbal = (0.0, 0.0)
+                return
+            self._gimbal_anim = (0.0, 0.0)
+            self._anim_t_prev = time.monotonic()
 
     def get_gimbal(self):
         """当前云台角度 (yaw, pitch)；非 AirSim 源返回 None。"""
@@ -222,6 +293,29 @@ class Grabber(threading.Thread):
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return None
             return self._gimbal
+
+    def _anim_tick(self):
+        """回中动画推进一步 (仅抓取线程调用, 须持锁): 以恒定角速度朝目标
+        (0,0) 推进, 时间驱动不受帧率影响; 到位后停用动画并持久化。"""
+        if self._gimbal_anim is None:
+            return
+        ty, tp = self._gimbal_anim
+        yaw, pitch = self._gimbal
+        dy, dp = ty - yaw, tp - pitch
+        dist = math.hypot(dy, dp)
+        now = time.monotonic()
+        dt = min(0.1, now - self._anim_t_prev)
+        self._anim_t_prev = now
+        max_d = config.GIMBAL_SLEW_RATE_DEG_S * dt
+        if dist <= max_d:
+            self._gimbal = (ty, tp)
+            self._gimbal_anim = None
+            _save_gimbal_state(self._gimbal, self._gimbal_mount,
+                               self._gimbal_last)
+        else:
+            s = max_d / dist
+            self._gimbal = _clamp_gimbal(yaw + dy * s, pitch + dp * s)
+        self._gimbal_dirty = True
 
     def _capture_mount(self, client, cam):
         """缓存相机安装位姿 (机体系)。
@@ -235,6 +329,12 @@ class Grabber(threading.Thread):
         info = client.simGetCameraInfo(cam, VEHICLE)
         kin = client.simGetGroundTruthKinematics(VEHICLE)
         q_b, p_b = kin.orientation, kin.position   # KinematicsState 字段是扁平的
+        # 机体明显倾斜时, 两次 RPC 之间的姿态变化会污染安装姿态基准
+        # (z 轴偏离竖直超过 ~5.7° 时告警); 建议静止平放时再首次使用云台
+        z_world = _quat_rot_vec(q_b, airsim.Vector3r(0.0, 0.0, 1.0))
+        if z_world.z_val < 0.995:
+            self.log('云台: 机体姿态倾斜中, 安装基准可能不准, 建议平放静止时'
+                     '使用云台 (重连一次可重采基准)')
         p_c, q_c = info.pose.position, info.pose.orientation
         # 安装姿态 (机体系): q_mount = q_body⁻¹ ⊗ q_cam_world
         q_rel = _quat_mul(_quat_conj(q_b), q_c)
@@ -245,11 +345,60 @@ class Grabber(threading.Thread):
         p_rel = _quat_rot_vec(_quat_conj(q_b), d)
         return p_rel, q_rel
 
+    def _restore_or_reset(self, client):
+        """连接建立时判断 UE 是否重新 play 过: 对比各相机当前机体系姿态与
+        上次下发值 (机体相对姿态不随飞机移动/姿态变化, 比对可靠)。
+        全部一致 => 地面站只是重启/重连, 相机没动过, 沿用记忆不碰相机;
+        有不一致 => UE 重玩过相机已复位, 云台回中并重采安装基准。"""
+        try:
+            with self.lock:
+                last = dict(self._gimbal_last)
+            if not last:
+                return                      # 首次运行, 无记忆可恢复
+            q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
+            replayed = False
+            for cam, q_cmd in last.items():
+                try:
+                    info = client.simGetCameraInfo(cam, VEHICLE)
+                except Exception:
+                    continue                # 相机不存在, 跳过比对
+                q_cur = _quat_mul(_quat_conj(q_b), info.pose.orientation)
+                # 四元数夹角: |dot| = cos(θ/2), q 与 -q 同旋转
+                dot = abs(q_cur.w_val * q_cmd.w_val
+                          + q_cur.x_val * q_cmd.x_val
+                          + q_cur.y_val * q_cmd.y_val
+                          + q_cur.z_val * q_cmd.z_val)
+                if dot < math.cos(math.radians(
+                        _GIMBAL_REPLAY_THRESHOLD_DEG) / 2.0):
+                    replayed = True
+                    break
+            with self.lock:
+                if replayed:
+                    self.log('检测到 UE 重新 play, 云台回中')
+                    self._gimbal = (0.0, 0.0)
+                    self._gimbal_mount = {}
+                    self._gimbal_dirty = True
+                else:
+                    self._gimbal_dirty = False   # 相机未动, 记忆仍然有效
+        except Exception as e:
+            self.log(f'云台状态检查失败, 保持当前状态: {e}')
+
     def _apply_gimbal(self, client, yaw_deg, pitch_deg):
         """把云台角度经 simSetCameraPose 同步写到所有 AirSim 相机。
-        姿态 = 云台角度 ⊗ 安装姿态 (角度按机体系解释, 叠加在 settings.json
-        的安装角之上), 位置沿用安装偏移; 单个相机不存在不影响其余相机。"""
+
+        simSetCameraPose 按"机体相对位姿"解释输入, 而机体在悬停/飞行中带着
+        姿态倾斜: 若把云台角直接叠加在机体系安装姿态上, 偏航绕的是机体 z 轴
+        而非竖直轴 —— 绕斜轴连续步进会沿斜锥面进动, 起初看着在左转, 转过
+        一定角度视角就甩到天上/地下, 俯仰也随之变斜、地平线滚动。
+
+        这里改为世界系参考: 先把安装姿态转到世界系, 叠加云台角 (偏航绕世界
+        竖直轴、俯仰绕随偏航的水平轴), 再用机体当前姿态反算回机体相对位姿
+        下发。机体怎么斜, 左右都是纯正的水平摇、上下都是正的俯仰。云台角
+        的偏航参考是机头朝向 (叠加在世界系安装姿态之上), 回中仍恢复挂载
+        原始姿态。"""
         try:
+            q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
+            applied = {}
             for cam in DEFAULT_CAMERAS:
                 if cam not in self._gimbal_mount:
                     try:
@@ -257,12 +406,26 @@ class Grabber(threading.Thread):
                     except Exception as e:
                         self._gimbal_mount[cam] = None   # 该相机不可用, 跳过
                         self.log(f'云台: 获取 {cam} 安装位姿失败, 跳过: {e}')
+                        continue
                 mount = self._gimbal_mount[cam]
                 if mount is None:
                     continue
                 pos, ori = mount
-                q = _quat_mul(_gimbal_quat(yaw_deg, pitch_deg), ori)
-                client.simSetCameraPose(cam, airsim.Pose(pos, q), VEHICLE)
+                # 安装姿态 -> 世界系, 叠加云台角, 再反算回机体系下发
+                q_mount_world = _quat_mul(q_b, ori)
+                q_des_world = _quat_mul(_gimbal_quat(yaw_deg, pitch_deg),
+                                        q_mount_world)
+                q_cmd = _quat_mul(_quat_conj(q_b), q_des_world)
+                try:
+                    client.simSetCameraPose(cam, airsim.Pose(pos, q_cmd), VEHICLE)
+                    applied[cam] = q_cmd
+                except Exception as e:
+                    self.log(f'云台: {cam} 下发失败: {e}')
+            if applied:
+                # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对) 并持久化
+                with self.lock:
+                    self._gimbal_last = applied
+                _save_gimbal_state(self._gimbal, self._gimbal_mount, applied)
         except Exception as e:
             # 失败不置回 dirty: 避免每帧重试刷屏; 重连或下次按键会重新下发
             self.log(f'云台控制失败: {e}')
@@ -384,12 +547,12 @@ class Grabber(threading.Thread):
                     client = airsim.VehicleClient(ip=self.host, port=self.port)
                     client.confirmConnection()
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
-                    # 用户转过云台 (非回中) 时重连后重新下发, 保持视角;
-                    # 未动过则完全不碰相机, 保留 settings.json 的安装角
-                    self._gimbal_dirty = self._gimbal != (0.0, 0.0)
+                    # 判断 UE 是否重新 play: play 过则回中, 没过则沿用记忆
+                    self._restore_or_reset(client)
 
                 is_depth = 'depth' in cam.lower()
                 with self.lock:
+                    self._anim_tick()    # 回中动画: 每帧推进并置 dirty
                     gim_dirty, gim = self._gimbal_dirty, self._gimbal
                 if gim_dirty:
                     self._apply_gimbal(client, *gim)
