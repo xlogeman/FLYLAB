@@ -38,16 +38,29 @@ GIMBAL_YAW_LIMIT_DEG = 45.0      # 偏航限位 ±45°
 GIMBAL_PITCH_MIN_DEG = -53.13    # 俯仰下限 (绝对 -90°, 垂直向下)
 GIMBAL_PITCH_MAX_DEG = 126.87    # 俯仰上限 (绝对 +90°, 垂直向上)
 
+# ---------- ArUco 降落 (主窗口独立按钮) ----------
+# 完整降落链路: 点击按钮拉起 aruco_landing_node (三态状态机:
+# 接管 offboard → 视觉对齐调速下降 → 满足条件切 PX4 AUTO.LAND),
+# 再次点击发 landing_stop 取消并交还控制权。
+# 与算法下拉框互不影响: ArUco检测可同时运行 (两路独立检测互不干扰)。
+# 使用前提: MicroXRCEAgent 在跑 + 飞机已解锁升空 + 画面为垂直向下视角看到码。
+LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node']
+LANDING_START_CMD = 'landing_start'
+LANDING_STOP_CMD = 'landing_stop'
+
 # ---------- 算法选择 (下拉框 + 运行/取消按钮) ----------
 # name=下拉框显示文字, start/stop=运行/取消时发布的指令。
 # cmd=算法节点启动命令 (可选): 填了则地面站点"运行"时自动拉起进程、点"取消"
 # 时自动回收; 不填则假定节点已在外部运行, 只发启停指令。
+# enables_landing=True 的算法是 ArUco 降落的前置条件 (该算法运行中且云台
+# 转到垂直向下, 主窗口的 "ArUco降落" 按钮才可点)。
 # 界面交互对所有算法统一: 新算法只要遵循"收到 start 指令开始、收到 stop
 # 指令停止"的约定, 在这里加一项即可出现在下拉框里。
 ALGORITHMS = [
     {'name': 'ArUco检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node'],
-     'start': 'aruco_start', 'stop': 'aruco_stop'},
+     'start': 'aruco_start', 'stop': 'aruco_stop',
+     'enables_landing': True},
     {'name': '目标检测', 'start': 'detect_start', 'stop': 'detect_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]

@@ -38,6 +38,7 @@ class MainWindow(QMainWindow):
         # 配了 cmd 的算法点运行时自动拉起进程 (用户无需手动 ros2 run)
         self.running_algo = None
         self.proc = None       # 本地面站拉起的算法进程 (Popen), 无则 None
+        self.land_proc = None  # ArUco 降落节点进程 (独立于算法进程)
         # 显示帧转发统计 (运行中每 2 秒打一条日志)
         self._fwd_count = 0
         self._fwd_last = time.monotonic()
@@ -60,6 +61,19 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.algo_run_btn, stretch=1)
         btn_row.addWidget(self.algo_cancel_btn)
         algo_lay.addLayout(btn_row)
+        # ArUco 降落: 独立 toggle 按钮 (与算法下拉框互不影响, 检测可同时运行)。
+        # 按下: 拉起 aruco_landing_node 并发 landing_start 触发三态状态机;
+        # 抬起: 发 landing_stop 取消降落并交还控制权。
+        # 默认禁用, 门控见 _update_landing_btn: 需 ArUco检测运行中 且
+        # 云台俯仰转到垂直向下才可点 (降落进行中保持可点, 随时可取消)。
+        self.landing_btn = QPushButton('ArUco降落')
+        self.landing_btn.setCheckable(True)
+        self.landing_btn.setEnabled(False)
+        self.landing_btn.setToolTip(
+            '需先: 1) 运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)')
+        self.landing_btn.setStyleSheet(self._LAND_BTN_STYLE)
+        self.landing_btn.clicked.connect(self._on_landing_toggle)
+        algo_lay.addWidget(self.landing_btn)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         self.setCentralWidget(self.camera_tab)
@@ -72,6 +86,11 @@ class MainWindow(QMainWindow):
     _BTN_STYLE = """
         QPushButton { min-height: 32px; }
         QPushButton:checked { background-color: #2d8a3e; color: white; }
+    """
+
+    _LAND_BTN_STYLE = """
+        QPushButton { min-height: 32px; }
+        QPushButton:checked { background-color: #b03030; color: white; }
     """
 
     # ---------- 算法运行/取消 (含进程生命周期管理) ----------
@@ -116,6 +135,59 @@ class MainWindow(QMainWindow):
             return
         self._stop_algo()
         self._update_algo_state()
+
+    # ---------- ArUco 降落 (独立 toggle 按钮) ----------
+
+    def _update_landing_btn(self):
+        """降落按钮门控 (33ms 轮询): ArUco检测运行中 且 云台俯仰到垂直向下
+        限位 (绝对 -90°, 即相对俯仰到 GIMBAL_PITCH_MIN_DEG) 才可点。
+        降落进行中不参与门控 —— 保持可点, 随时可取消交还控制权。"""
+        if self.landing_btn.isChecked():
+            return
+        ok = False
+        algo = self.running_algo
+        if algo is not None and algo.get('enables_landing'):
+            gim = self.camera_tab.grabber.get_gimbal()
+            if gim is not None:
+                _, pitch = gim
+                ok = pitch <= config.GIMBAL_PITCH_MIN_DEG + 1e-3
+        if self.landing_btn.isEnabled() != ok:
+            self.landing_btn.setEnabled(ok)
+
+    def _on_landing_toggle(self):
+        if self.landing_btn.isChecked():
+            self.node.get_logger().info(
+                f'启动降落节点进程: {" ".join(config.LANDING_CMD)}')
+            self.land_proc = subprocess.Popen(config.LANDING_CMD)
+            # 新进程 DDS 发现需要约 1s, 延迟发触发指令 (期间取消则跳过)
+            QTimer.singleShot(1000, self._send_landing_start)
+        else:
+            self._stop_landing()
+
+    def _send_landing_start(self):
+        """延迟触发降落; 按钮已抬起或节点进程已死则跳过。"""
+        if not self.landing_btn.isChecked():
+            return
+        if self.land_proc is not None and self.land_proc.poll() is not None:
+            self.node.get_logger().error(
+                f'降落节点进程启动失败 (退出码 {self.land_proc.returncode}), '
+                f'检查编译: colcon build --packages-select flylab_vision')
+            self.land_proc = None
+            self.landing_btn.setChecked(False)
+            return
+        self.node.publish_cmd(config.LANDING_START_CMD)
+
+    def _stop_landing(self):
+        """取消降落: 发 landing_stop (节点自行切回 LOITER 交还控制权并清标注),
+        稍后回收进程, 给节点留出发送停止指令与清屏的时间。"""
+        self.node.publish_cmd(config.LANDING_STOP_CMD)
+        proc = self.land_proc
+        self.land_proc = None
+
+        def _reap():
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+        QTimer.singleShot(500, _reap)
 
     def _stop_algo(self):
         """停掉正在运行的算法: 发停止指令 + 界面立即清标注 + 回收进程。"""
@@ -168,6 +240,7 @@ class MainWindow(QMainWindow):
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
         self._check_algo_alive()
+        self._update_landing_btn()   # 降落按钮门控 (检测运行中 + 云台垂直向下)
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
@@ -209,4 +282,9 @@ class MainWindow(QMainWindow):
         """优雅退出: 回收算法进程, 停掉后台线程。"""
         if self.running_algo is not None:
             self._stop_algo()
+        if self.land_proc is not None:
+            if self.land_proc.poll() is None:
+                self.node.publish_cmd(config.LANDING_STOP_CMD)
+                self.land_proc.terminate()
+            self.land_proc = None
         self.camera_tab.shutdown()
