@@ -3,7 +3,7 @@
 // SUPER (hku-mars fsm_node) 输出的是 mars_quadrotor_msgs/PositionCommand
 // (自定义消息, 比 flylab tracker 用的标准 quadrotor_msgs/PositionCommand
 // 多了 angular_velocity/attitude/thrust/jerk 等字段), 而 tracker 链路
-// (tracker_px4 / tracker_mavros) 统一订阅标准 quadrotor_msgs/PositionCommand。
+// (tracker_uxrce / tracker_mavros) 统一订阅标准 quadrotor_msgs/PositionCommand。
 // 本节点把两者对接: 订阅 SUPER 控制指令, 转成标准消息发给 tracker,
 // 使 SUPER 与 EGO-Planner 共用同一套轨迹跟踪链路。
 //

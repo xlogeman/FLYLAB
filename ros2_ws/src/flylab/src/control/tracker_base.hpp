@@ -1,6 +1,6 @@
 // tracker_base.hpp —— 避障规划轨迹跟踪节点公共基类
 //
-// tracker_px4 (uXRCE-DDS 链路) 与 tracker_mavros (MAVROS 链路) 的
+// tracker_uxrce (uXRCE-DDS 链路) 与 tracker_mavros (MAVROS 链路) 的
 // 控制逻辑一致, 因此把共用部分收敛到这里:
 //   共用 (基类): 参数声明 / RViz 目标点拦截与转发 / 规划指令缓存与事件驱动下发 /
 //                到达检测 (距离+速度双条件) / OFFBOARD 状态机骨架

@@ -2,7 +2,7 @@
 //
 // 可执行名: tracker_mavros
 // 链路: MAVROS (UDP 14540), 不依赖 MicroXRCEAgent / px4_msgs
-// 与 tracker_px4 共用 tracker_base.hpp 的控制逻辑,
+// 与 tracker_uxrce 共用 tracker_base.hpp 的控制逻辑,
 // 本文件只实现 MAVROS 传输层: ENU 轨迹直接透传 / set_mode 服务 / mavros 状态源
 // 注: MAVROS setpoint_raw 插件输入为 ENU 语义, 内部负责 ENU->NED 转换 (含 yaw/yaw_rate)
 #include <array>

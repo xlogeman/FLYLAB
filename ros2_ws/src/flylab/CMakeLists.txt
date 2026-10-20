@@ -84,8 +84,8 @@ add_airsim_sensor_node(airsim_nav    src/sensors/airsim_nav.cpp)
 add_airsim_sensor_node(airsim_lidar  src/sensors/airsim_lidar.cpp)
 
 # 轨迹跟踪节点: 接收规划器轨迹并转成 PX4 setpoint 下发 (uXRCE-DDS 链路)
-add_executable(tracker_px4 src/control/tracker_px4.cpp)
-ament_target_dependencies(tracker_px4
+add_executable(tracker_uxrce src/control/tracker_uxrce.cpp)
+ament_target_dependencies(tracker_uxrce
   rclcpp
   px4_msgs
   geometry_msgs
@@ -153,7 +153,7 @@ install(TARGETS
   bridge_vio
   bridge_fastlio
   bridge_super
-  tracker_px4
+  tracker_uxrce
   tracker_mavros
   super_cmd_bridge
   DESTINATION lib/${PROJECT_NAME}

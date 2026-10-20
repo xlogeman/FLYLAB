@@ -7,7 +7,7 @@
 ///
 /// 封装内容:
 ///   - /fmu/in 三个发布者: offboard_control_mode / trajectory_setpoint / vehicle_command
-///     (QoS 与 flylab/tracker_px4 一致: best_effort + transient_local)
+///     (QoS 与 flylab/tracker_uxrce 一致: best_effort + transient_local)
 ///   - /fmu/out 三个订阅者: vehicle_status / vehicle_local_position / vehicle_command_ack
 ///   - 诊断日志: 链路建立、模式切换跟踪、failsafe 告警、切模式 ACK 结果
 ///   - 常用指令: 机体系 FRD 速度 setpoint (自动按 heading 旋到 NED)、悬停、
@@ -26,7 +26,7 @@
 ///   - 速度指令一律机体系 FRD: x 前 y 右 z 下, "下"为正 = 下降
 ///   - setpoint 最终发 NED (按当前 heading 旋转), yaw 保持当前机头
 ///
-/// 注意: 不要与避障 tracker_px4/tracker_mavros 同时运行 (会争抢 /fmu/in setpoint)。
+/// 注意: 不要与避障 tracker_uxrce/tracker_mavros 同时运行 (会争抢 /fmu/in setpoint)。
 
 #include <chrono>
 #include <cmath>

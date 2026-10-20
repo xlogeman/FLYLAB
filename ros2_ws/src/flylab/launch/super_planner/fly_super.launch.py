@@ -7,22 +7,22 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 # SUPER 避障飞行一键启动 (支持 tracker 参数选择控制链路):
-#   ros2 launch flylab fly_super.launch.py                     # 默认 uXRCE-DDS 链路
-#   ros2 launch flylab fly_super.launch.py tracker:=mavros     # MAVROS 链路
+#   ros2 launch flylab fly_super.launch.py                     # 默认 MAVROS 链路
+#   ros2 launch flylab fly_super.launch.py tracker:=uxrce      # uXRCE-DDS 链路
 # 等价于同时启动以下组件:
 #   1. airsim_lidar + airsim_odom + bridge_super
 #                        AirSim 直连传感器节点 (原始点云/真值里程计) + SUPER 输入适配桥接
 #   2. fsm_node                  SUPER 规划器 (hku-mars), 目标点来自 tracker 转发的 /goal_pose_3d
 #   3. super_cmd_bridge          SUPER 输出桥接: mars PositionCommand -> 标准 PositionCommand
 #   4. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
-#      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
-#   5. tracker_mavros / tracker_px4  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
+#      tracker:=uxrce 时可用 xrce:=true 启动 MicroXRCEAgent
+#   5. tracker_mavros / tracker_uxrce  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
 #   6. rviz2                     SUPER 链路 RViz 可视化
 # 前提: PX4 SITL + UE/AirSim 已启动; UE 端 settings.json 需含 Lidar1 雷达
 #       (默认 GPU 雷达 SensorType 8, 与 fast_lio 链路共用 configs/fast_lio/settings.json)
 # 可选:
-#   tracker:=px4|mavros          轨迹跟踪链路选择 (默认 px4, 即 uXRCE-DDS 直连)
-#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=px4 时需要)
+#   tracker:=uxrce|mavros        轨迹跟踪链路选择 (默认 mavros, 即 MAVROS 桥)
+#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=uxrce 时需要)
 #   mavros:=false                不启动 MAVROS (tracker:=mavros 且已手动启动过时使用)
 #   fcu_url:=udp://:14542@       MAVROS 连接串, 默认指向 PX4 的 MAVROS 专属实例 (14582→14542)
 #   rviz:=false                  不启动 RViz
@@ -35,7 +35,7 @@ def generate_launch_description():
 
     use_rviz = LaunchConfiguration('rviz', default='true')
     start_xrce = LaunchConfiguration('xrce', default='false')
-    tracker = LaunchConfiguration('tracker', default='px4')
+    tracker = LaunchConfiguration('tracker', default='mavros')
     start_mavros = LaunchConfiguration('mavros', default='true')
     fcu_url = LaunchConfiguration('fcu_url', default='udp://:14542@')
     gpu_lidar = LaunchConfiguration('gpu_lidar', default='true')
@@ -47,9 +47,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('rviz', default_value='true', description='是否启动 RViz'),
-        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (tracker:=px4 时需要)'),
-        DeclareLaunchArgument('tracker', default_value='px4', choices=['mavros', 'px4'],
-                              description='轨迹跟踪链路: px4=uXRCE-DDS 直连 (默认) / mavros=MAVROS 桥'),
+        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (tracker:=uxrce 时需要)'),
+        DeclareLaunchArgument('tracker', default_value='mavros', choices=['mavros', 'uxrce'],
+                              description='轨迹跟踪链路: mavros=MAVROS 桥 (默认) / uxrce=uXRCE-DDS 直连'),
         DeclareLaunchArgument('mavros', default_value='true', description='是否随 launch 启动 MAVROS'),
         DeclareLaunchArgument('fcu_url', default_value='udp://:14542@', description='MAVROS 飞控连接串'),
         DeclareLaunchArgument('gpu_lidar', default_value='true',
@@ -133,10 +133,10 @@ def generate_launch_description():
         ),
         Node(
             package='flylab',
-            executable='tracker_px4',
-            name='tracker_px4_node',
+            executable='tracker_uxrce',
+            name='tracker_uxrce_node',
             output='screen',
-            condition=IfCondition(PythonExpression(["'", tracker, "' == 'px4'"])),
+            condition=IfCondition(PythonExpression(["'", tracker, "' == 'uxrce'"])),
         ),
 
         # 6. RViz 可视化 (rviz:=false 可关闭)

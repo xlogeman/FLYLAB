@@ -8,21 +8,21 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 # EGO 避障飞行一键启动 (支持 tracker 参数选择控制链路):
-#   ros2 launch flylab fly_ego.launch.py                     # 默认 uXRCE-DDS 链路
-#   ros2 launch flylab fly_ego.launch.py tracker:=mavros     # MAVROS 链路
+#   ros2 launch flylab fly_ego.launch.py                     # 默认 MAVROS 链路
+#   ros2 launch flylab fly_ego.launch.py tracker:=uxrce      # uXRCE-DDS 链路
 # 等价于同时启动以下组件:
 #   1. airsim_camera/airsim_imu/airsim_odom/airsim_nav
 #                               AirSim 直连传感器节点 (可插拔: 深度图/IMU/里程计/GPS/气压计/磁力计)
 #   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
 #   3. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
-#      tracker:=px4 时可用 xrce:=true 启动 MicroXRCEAgent
+#      tracker:=uxrce 时可用 xrce:=true 启动 MicroXRCEAgent
 #      注意: PX4 SITL 的 14540/14580 onboard 实例对端会被 AirSim 控制通道 (UnrealEditor, UDP 14580) 抢占,
 #      MAVROS 必须使用 14582↔14542 专属实例 (见 px4-rc.mavlink)
-#   4. tracker_mavros / tracker_px4  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
+#   4. tracker_mavros / tracker_uxrce  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
 #   5. rviz2                     EGO 链路 RViz 可视化
 # 可选:
-#   tracker:=px4|mavros          轨迹跟踪链路选择 (默认 px4, 即 uXRCE-DDS 直连)
-#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=px4 时需要, 已手动启动则保持 false)
+#   tracker:=uxrce|mavros        轨迹跟踪链路选择 (默认 mavros, 即 MAVROS 桥)
+#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=uxrce 时需要, 已手动启动则保持 false)
 #   mavros:=false                不启动 MAVROS (tracker:=mavros 且已手动启动过时使用)
 #   fcu_url:=udp://:14542@       MAVROS 连接串, 默认指向 PX4 的 MAVROS 专属实例 (14582→14542)
 #   rviz:=false                  不启动 RViz
@@ -36,7 +36,7 @@ def generate_launch_description():
 
     use_rviz = LaunchConfiguration('rviz', default='true')
     start_xrce = LaunchConfiguration('xrce', default='false')
-    tracker = LaunchConfiguration('tracker', default='px4')
+    tracker = LaunchConfiguration('tracker', default='mavros')
     start_mavros = LaunchConfiguration('mavros', default='true')
     fcu_url = LaunchConfiguration('fcu_url', default='udp://:14542@')
     drone_id = LaunchConfiguration('drone_id', default='0')
@@ -48,9 +48,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('rviz', default_value='true', description='是否启动 RViz'),
-        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (tracker:=px4 时需要, 已手动启动则保持 false)'),
-        DeclareLaunchArgument('tracker', default_value='px4', choices=['mavros', 'px4'],
-                              description='轨迹跟踪链路: px4=uXRCE-DDS 直连 (默认) / mavros=MAVROS 桥'),
+        DeclareLaunchArgument('xrce', default_value='false', description='是否启动 MicroXRCEAgent (tracker:=uxrce 时需要, 已手动启动则保持 false)'),
+        DeclareLaunchArgument('tracker', default_value='mavros', choices=['mavros', 'uxrce'],
+                              description='轨迹跟踪链路: mavros=MAVROS 桥 (默认) / uxrce=uXRCE-DDS 直连'),
         DeclareLaunchArgument('mavros', default_value='true', description='是否随 launch 启动 MAVROS (tracker:=mavros 且已手动启动则设为 false)'),
         DeclareLaunchArgument('fcu_url', default_value='udp://:14542@', description='MAVROS 飞控连接串 (PX4 MAVROS 专属实例 14582→14542)'),
         DeclareLaunchArgument('drone_id', default_value='0', description='Drone ID'),
@@ -126,12 +126,12 @@ def generate_launch_description():
         ),
         Node(
             package='flylab',
-            executable='tracker_px4',
-            name='tracker_px4_node',
+            executable='tracker_uxrce',
+            name='tracker_uxrce_node',
             output='screen',
             parameters=[{'pos_cmd_topic': PythonExpression(
                 ["'/drone_' + '", drone_id, "' + '_planning/pos_cmd'"])}],
-            condition=IfCondition(PythonExpression(["'", tracker, "' == 'px4'"])),
+            condition=IfCondition(PythonExpression(["'", tracker, "' == 'uxrce'"])),
         ),
 
         # 5. RViz 可视化 (rviz:=false 可关闭)

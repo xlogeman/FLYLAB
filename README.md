@@ -22,12 +22,12 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
 | 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图 |
-| EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|px4` 选择跟踪链路 |
+| EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|uxrce` 选择跟踪链路 |
 | OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
 | VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
 | ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
-| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（GPULidar，参数对齐 Livox Mid-360） |
-| SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划（ROG-Map 占据地图）→ 桥接 → PX4 跟踪；与 EGO 共用 tracker 链路，`tracker:=mavros\|px4` 选择跟踪链路 |
+| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计 |
+| SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划 → 桥接 → PX4 跟踪；`tracker:=mavros\|uxrce` 选择跟踪链路 |
 
 ### 2.2. 节点一览
 
@@ -39,7 +39,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | `airsim_imu` | `/airsim/imu/data_raw`（FRD 原生）<br>`/airsim/imu/data`（FLU 标准） | 200Hz；时间戳统一映射仿真时钟；重复采样去重；`inject_bias` 可选偏置注入 |
 | `airsim_odom` | `/airsim/odom`（world 系 ENU）+ TF | 真值里程计 100Hz；时间戳与 LiDAR/IMU 同一时间轴 |
 | `airsim_nav` | `/airsim/gps` `/airsim/baro` `/airsim/mag` | 低频导航传感器 50Hz |
-| `airsim_lidar` | `/airsim/lidar/points_raw` | 原始点云（传感器系 NED）+ 逐点时间模型（CPU 快照 / GPU 段级真实渲染时刻） |
+| `airsim_lidar` | `/airsim/lidar/points_raw` | 原始点云（传感器系 NED）+ 逐点时间模型 |
 
 | 桥接节点 | 输入 → 输出 | 说明 |
 |---|---|---|
@@ -47,7 +47,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | `bridge_fastlio` | `points_raw` → `/airsim/lidar/points` | NED→FLU + 挂载外参静态 TF `base_link→lidar_link` + 恒等 TF `body→base_link` |
 | `bridge_super` | `points_raw`+odom → `/cloud_registered` `/lidar_slam/odom` | 点云→world 系 ENU：位姿按点云时刻插值对齐 + 逐点去畸变 + 机身回波过滤 |
 
-其他节点：`tracker_px4`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|px4` 选择链路）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）
+其他节点：`tracker_uxrce`/`tracker_mavros`（轨迹跟踪+PX4 混控，`tracker:=mavros\|uxrce` 选择链路，uxrce = uXRCE-DDS 直连）、`super_cmd_bridge`（mars→标准 PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）
 
 ### 2.3. 环境依赖
 
@@ -73,11 +73,11 @@ source install/setup.bash
 bash /root/flylab/scripts/run-px4.sh                          # PX4 SITL (默认机型 none_iris)
 bash /root/flylab/scripts/run-px4.sh none_fucker_3120g_tw23 --clean   # 指定机型启动 (换机型用--clean 清缓存)
 
-MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (tracker:=px4 链路需要)
+MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (仅 tracker:=uxrce 链路需要)
 
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
-ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 uXRCE-DDS 跟踪)
-ros2 launch flylab fly_ego.launch.py tracker:=mavros # EGO 避障 (MAVROS 跟踪, 用专属端口 14542)
+ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 MAVROS 跟踪, 专属端口 14542)
+ros2 launch flylab fly_ego.launch.py tracker:=uxrce  # EGO 避障 (uXRCE-DDS 跟踪)
 ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar)
 ```
 
@@ -103,7 +103,7 @@ ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar)
 ros2 run flylab_tools ground_station   # 地面站总界面
 ```
 
-**新算法接入**（约定式，界面零改动）：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
+**新算法接入**：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
 
 **显示画面转发**：地面站把当前显示帧（深度伪彩帧除外）以 30Hz 原分辨率发到 `/flylab/display/image_raw`，算法节点订阅它即可处理「用户正在看的画面」——无论输入源是 UE 相机、本机摄像头还是视频文件，切换对算法透明。无订阅者时自动跳过序列化不占 CPU；算法要吃原始相机话题时用 `-p image_topic:=/airsim/cam/front_cam/image_raw` 覆盖。
 
@@ -128,7 +128,7 @@ flylab_vision/
 ├── include/aruco/aruco_detector.hpp   # 核心库接口 (无 ROS 依赖)
 ├── src/aruco/aruco_detector.cpp       # 检测 / IPPE_SQUARE 位姿 / 标注 JSON
 ├── src/aruco/aruco_node.cpp           # ROS2 节点
-├── models/<task>/                     # 预训练权重按任务分类 (体积大, gitignore, 按需下载)
+├── models/<task>/                     # 预训练权重按任务分类
 └── CMakeLists.txt / package.xml
 ```
 
@@ -228,7 +228,7 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 | UDP 14580→14540 | onboard 实例 | **被 AirSim 控制通道抢占**（见下） |
 | UDP 14582→14542 | **MAVROS 专属实例** | MAVROS `fcu_url:=udp://:14542@` |
 | UDP 18570→14550 | GCS 实例 | QGC 等 |
-| UDP 8888 | uXRCE-DDS（`tracker:=px4` 链路） | MicroXRCEAgent |
+| UDP 8888 | uXRCE-DDS（`tracker:=uxrce` 链路） | MicroXRCEAgent |
 | TCP 41451 | AirSim RPC API（传感器/相机直连） | airsim_sensor_* / flylab_tools |
 
 **坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580
