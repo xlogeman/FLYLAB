@@ -32,8 +32,6 @@ class MainWindow(QMainWindow):
         self.camera_tab = CameraViewWidget(
             self.node.get_logger().info, host, config.AIRSIM_RPC_PORT,
             side_panel=True)
-        self.camera_tab.video.set_select_enabled(config.SELECT_TARGET)
-        self.camera_tab.video.bbox_selected.connect(self._on_bbox_selected)
 
         # 算法选择: 下拉框选算法 + 运行/取消按钮, 插到右栏输入源下方。
         # 同一时刻只跑一个算法; 运行中下拉框锁定, 取消后恢复。
@@ -75,9 +73,6 @@ class MainWindow(QMainWindow):
         QPushButton { min-height: 32px; }
         QPushButton:checked { background-color: #2d8a3e; color: white; }
     """
-
-    def _on_bbox_selected(self, x, y, w, h):
-        self.node.publish_bbox(x, y, w, h)
 
     # ---------- 算法运行/取消 (含进程生命周期管理) ----------
 
@@ -168,6 +163,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.camera_tab.video.set_annotations(self.node.get_annotations())
+        # HUD 第二行: 算法输出帧率 (运行中才显示, 停止/无输出自动隐藏)
+        fps = self.node.get_algo_fps() if self.running_algo is not None else 0.0
+        self.camera_tab.video.set_algo_hud(
+            f'解算 {fps:.1f}' if fps > 0 else None)
         self._check_algo_alive()
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:

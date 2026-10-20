@@ -14,8 +14,9 @@ add_side_widget() 往右栏插工具按钮 (ground_station 用)
 经 simSetCameraPose 实现, 仅影响画面不影响飞机姿态。
 """
 import os
+import threading
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout,
                            QHBoxLayout, QLabel, QPushButton, QSlider,
                            QVBoxLayout, QWidget)
@@ -29,6 +30,16 @@ FILE_OPEN_ITEM = '打开视频文件...'
 VIDEO_FILTER = '视频 (*.mp4 *.avi *.mkv *.mov *.webm);;所有文件 (*)'
 
 
+class _SourceCombo(QComboBox):
+    """输入源下拉框: 展开时触发重扫本机摄像头 (运行中热插拔即时可见)。"""
+    popup_shown = pyqtSignal()
+    cams_found = pyqtSignal(list)
+
+    def showPopup(self):
+        self.popup_shown.emit()
+        super().showPopup()
+
+
 class CameraViewWidget(QWidget):
     def __init__(self, log, host, port, side_panel=False, parent=None):
         super().__init__(parent)
@@ -37,13 +48,16 @@ class CameraViewWidget(QWidget):
         self.grabber.start()
         self._file_map = {}    # 下拉框显示名 -> 视频文件完整路径
 
-        # 输入源下拉框
-        self.combo = QComboBox()
+        # 输入源下拉框 (展开时重扫本机摄像头, 支持启动后插入设备)
+        self._scanning = False
+        self.combo = _SourceCombo()
         self.combo.setEditable(True)
         self.combo.addItems(
             list(DEFAULT_CAMERAS)
             + [f'{LOCAL_PREFIX}{d}' for d in list_local_cameras()]
             + [FILE_OPEN_ITEM])
+        self.combo.popup_shown.connect(self._refresh_local_cameras)
+        self.combo.cams_found.connect(self._add_local_cameras)
         self.combo.activated.connect(self._on_source_changed)
         self.combo.lineEdit().returnPressed.connect(self._on_source_changed)
 
@@ -182,6 +196,28 @@ class CameraViewWidget(QWidget):
                 btn.setStyleSheet(style)
                 self._btn_styles[key] = style
 
+    def _refresh_local_cameras(self):
+        """下拉展开时后台重扫 /dev/video*，新插入的摄像头即时出现在列表里。
+        本地探测不经 AirSim，没开 UE 也能选；WSL2 下摄像头需先 usbipd attach。"""
+        if self._scanning:
+            return
+        self._scanning = True
+
+        def scan():
+            cams = list_local_cameras()
+            self._scanning = False
+            if cams:
+                self.combo.cams_found.emit(cams)
+
+        threading.Thread(target=scan, daemon=True).start()
+
+    def _add_local_cameras(self, devs):
+        """把新发现的设备加进下拉框 (信号在 GUI 线程触发, 线程安全)。"""
+        for dev in devs:
+            item = f'{LOCAL_PREFIX}{dev}'
+            if self.combo.findText(item) < 0:
+                self.combo.addItem(item)
+
     def _on_source_changed(self):
         text = self.combo.currentText().strip()
         if not text:
@@ -242,7 +278,7 @@ class CameraViewWidget(QWidget):
         if is_depth:
             arr = colorize_depth(arr)
         self.video.show_frame(arr)
-        self.video.set_hud(f'{fps:.1f} fps')   # 帧率显示在画面左上角
+        self.video.set_hud(f'图传 {fps:.1f}')   # 帧率显示在画面左上角
         self.status.setText('')                # 源/分辨率不再展示
 
     def _refresh_playback(self):

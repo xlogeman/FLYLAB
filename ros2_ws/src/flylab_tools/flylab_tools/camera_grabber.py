@@ -222,6 +222,7 @@ class Grabber(threading.Thread):
         self._anim_t_prev = 0.0
         self._gimbal_dirty = False
         self.running = True
+        self._conn_last_log = 0.0   # AirSim 未连接时的日志节流 (每 10 秒一条)
 
     def set_camera(self, name):
         with self.lock:
@@ -544,8 +545,23 @@ class Grabber(threading.Thread):
                     self.cap.release()
                     self.cap = self.cap_dev = None
                 if client is None:
+                    # 连接探测必须用短超时探针: VehicleClient 默认 RPC 超时
+                    # 长达 3600s (client.py timeout_value=3600), UE 未 play 时
+                    # confirmConnection 里的同步 ping 会把抓取线程阻塞在
+                    # 这里, 切到本机摄像头/文件源也回不到循环顶 —— 直到
+                    # UE play ping 通才恢复。探针 2s ping 通才建正式连接。
+                    try:
+                        probe = airsim.VehicleClient(
+                            ip=self.host, port=self.port, timeout_value=0.5)
+                        probe.ping()
+                    except Exception as e:
+                        # 未连接状态持续重试: 节流到每 10 秒一条, 不刷屏
+                        if time.monotonic() - self._conn_last_log > 10.0:
+                            self.log(f'等待 AirSim {self.host}:{self.port}: {e}')
+                            self._conn_last_log = time.monotonic()
+                        time.sleep(1.0)
+                        continue
                     client = airsim.VehicleClient(ip=self.host, port=self.port)
-                    client.confirmConnection()
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
                     # 判断 UE 是否重新 play: play 过则回中, 没过则沿用记忆
                     self._restore_or_reset(client)

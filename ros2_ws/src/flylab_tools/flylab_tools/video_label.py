@@ -11,11 +11,13 @@ from PyQt5.QtWidgets import QLabel
 
 
 class VideoLabel(QLabel):
-    """视频画面 + 可选的拖拽框选交互。
+    """视频画面 + 可选的拖拽框选交互 (休眠接口, 默认关闭)。
 
-    框选流程：鼠标左键按下开始 -> 画面自动冻结 -> 拖出矩形 ->
-    回车或双击确认 (emit bbox_selected) / Esc 取消 (emit selection_cancelled)。
-    """
+    地面站当前没有算法消费目标框, 框选整体停用 —— 点击/拖动画面无任何反应。
+    将来接入目标选取类算法时, 重新启用只需两行:
+        video.set_select_enabled(True)          # 按下左键冻结画面, 拖出矩形
+        video.bbox_selected.connect(handler)    # 回调收到原图坐标 x, y, w, h
+    确认: 回车或双击; 取消: Esc。"""
 
     bbox_selected = pyqtSignal(int, int, int, int)   # 原图坐标 x, y, w, h
     selection_cancelled = pyqtSignal()
@@ -34,7 +36,8 @@ class VideoLabel(QLabel):
         self._sel_start = None    # QPoint (widget 坐标)
         self._sel_cur = None
         self._annotations = []    # 模型输出标注 (overlay.py schema)
-        self._hud = None          # 画面左上角 HUD 文字 (如帧率)
+        self._hud = None          # 画面左上角 HUD 文字 (如图像帧率)
+        self._hud_algo = None     # HUD 第二行 (算法输出帧率)
 
     # ---------- 帧显示 ----------
 
@@ -129,35 +132,51 @@ class VideoLabel(QLabel):
         self._hud = text
         self._redraw()
 
+    def set_algo_hud(self, text):
+        """设置 HUD 第二行文字 (如 '算法 15.0 fps')，None 隐藏。"""
+        if text == self._hud_algo:
+            return
+        self._hud_algo = text
+        self._redraw()
+
     def _redraw(self):
         if self._pixmap is None:
             return
-        pm = self._pixmap
-        if self._sel_start is not None and self._sel_cur is not None:
-            pm = pm.copy()
-            painter = QPainter(pm)
-            painter.setPen(QPen(Qt.green, 2))
-            painter.drawRect(QRect(self._sel_start, self._sel_cur).normalized())
-            painter.end()
-        scaled = pm.scaled(
+        # 先缩放, 之后所有绘制都在缩放后 pixmap 的坐标系里进行:
+        # pixmap 会按 AlignCenter 居中显示, 尺寸 = 原图 * scale (KeepAspectRatio)
+        scaled = self._pixmap.scaled(
             self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
         painter = QPainter(scaled)
+        if self._sel_start is not None and self._sel_cur is not None:
+            # 选择框: widget 坐标 -> pixmap 坐标 (减去居中黑边偏移)
+            ox = (self.width() - scaled.width()) // 2
+            oy = (self.height() - scaled.height()) // 2
+            painter.setPen(QPen(Qt.green, 2))
+            painter.drawRect(QRect(self._sel_start, self._sel_cur)
+                             .normalized().translated(-ox, -oy))
         if self._annotations:
-            self._draw_annotations(painter)
-        if self._hud:
+            self._draw_annotations(painter, scaled)
+        if self._hud or self._hud_algo:
             self._draw_hud(painter)
         painter.end()
         self.setPixmap(scaled)
 
     def _draw_hud(self, painter):
-        """左上角 HUD 文字, 半透明黑底保证任何画面下都可读。"""
+        """左上角 HUD 文字 (可多行: 图像帧率 + 算法输出帧率),
+        半透明黑底保证任何画面下都可读。"""
+        lines = [t for t in (self._hud, self._hud_algo) if t]
+        if not lines:
+            return
         fm = painter.fontMetrics()
         pad = 4
-        w = fm.horizontalAdvance(self._hud) + 2 * pad
-        h = fm.height() + 2 * pad
+        w = max(fm.horizontalAdvance(t) for t in lines) + 2 * pad
+        h = len(lines) * fm.height() + 2 * pad
         painter.fillRect(QRect(4, 4, w, h), QColor(0, 0, 0, 140))
         painter.setPen(QPen(QColor(255, 255, 255)))
-        painter.drawText(4 + pad, 4 + pad + fm.ascent(), self._hud)
+        y = 4 + pad + fm.ascent()
+        for t in lines:
+            painter.drawText(4 + pad, y, t)
+            y += fm.height()
 
     # ---------- 模型输出叠加 ----------
 
@@ -168,21 +187,20 @@ class VideoLabel(QLabel):
         self._annotations = annos
         self._redraw()
 
-    def _draw_annotations(self, painter):
-        """把原图坐标的标注画到已缩放的显示 pixmap 上。"""
+    def _draw_annotations(self, painter, scaled):
+        """把原图坐标的标注画到缩放后的显示 pixmap 上
+        (pixmap 即缩放后的图像本身, 无需再加居中偏移)。"""
         w, h = self._img_size
         if w == 0 or h == 0:
             return
-        scale = min(self.width() / w, self.height() / h)
-        dx = (self.width() - w * scale) / 2
-        dy = (self.height() - h * scale) / 2
+        scale = scaled.width() / w
         lw = max(1, round(2 * scale))
         for a in self._annotations:
             c = QColor(*a.get('color', [0, 255, 0]))
             label = a.get('label', '')
             if a['type'] == 'bbox':
                 x, y, bw, bh = a['box']
-                r = QRectF(dx + x * scale, dy + y * scale,
+                r = QRectF(x * scale, y * scale,
                            bw * scale, bh * scale)
                 painter.setPen(QPen(c, lw))
                 painter.drawRect(r)
@@ -194,18 +212,16 @@ class VideoLabel(QLabel):
                 px, py = a['point']
                 painter.setPen(QPen(c, lw))
                 painter.drawEllipse(
-                    QPointF(dx + px * scale, dy + py * scale), lw * 2, lw * 2)
+                    QPointF(px * scale, py * scale), lw * 2, lw * 2)
                 if label:
                     painter.setPen(QPen(c))
                     painter.drawText(
-                        int(dx + px * scale) + 6, int(dy + py * scale) - 4,
-                        label)
+                        int(px * scale) + 6, int(py * scale) - 4, label)
             elif a['type'] == 'polyline':
                 pts = a['points']
                 if len(pts) < 2:
                     continue
-                qpts = [QPointF(dx + px * scale, dy + py * scale)
-                        for px, py in pts]
+                qpts = [QPointF(px * scale, py * scale) for px, py in pts]
                 painter.setPen(QPen(c, lw))
                 painter.drawPolyline(QPolygonF(qpts))
                 if a.get('close'):
@@ -213,5 +229,5 @@ class VideoLabel(QLabel):
             elif a['type'] == 'text':
                 tx, ty = a['pos']
                 painter.setPen(QPen(c))
-                painter.drawText(int(dx + tx * scale), int(dy + ty * scale),
+                painter.drawText(int(tx * scale), int(ty * scale),
                                  a.get('text', ''))

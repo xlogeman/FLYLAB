@@ -18,9 +18,6 @@ DISPLAY_IMAGE_HZ = 30      # 转发频率上限 (0 = 关闭转发)
 # 算法启停指令话题：按钮按下/抬起时发布 std_msgs/String，算法节点自行订阅执行
 CMD_TOPIC = '/flylab/vision_cmd'
 
-# 框选目标话题：画面上拖拽框选确认后发布 std_msgs/Int32MultiArray [x,y,w,h] (原图坐标)
-BBOX_TOPIC = '/target/bbox'
-
 # 模型输出叠加话题：模型节点每帧往这里发 std_msgs/String(JSON 标注列表)，
 # 界面自动叠加到画面上。schema 见 overlay.py 文档。
 ANNOTATION_TOPIC = '/flylab/annotations'
@@ -54,6 +51,3 @@ ALGORITHMS = [
     {'name': '目标检测', 'start': 'detect_start', 'stop': 'detect_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]
-
-# 相机画面是否启用拖拽框选 (发给 BBOX_TOPIC)
-SELECT_TARGET = True

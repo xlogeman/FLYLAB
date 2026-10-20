@@ -29,7 +29,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 | FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计（GPULidar，参数对齐 Livox Mid-360） |
 | SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划（ROG-Map 占据地图）→ 桥接 → PX4 跟踪；与 EGO 共用 tracker 链路，`tracker:=mavros\|px4` 选择跟踪链路 |
 
-### 2.2. C++ 节点
+### 2.2. 节点一览
 
 传感器层 (`src/sensors/`) 与算法完全解耦：算法特化的适配（坐标系/门控/时间对齐）下沉到桥接层 (`src/bridges/`)
 
@@ -79,8 +79,6 @@ MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (tracker:=px4 链
 ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 uXRCE-DDS 跟踪)
 ros2 launch flylab fly_ego.launch.py tracker:=mavros # EGO 避障 (MAVROS 跟踪, 用专属端口 14542)
 ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar)
-ros2 launch flylab fast_lio.launch.py                # FAST-LIO 建图 (GPULidar)
-ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 ```
 
 ---
@@ -96,7 +94,7 @@ ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 | `config.py` | 全局配置：算法注册表（`ALGORITHMS`）、话题、端口，改这里 |
 | `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 模型标注叠加（bbox/point/polyline/text 四种图元） |
 | `camera_grabber.py` | 抓取线程：AirSim RPC / 本机 V4L2 摄像头 / 视频文件，三源统一 |
-| `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条（进度/时长/暂停/停止）+ 云台方向键（AirSim 相机视角 yaw/pitch 步进/回中，经 `simSetCameraPose`，**世界系参考**——机体倾斜时偏航仍绕竖直轴、俯仰仍水平，不会斜着转；**限位** 航向 ±45°/俯仰垂直上下即停，`config.py` 可调，到限即停不回绕到机尾；**平滑回中**——按恒定角速度转回机头正前方而非瞬跳，按方向键可打断；**记忆与重置**——地面站重启沿用上次视角，连接时比对相机实际姿态检测 UE 重新 play，play 过自动回中；**全部相机同步转动**，仅影响画面不影响飞机姿态；状态存于 `~/.flylab_gimbal.json`，删掉即恢复出厂回中） |
+| `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条 + 云台方向键 |
 | `ros_node.py` | ROS 节点：算法启停指令发布、显示画面转发、按算法分组的标注订阅 |
 | `overlay.py` | 模型输出叠加接口（按算法分组的消息 + 标注 schema） |
 | `main_window.py` | 主窗口：左画面 + 右侧算法面板（下拉框选算法 + 运行/取消按钮），管理算法进程生命周期 |
@@ -104,12 +102,6 @@ ros2 launch flylab openvins_msckf.launch.py          # OpenVINS 双目 VIO
 ```bash
 ros2 run flylab_tools ground_station   # 地面站总界面
 ```
-
-**算法运行**：
-
-1. 右栏输入源选画面：UE 相机（RPC 直连）/ 本机摄像头（`/dev/video*`，WSL2 需 usbipd 透传）/ 视频文件（mp4 等循环播放，可暂停/拖进度）
-2. 算法下拉框选算法 → 点「运行」：地面站自动拉起算法进程（`cmd` 字段）→ 延迟 1s（等 DDS 发现）发 start 指令 → 结果自动叠加到画面；进程崩溃自动提示并复位
-3. 点「取消」：发 stop 指令 + 立即清空标注 + 回收进程；运行中可直接切换算法（无缝替换）
 
 **新算法接入**（约定式，界面零改动）：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
 
@@ -127,7 +119,7 @@ ros2 run flylab_tools ground_station   # 地面站总界面
 
 **其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧不积压；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——其自带 Qt 与 PyQt5 冲突）。
 
-### 4.2. flylab_vision 算法包（C++）
+### 4.2. flylab_vision 算法包
 
 ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解耦：核心库纯 OpenCV 不依赖 ROS，节点只是薄壳。
 
@@ -199,7 +191,7 @@ ros2 run flylab_vision aruco_node --ros-args \
 - **推力与油门是线性关系**（Cosys-AirSim 源码 `RotorActuator.hpp`：`thrust = control_signal × max_thrust`），所以 `MPC_THR_HOVER` 直接取 1/推重比
 - 挂载荷只改两处：`Mass` 加载荷重量 + 按上式重算 `MPC_THR_HOVER`，缺一会导致悬停漂移
 - `DragCoefficient` 是绝对值（默认机架 0.325、Flamewheel 系 1.3），不是倍数写法
-- 限制：转子布局仅支持对称 X 型（QuadX/HexX/OctoX）、机臂统一长度；六/八轴配置时 UE 外观仍是四旋翼模型（物理正确但视觉不符）
+- 限制：转子布局仅支持对称 X 型（QuadX/HexX/OctoX）、机臂统一长度；六/八轴配置时 UE 外观仍是四旋翼模型
 
 ## 6. 机型库与 PX4 机型文件
 
@@ -207,7 +199,7 @@ ros2 run flylab_vision aruco_node --ros-args \
 
 | 配置文件 | 构型 | 推重比 | 悬停油门 | PX4 机型 |
 |---|---|---|---|---|
-| `airsim_default_1000g_tw17.json` | AirSim 出厂默认：F450 构型，GWS 9x5 桨+MT2212 电机，1.0kg（settings.json 不写 PhysicsParams 时生效） | 1.70 | 0.59 | `10016_none_iris` |
+| `airsim_default_1000g_tw17.json` | AirSim 默认：F450 构型，GWS 9x5 桨+MT2212 电机，1.0kg | 1.70 | 0.59 | `10016_none_iris` |
 | `fucker_3120g_tw23.json` | 450 轴距，2814 电机+12寸桨（4S），3.12kg | 2.31 | 0.43 | `70003_fucker_3120g_tw23` |
 | `fucker_2.00kg_tw15.json` | 450 轴距，2212 电机+10寸桨（3S），2.0kg | 1.50 | 0.67 | `70004_fucker_2000g_tw15` |
 
