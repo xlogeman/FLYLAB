@@ -1,32 +1,13 @@
 // Copyright 2026 flylab
-#ifndef PX4_OFFBOARD_CLIENT_HPP_
-#define PX4_OFFBOARD_CLIENT_HPP_
+#ifndef PX4_OFFBOARD_CLIENT_UXRCE_HPP_
+#define PX4_OFFBOARD_CLIENT_UXRCE_HPP_
 
-/// PX4 offboard 执行层 (uXRCE-DDS) —— 可复用组件, 供 flylab_vision/src/control
-/// 下所有"通过 PX4 控制飞机"的算法节点使用 (视觉降落 / 目标追踪控制 / ...)。
+/// PX4 offboard 执行层 —— uXRCE-DDS 直连链路实现 (与 flylab/tracker_uxrce
+/// 同一套 /fmu 话题, 不依赖 MAVROS, 需 MicroXRCEAgent udp4 -p 8888)。
 ///
-/// 封装内容:
 ///   - /fmu/in 三个发布者: offboard_control_mode / trajectory_setpoint / vehicle_command
 ///     (QoS 与 flylab/tracker_uxrce 一致: best_effort + transient_local)
 ///   - /fmu/out 三个订阅者: vehicle_status / vehicle_local_position / vehicle_command_ack
-///   - 诊断日志: 链路建立、模式切换跟踪、failsafe 告警、切模式 ACK 结果
-///   - 常用指令: 机体系 FRD 速度 setpoint (自动按 heading 旋到 NED)、悬停、
-///     切 OFFBOARD / AUTO.LAND / AUTO.LOITER
-///   - offboard 接管状态机 takeoverTick(): 心跳预热 → 周期请求 → 成功/超时,
-///     任何上层算法接入前都要走这一步 (PX4 要求先收到 offboard 流才接受切模式)
-///
-/// 用法 (在 rclcpp::Node 子类中):
-///   Px4OffboardClient px4_{*this};
-///   px4_.takeoverReset(now());                        // 开始接管
-///   if (px4_.takeoverTick(now(), 1.0, 10.0) != Takeover::ENGAGED) return;
-///   px4_.sendVelocityFRD(0.5, 0.0, 0.1);              // 机体系速度 (前,右,下), 下正
-///   px4_.requestAutoLand();
-///
-/// 坐标/符号约定 (全组件统一):
-///   - 速度指令一律机体系 FRD: x 前 y 右 z 下, "下"为正 = 下降
-///   - setpoint 最终发 NED (按当前 heading 旋转), yaw 保持当前机头
-///
-/// 注意: 不要与避障 tracker_uxrce/tracker_mavros 同时运行 (会争抢 /fmu/in setpoint)。
 
 #include <chrono>
 #include <cmath>
@@ -39,6 +20,8 @@
 #include <px4_msgs/msg/vehicle_command_ack.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
+
+#include "px4_offboard_client_base.hpp"
 
 namespace flylab_vision
 {
@@ -82,24 +65,16 @@ inline const char * ack_result_name(uint8_t r)
   }
 }
 
-class Px4OffboardClient
+class Px4OffboardClientUxrce : public Px4OffboardClientBase
 {
 public:
-  /// offboard 接管状态机输出
-  enum class Takeover
-  {
-    ENGAGED,     // 已确认进入 OFFBOARD, 上层可以开始发控制 setpoint
-    REQUESTING,  // 请求中 (内部已在发心跳+悬停, 继续每 tick 调用)
-    FAILED       // 超过 warmup+retry 仍未进入 (上层决定放弃/交还)
-  };
-
   // 模式码 (px4_custom_mode.h): 主模式 OFFBOARD=6 / AUTO=4; 子模式 LOITER=3 / LAND=6
   static constexpr float kMainOffboard = 6.0f;
   static constexpr float kMainAuto = 4.0f;
   static constexpr float kSubLoiter = 3.0f;
   static constexpr float kSubLand = 6.0f;
 
-  explicit Px4OffboardClient(rclcpp::Node & node)
+  explicit Px4OffboardClientUxrce(rclcpp::Node & node)
   : node_(node)
   {
     rclcpp::QoS fmu_qos(rclcpp::KeepLast(1));
@@ -167,36 +142,47 @@ public:
 
   // ---------------- 状态查询 ----------------
 
-  bool gotStatus() const {return got_status_;}
-  bool armed() const
+  bool gotStatus() const override {return got_status_;}
+  bool armed() const override
   {
     return status_.arming_state != px4_msgs::msg::VehicleStatus::ARMING_STATE_DISARMED;
   }
-  bool isOffboard() const
+  bool isOffboard() const override
   {
     return status_.nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD;
   }
-  bool isAutoLand() const
+  bool isAutoLand() const override
   {
     return status_.nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND;
   }
   const char * currentModeName() const {return nav_state_name(status_.nav_state);}
 
   /// 最近一次飞控状态距现在是否仍在 timeout_sec 内 (链路断链判定)
-  bool linkFresh(double timeout_sec) const
+  bool linkFresh(double timeout_sec) const override
   {
     return got_status_ && (node_.now() - last_status_time_).seconds() <= timeout_sec;
   }
 
   const px4_msgs::msg::VehicleStatus & status() const {return status_;}
-  const px4_msgs::msg::VehicleLocalPosition & localPosition() const {return position_;}
+  const px4_msgs::msg::VehicleLocalPosition & rawLocalPosition() const {return position_;}
+
+  LocalPosNED localPosition() const override
+  {
+    LocalPosNED p;
+    p.xy_valid = position_.xy_valid;
+    p.z_valid = position_.z_valid;
+    p.x = position_.x;
+    p.y = position_.y;
+    p.z = position_.z;
+    return p;
+  }
 
   // ---------------- 控制指令 ----------------
 
   /// 机体系 FRD 速度 setpoint (x前 y右 z下, "下"为正) 并同时发 offboard 心跳。
   /// 内部按当前 heading 旋转到 NED; yaw 保持当前机头。
   /// offboard 模式下必须持续调用 (断流会触发 offboard failsafe)
-  void sendVelocityFRD(double fwd, double right, double down)
+  void sendVelocityFRD(double fwd, double right, double down) override
   {
     heartbeatVelocity();
     const float heading = position_.heading_good_for_control ? position_.heading : 0.0f;
@@ -214,7 +200,7 @@ public:
   }
 
   /// 原地悬停 (零速度 setpoint)
-  void sendHover() {sendVelocityFRD(0.0, 0.0, 0.0);}
+  void sendHover() override {sendVelocityFRD(0.0, 0.0, 0.0);}
 
   /// 只发 offboard 心跳 (声明速度控制模式), 不发 setpoint
   void heartbeatVelocity()
@@ -229,9 +215,9 @@ public:
     offboard_control_mode_pub_->publish(msg);
   }
 
-  void requestOffboard() {requestMode(kMainOffboard, 0.0f);}
-  void requestAutoLand() {requestMode(kMainAuto, kSubLand);}
-  void requestLoiter() {requestMode(kMainAuto, kSubLoiter);}
+  void requestOffboard() override {requestMode(kMainOffboard, 0.0f);}
+  void requestAutoLand() override {requestMode(kMainAuto, kSubLand);}
+  void requestLoiter() override {requestMode(kMainAuto, kSubLoiter);}
 
   /// 切飞控模式: DO_SET_MODE (param2=主模式, param3=子模式)
   void requestMode(float main_mode, float sub_mode)
@@ -253,7 +239,7 @@ public:
   // ---------------- offboard 接管状态机 ----------------
 
   /// 开始一次接管流程 (复位内部计时与计数)
-  void takeoverReset(const rclcpp::Time & now)
+  void takeoverReset(const rclcpp::Time & now) override
   {
     takeover_start_ = now;
     last_request_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -265,7 +251,7 @@ public:
   ///   未进入 offboard 期间自动发心跳+悬停 setpoint (PX4 要求先收到流才接受切模式),
   ///   预热 warmup_sec 后每 0.5s 重发请求, 超过 warmup+retry_sec 报 FAILED。
   /// 返回 ENGAGED 后上层接管 setpoint 发送 (心跳由 sendVelocityFRD 携带)。
-  Takeover takeoverTick(const rclcpp::Time & now, double warmup_sec, double retry_sec)
+  Takeover takeoverTick(const rclcpp::Time & now, double warmup_sec, double retry_sec) override
   {
     if (isOffboard()) {
       if (!engaged_logged_) {
@@ -325,4 +311,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // PX4_OFFBOARD_CLIENT_HPP_
+#endif  // PX4_OFFBOARD_CLIENT_UXRCE_HPP_

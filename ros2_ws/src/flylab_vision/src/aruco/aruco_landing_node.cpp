@@ -13,14 +13,16 @@
 /// 与参考项目的差异 (适配 flylab):
 ///   - 无云台: 参考 gimbal 版的云台俯拍条件用 "目标面积 + 对齐误差" 等价替代
 ///   - 图像空间控制: 只用 cx/cy/面积, 不依赖 3D 位姿 (未标定时位姿尺度不可信)
-///   - 执行层不走 prometheus uav_controller, 经 px4_offboard_client 直发 /fmu/in/*
+///   - 执行层不走 prometheus uav_controller, 经 px4_offboard_client 下发
+///     (link 参数选链路: mavros=MAVROS 桥 / uxrce=uXRCE-DDS 直连, 与 tracker 链路约定一致)
 ///   - 目标丢失: 参考版按上次速度惯性移动, 本版简化为原地悬停 + 超时交还控制权
 ///
 /// 链路 (话题名与 flylab_tools 约定一致, 可参数覆盖):
 ///   图像输入  /flylab/display/image_raw   (地面站转发的当前显示帧, 需为垂直向下视角)
 ///   启停指令  /flylab/vision_cmd          landing_start / landing_stop
 ///   画面叠加  /flylab/annotations         algo 组: "aruco_landing" + "landing_state"
-///   PX4 直连  /fmu/in/*  +  /fmu/out/*     (依赖 MicroXRCEAgent udp4 -p 8888)
+///   PX4 链路  link:=mavros  /mavros/* (MAVROS 桥, fcu_url:=udp://:14542@, 参照 fly_ego.launch.py)
+///             link:=uxrce   /fmu/in/* + /fmu/out/* (依赖 MicroXRCEAgent udp4 -p 8888)
 ///
 /// 使用前提: 已解锁升空 (QGC 起飞或任意链路), 相机画面垂直向下看到 ArUco 码。
 ///
@@ -33,6 +35,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -43,7 +46,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "aruco/aruco_detector.hpp"
-#include "px4_offboard_client.hpp"
+#include "control/px4_offboard_client.hpp"
 
 namespace flylab_vision
 {
@@ -126,6 +129,7 @@ public:
     const auto marker_length = declare_parameter<double>("marker_length", 0.2);
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
     const auto calib_path = declare_parameter<std::string>("calib", "");
+    link_ = declare_parameter<std::string>("link", "mavros");    // PX4 执行链路: mavros|uxrce
 
     target_id_ = declare_parameter<int>("target_id", -1);        // -1 = 任一 (取画面里最大的并锁定)
     land_cx_ = declare_parameter<double>("land_cx", 0.5);        // 期望对中的画面位置 (归一化)
@@ -159,8 +163,20 @@ public:
     }
     detector_ = std::make_unique<ArucoDetector>(cfg);
 
-    // ---------- PX4 执行层 (复用组件: 通信/诊断/接管时序全在里面) ----------
-    px4_ = std::make_unique<Px4OffboardClient>(*this);
+    // ---------- PX4 执行层 (复用组件: 通信/诊断/接管时序全在里面, 链路按 link 参数选择) ----------
+    if (link_ == "mavros") {
+      px4_ = std::make_unique<Px4OffboardClientMavros>(*this);
+      RCLCPP_INFO(
+        get_logger(), "PX4 执行链路: MAVROS (/mavros/*, fcu_url:=udp://:14542@ 专属实例, "
+        "参照 fly_ego.launch.py 启动 MAVROS)");
+    } else if (link_ == "uxrce") {
+      px4_ = std::make_unique<Px4OffboardClientUxrce>(*this);
+      RCLCPP_INFO(
+        get_logger(), "PX4 执行链路: uXRCE-DDS (/fmu/*, 需 MicroXRCEAgent udp4 -p 8888)");
+    } else {
+      RCLCPP_FATAL(get_logger(), "未知 link 参数 '%s' (可选 mavros|uxrce)", link_.c_str());
+      throw std::invalid_argument("link must be mavros or uxrce");
+    }
 
     // ---------- 地面站链路 ----------
     anno_pub_ = create_publisher<std_msgs::msg::String>(anno_topic, 10);
@@ -177,9 +193,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "ArUco 降落节点就绪 (三态状态机): 等待 %s 指令; 图像 %s; PX4 /fmu 链路 "
-      "(需 MicroXRCEAgent udp4 -p 8888 与已解锁升空的飞机)",
-      kCmdStart, image_topic.c_str());
+      "ArUco 降落节点就绪 (三态状态机): 等待 %s 指令; 图像 %s; PX4 链路=%s (需已解锁升空的飞机)",
+      kCmdStart, image_topic.c_str(), link_.c_str());
   }
 
 private:
@@ -208,7 +223,9 @@ private:
     }
     if (!px4_->gotStatus()) {
       RCLCPP_WARN(
-        get_logger(), "尚未收到 PX4 飞控数据! 请先启动 MicroXRCEAgent:  MicroXRCEAgent udp4 -p 8888");
+        get_logger(), link_ == "mavros" ?
+        "尚未收到飞控状态! 请先启动 MAVROS (fcu_url:=udp://:14542@) 并确认 /mavros/state 已连接" :
+        "尚未收到 PX4 飞控数据! 请先启动 MicroXRCEAgent:  MicroXRCEAgent udp4 -p 8888");
       return;
     }
     if (!px4_->armed()) {
@@ -351,7 +368,7 @@ private:
     if (!px4_->linkFresh(3.0)) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 3000,
-        "\033[33mPX4 飞控数据中断, MicroXRCEAgent 链路可能已断开!\033[0m");
+        "\033[33mPX4 飞控数据中断, 飞控链路 (%s) 可能已断开!\033[0m", link_.c_str());
     }
     switch (state_) {
       case State::TRACKING:
@@ -377,7 +394,7 @@ private:
     // 阶段 1: 接管 offboard (心跳预热/周期请求/成功判定都在执行层状态机里)
     if (!px4_->isOffboard()) {
       if (px4_->takeoverTick(now_t, offboard_warmup_sec_, offboard_retry_sec_) ==
-        Px4OffboardClient::Takeover::FAILED)
+        Px4OffboardClientBase::Takeover::FAILED)
       {
         toIdle();
       }
@@ -594,8 +611,9 @@ private:
   }
 
   // ---------------- 成员 ----------------
-  // PX4 执行层 (可复用组件, 见 px4_offboard_client.hpp)
-  std::unique_ptr<Px4OffboardClient> px4_;
+  // PX4 执行层 (可复用组件, link 参数选择 MAVROS / uXRCE 实现, 见 px4_offboard_client.hpp)
+  std::unique_ptr<Px4OffboardClientBase> px4_;
+  std::string link_;
 
   // 视觉与地面站
   std::unique_ptr<ArucoDetector> detector_;

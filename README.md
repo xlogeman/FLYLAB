@@ -79,6 +79,9 @@ MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (仅 tracker:=uxr
 ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 MAVROS 跟踪, 专属端口 14542)
 ros2 launch flylab fly_ego.launch.py tracker:=uxrce  # EGO 避障 (uXRCE-DDS 跟踪)
 ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar)
+
+# 4. 地面站
+ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停 / ArUco降落按钮)
 ```
 
 ---
@@ -125,10 +128,17 @@ ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解�
 
 ```
 flylab_vision/
-├── include/aruco/aruco_detector.hpp   # 核心库接口 (无 ROS 依赖)
-├── src/aruco/aruco_detector.cpp       # 检测 / IPPE_SQUARE 位姿 / 标注 JSON
-├── src/aruco/aruco_node.cpp           # ROS2 节点
-├── models/<task>/                     # 预训练权重按任务分类
+├── include/aruco/aruco_detector.hpp        # 核心检测库接口 (无 ROS 依赖)
+├── include/control/                        # PX4 执行层 (可复用组件, 业务无关)
+│   ├── px4_offboard_client.hpp             #   总入口 (使用文档 + 兼容别名)
+│   ├── px4_offboard_client_base.hpp        #   公共接口 (基类 + 坐标约定: FRD 速度 / NED 位置)
+│   ├── px4_offboard_client_mavros.hpp      #   MAVROS 链路实现 (与 tracker_mavros 同一套话题/服务)
+│   └── px4_offboard_client_uxrce.hpp       #   uXRCE-DDS 直连实现 (与 tracker_uxrce 同一套 /fmu 话题)
+├── src/aruco/
+│   ├── aruco_detector.cpp                  # 检测 / IPPE_SQUARE 位姿
+│   ├── aruco_node.cpp                      # 检测展示节点
+│   └── aruco_landing_node.cpp              # 降落业务节点 (三态状态机)
+├── models/<task>/                          # 预训练权重按任务分类
 └── CMakeLists.txt / package.xml
 ```
 
@@ -136,6 +146,7 @@ flylab_vision/
 |---|---|
 | `libaruco_detector` | 纯算法库：检测 + 位姿解算（等价 legacy `estimatePoseSingleMarkers`）+ 分组标注 JSON；兼容 OpenCV 4.5（Humble 系统源）与 4.7+ 双 API |
 | `aruco_node` | 订阅显示帧话题 + 启停指令，检测结果转 JSON 标注回传；每 2s 自检——收不到帧主动告警（地面站未运行/画面源无图/话题不一致） |
+| `aruco_landing_node` | 视觉降落节点（见 4.3）；执行层经 `px4_offboard_client` 双链路组件，`link` 参数选 MAVROS / uXRCE |
 
 ```bash
 ros2 run flylab_vision aruco_node --ros-args \
@@ -146,7 +157,6 @@ ros2 run flylab_vision aruco_node --ros-args \
 ```
 
 节点可视化输出（每个码 7 个图元）：绿色四边形轮廓（贴码真实形状）+ 红/蓝/绿三条位姿轴 + 红中心点 + 红首角点 + 黄色 `id=z距离` 文字，全部经统一标注接口叠加到地面站画面。
-
 **新增算法**：并列建 `include/<算法>/` + `src/<算法>/`，CMake 加对应库/可执行目标，`config.ALGORITHMS` 注册即可——复用标注接口与地面站交互，体验与 ArUco 完全一致。
 
 **独立调试 CLI**：根目录 `python3 aruco_detector.py --image/--video/--camera/--gen`（图像/视频/摄像头检测与测试图生成），功能与包内节点共用同一套检测参数约定。
