@@ -3,10 +3,9 @@
 
 被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
 附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)，
-世界系参考：偏航绕世界竖直轴、俯仰绕水平轴。相机是机体刚性挂载，云台角
-须按当前机体姿态周期性重下发 (GIMBAL_HOLD_HZ) 才能在飞行中保持按键方向
-纯正——否则基准冻结在按键瞬间，下次按键会带着姿态差一起跳变
-（详见 _apply_gimbal 与主循环）。
+世界系稳定云台：视线方位/仰角钉在世界系 (方位参考机头朝向)，机体怎么
+转、怎么斜都由周期重下发 (GIMBAL_HOLD_HZ) 补偿——垂直向下时原地旋转
+仍保持垂直向下，方向键上下左右与机体姿态无关。
 """
 import glob
 import json
@@ -106,16 +105,32 @@ def _save_gimbal_state(gimbal, mounts, last_applied):
         pass
 
 
-def _gimbal_quat(yaw_deg, pitch_deg):
-    """云台角度 -> NED 四元数 (先绕 z 偏航, 再绕 y 俯仰)。
-    yaw 正=向右 (绕 NED +z, 即向下轴的右手旋转), pitch 正=向上 (绕 +y)。
-    在 _apply_gimbal 中按世界系轴解释: 偏航绕世界竖直轴, 俯仰绕水平轴。
-    回中 (0,0) 即单位四元数 (相对安装姿态不动)。"""
-    y1, p2 = math.radians(yaw_deg) / 2, math.radians(pitch_deg) / 2
-    c1, s1, c2, s2 = math.cos(y1), math.sin(y1), math.cos(p2), math.sin(p2)
-    # qz(yaw) ⊗ qy(pitch) 的 Hamilton 积, 注意 z 分量是 s1*c2 (此前的 c1*s1
-    # 是代数错误, 四元数未归一化, 实际转角/轴向全错)
-    return airsim.Quaternionr(-s1 * s2, c1 * s2, s1 * c2, c1 * c2)
+def _quat_yaw_el(q):
+    """四元数前向轴 (机体系 +x) 的 (方位角, 仰角), 单位度。
+    方位角 = 前向轴水平投影的北偏东角 (NED, 顺时针/向右为正);
+    仰角 = 相对地平线, 上正下负。前向轴接近竖直时方位角退化 (取 0),
+    此时方位角只影响画面 roll, 不影响指向。"""
+    f = _quat_rot_vec(q, airsim.Vector3r(1.0, 0.0, 0.0))
+    h = math.hypot(f.x_val, f.y_val)
+    yaw = math.degrees(math.atan2(f.y_val, f.x_val)) if h > 1e-6 else 0.0
+    el = math.degrees(math.atan2(-f.z_val, h))
+    return yaw, el
+
+
+def _gimbal_yaw_quat(azimuth_deg):
+    """方位角 (度, 北偏东/向右为正) -> NED 四元数, 绕世界竖直轴 (+z)。
+    与 Rz⊗Ry 组合成目标姿态后 roll 恒为 0 (地平线水平)。回中链路上
+    传 0 即单位四元数。"""
+    y = math.radians(azimuth_deg) / 2
+    return airsim.Quaternionr(0.0, 0.0, math.sin(y), math.cos(y))
+
+
+def _gimbal_pitch_quat(elevation_deg):
+    """仰角 (度, 上正下负) -> NED 四元数, 绕世界 +y 轴。
+    R_y(el) 把前向轴抬到仰角 el (el=-90 即垂直向下)。与 _gimbal_yaw_quat
+    组合成世界系目标姿态, 与机体姿态完全解耦。"""
+    p = math.radians(elevation_deg) / 2
+    return airsim.Quaternionr(0.0, math.sin(p), 0.0, math.cos(p))
 
 
 def _quat_mul(a, b):
@@ -395,11 +410,14 @@ class Grabber(threading.Thread):
         而非竖直轴 —— 绕斜轴连续步进会沿斜锥面进动, 起初看着在左转, 转过
         一定角度视角就甩到天上/地下, 俯仰也随之变斜、地平线滚动。
 
-        这里改为世界系参考: 先把安装姿态转到世界系, 叠加云台角 (偏航绕世界
-        竖直轴、俯仰绕随偏航的水平轴), 再用机体当前姿态反算回机体相对位姿
-        下发。机体怎么斜, 左右都是纯正的水平摇、上下都是正的俯仰。云台角
-        的偏航参考是机头朝向 (叠加在世界系安装姿态之上), 回中仍恢复挂载
-        原始姿态。"""
+        这里改为世界系稳定云台: 目标视线方向用 (方位角, 仰角) 在世界系直接
+        重建 —— 方位 = 机体前向方位 + 云台偏航 + 安装偏航, 仰角 = 安装仰角 +
+        云台俯仰, roll 恒为 0 (地平线水平)。机体怎么转、怎么斜, 视线都钉在
+        世界系目标方向上 (垂直向下时原地旋转/倾斜仍保持垂直向下), 方向键的
+        上下左右与机体姿态完全无关。历次错误做法的教训: 两角合成一个四元数
+        世界系左乘会把俯仰轴钉死在世界 East 轴 (航向一变上下变侧滚/反向);
+        都机体系叠加则偏航绕斜轴进动、俯仰随姿态倾斜漂移。
+        云台偏航的参考是当前机头朝向, 回中恢复安装方向的水平重建。"""
         try:
             q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
             applied = {}
@@ -415,10 +433,14 @@ class Grabber(threading.Thread):
                 if mount is None:
                     continue
                 pos, ori = mount
-                # 安装姿态 -> 世界系, 叠加云台角, 再反算回机体系下发
-                q_mount_world = _quat_mul(q_b, ori)
-                q_des_world = _quat_mul(_gimbal_quat(yaw_deg, pitch_deg),
-                                        q_mount_world)
+                # 世界系稳定云台: 方位 = 机体前向方位 + 云台偏航 + 安装偏航,
+                # 仰角 = 安装仰角 + 云台俯仰, 按世界系方位/仰角重建目标姿态
+                # (roll=0), 再反算回机体系下发
+                yaw_b, _ = _quat_yaw_el(q_b)
+                yaw_m, el_m = _quat_yaw_el(ori)
+                q_des_world = _quat_mul(
+                    _gimbal_yaw_quat(yaw_b + yaw_deg + yaw_m),
+                    _gimbal_pitch_quat(el_m + pitch_deg))
                 q_cmd = _quat_mul(_quat_conj(q_b), q_des_world)
                 try:
                     client.simSetCameraPose(cam, airsim.Pose(pos, q_cmd), VEHICLE)

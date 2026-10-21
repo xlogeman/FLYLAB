@@ -31,7 +31,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 ### 2.2. 节点一览
 
-传感器层 (`src/sensors/`) 与算法完全解耦：算法特化的适配（坐标系/门控/时间对齐）下沉到桥接层 (`src/bridges/`)
+传感器层 (`src/sensors/`) 与算法解耦：算法特化的适配（坐标系/门控/时间对齐）下沉到桥接层 (`src/bridges/`)
 
 | 传感器节点 | 发布话题 | 说明 |
 |---|---|---|
@@ -87,7 +87,7 @@ ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停
 
 ---
 
-## 4. 视觉算法实验区（flylab_tools 地面站 + flylab_vision 算法包）
+## 4. 视觉算法实验区
 
 ### 4.1. flylab_tools 地面站
 
@@ -114,7 +114,7 @@ ros2 run flylab_tools ground_station   # 地面站总界面
 - `MAVROS 桥 (14542)` → `mavros_node --ros-args -p fcu_url:=udp://:14542@ -p tgt_system:=1 -p tgt_component:=1`（**必须用 14542 专属实例**，14580 会被 AirSim 抢占）
 - 按钮是 toggle：点一下起、再点一下停；桥进程以独立进程组启动，停止时整组回收（不留孤儿进程）；进程异常退出时按钮自动复位并报错
 - 两条链路**互斥**：开启一条先停另一条
-- **「ArUco降落」按钮的前置条件包含"已选择链路"**（下方两个按钮之一已开启）：未选链路时按钮置灰不可点；所选链路同时作为降落节点的 `link` 参数（`link:=mavros` / `link:=uxrce`）下发；降落进行中禁止切换链路（换桥会断掉正在跑的降落控制）
+- **「ArUco降落」按钮的前置条件包含"已选择链路"**：未选链路时按钮置灰不可点；所选链路同时作为降落节点的 `link` 参数（`link:=mavros` / `link:=uxrce`）下发；降落进行中禁止切换链路（换桥会断掉正在跑的降落控制）
 
 **显示画面转发**：地面站把当前显示帧（深度伪彩帧除外）以 30Hz 原分辨率发到 `/flylab/display/image_raw`，算法节点订阅它即可处理「用户正在看的画面」——无论输入源是 UE 相机、本机摄像头还是视频文件，切换对算法透明。无订阅者时自动跳过序列化不占 CPU；算法要吃原始相机话题时用 `-p image_topic:=/airsim/cam/front_cam/image_raw` 覆盖。
 
@@ -253,9 +253,9 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 
 ## 8. 注意事项
 
-- **PhysicsParams 改质量后**：必须同步重算 PX4 的 `MPC_THR_HOVER`，否则悬停漂移；settings.json 改动复制到 Windows 端 `Documents\AirSim\` 后重启 UE 生效，无需重编译
+- **PhysicsParams 改质量后**：需同步重算 PX4 的 `MPC_THR_HOVER`，否则悬停漂移；settings.json 改动复制到 Windows 端 `Documents\AirSim\` 后重启 UE 生效
 - **GPULidar 与 CPU 雷达配置**：`configs/fast_lio/settings.json` 为 GPU 雷达（`SensorType: 8`，参数对齐 Livox Mid-360），FAST-LIO 与 SUPER 链路共用，对应 launch 默认 `gpu_lidar:=true`；`configs/settings.json` 为 CPU 雷达（`SensorType: 6`，**必须带 `LimitPoints: false`**，否则每 tick 扫描被 5000 点上限截断，一圈分片采样导致帧内拼接错位且实际帧率掉到 ~1.7Hz）。仿真无法复现 Mid-360 的非重复菱形扫描，以每帧均匀网格 ~2 万点近似
 - **雷达时间戳约定**：AirSim 点云是单时刻瞬时快照（整帧同一位姿一次生成，无扫描内运动畸变），传感器节点统一填 `time = 1/rotation_hz` 并以 `LidarData.time_stamp` 标定 ROS 偏移，LiDAR/IMU 映射到同一时间轴；逐点合成时间会反向注入运动剪切导致平移漂移，勿改回
 - **传感器时间轴约定**：`airsim_imu`/`airsim_lidar`/`airsim_odom` 的时间戳统一经 `SimClockSync` 映射（ros = offset + 仿真时间，见 `src/sensors/airsim_common.hpp`），三路数据落同一时间轴；跨节点混用（如 bridge_super 对点云插值 odom 位姿、FAST-LIO 融合雷达+IMU）都依赖这一约定，自定义新传感器节点请保持
-- **WSL 系统时钟漂移**：WSL2 高负载下系统时钟漂移可达秒级（`chronyc tracking` 实测 RMS offset ~4.3s），`systemd-timesyncd` 纠偏采用"步进"跳变（实测一次向后跳 2.29s），导致 IMU/LiDAR/odom 时间戳整体跳变且三路重标定时刻不一致（相差可达百 ms）→ bridge_super 去畸变整帧拖影、FAST-LIO 收到倒退时间戳强制 reset、RViz 卡顿后涌出积压旧帧。**已改用 chrony slew 模式根治**（渐变调时钟速率，时钟永不跳变，`makestep 1 3` 仅启动初期允许步进），timesyncd 已 disable+mask。验证：`chronyc tracking` 的 `System time` 应为毫秒级
+- **WSL 系统时钟漂移**：WSL2 高负载下系统时钟漂移可达秒级（`chronyc tracking` 实测 RMS offset ~4.3s），`systemd-timesyncd` 纠偏采用"步进"跳变（实测一次向后跳 2.29s），导致 IMU/LiDAR/odom 时间戳整体跳变且三路重标定时刻不一致 → bridge_super 去畸变整帧拖影、FAST-LIO 收到倒退时间戳强制 reset、RViz 卡顿后涌出积压旧帧。**已改用 chrony slew 模式根治**（渐变调时钟速率，时钟永不跳变，`makestep 1 3` 仅启动初期允许步进），timesyncd 已 disable+mask。验证：`chronyc tracking` 的 `System time` 应为毫秒级
 - **点云链路抗卡顿设计**：实时传感器流不允许积压回放——`airsim_lidar` 发布 QoS 为 `KeepLast(2) reliable`（下游卡顿只丢帧不补发旧帧），两个 bridge 订阅/发布同样限深 2；GPU 雷达过滤**跨卡顿帧**（UE 卡顿恢复后同一旋转周期累积停顿前后两段渲染，段时刻跨度 > 3× 扫描周期的帧直接丢弃，否则逐点去畸变按停顿间隔摆点 → 整帧拖影）；RViz 全部点云显示 `Queue Size: 1`（默认 0 为无界，渲染一卡就积压回放）。诊断依据：`ros2 topic hz` 的 **min 为负 = 系统时钟被步进**（接收间隔不可能为负），max 飙到秒级 = 发布端真断流
