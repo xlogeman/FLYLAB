@@ -27,6 +27,15 @@ CMD_TOPIC = '/flylab/vision_cmd'
 # 界面自动叠加到画面上。schema 见 overlay.py 文档。
 ANNOTATION_TOPIC = '/flylab/annotations'
 
+# ---------- 相机姿态 (ArUco 降落云台泛化) ----------
+# 当前显示相机相对机体的姿态四元数 (geometry_msgs/Quaternion, x/y/z/w),
+# 语义: 相机 NED 体约定 (x 视轴, y 图右, z 图下) 相对机体 FRD 的旋转。
+# 地面站以 10Hz 发布; aruco_landing_node 据此把图像误差方向旋到机体系,
+# 适配任意云台形态 (刚性安装 / 世界系自稳 / yaw 随动, 俯仰不限于垂直向下)。
+# 非 AirSim 源 (本机摄像头/视频文件) 不发布 —— 节点超时后自动回退
+# "垂直向下 + 图像上边朝机头" 刚性假设 (flip 参数)。
+GIMBAL_STATE_TOPIC = '/flylab/gimbal_state'
+
 # ---------- 云台 (AirSim 相机视角旋转, 经 simSetCameraPose) ----------
 GIMBAL_STEP_DEG = 1.0     # 每次按键步进角度 (按钮支持按住连发)
 

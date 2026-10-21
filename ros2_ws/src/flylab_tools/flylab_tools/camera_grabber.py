@@ -313,6 +313,26 @@ class Grabber(threading.Thread):
                 return None
             return self._gimbal
 
+    def get_cam_orientation(self):
+        """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
+        位姿数据返回 None。
+
+        语义: 相机 NED 体约定 (x 视轴, y 图右, z 图下) 相对机体 FRD 的旋转,
+        取最近一次 simSetCameraPose 实际下发的机体相对姿态 (_gimbal_last,
+        世界系稳定云台会随飞行周期重下发而持续更新); 云台从未动过时回退
+        安装姿态基准。供 aruco_landing 做图像方向 -> 机体系的泛化映射,
+        不依赖"图像上边朝机头"假设。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return None
+            q = self._gimbal_last.get(self.camera)
+            if q is None:
+                mount = self._gimbal_mount.get(self.camera)
+                if mount is None:
+                    return None
+                q = mount[1]
+            return (q.x_val, q.y_val, q.z_val, q.w_val)
+
     def _anim_tick(self):
         """回中动画推进一步 (仅抓取线程调用, 须持锁): 以恒定角速度朝目标
         (0,0) 推进, 时间驱动不受帧率影响; 到位后停用动画并持久化。"""

@@ -16,6 +16,8 @@
 /// 注意: 两种链路都不要与避障 tracker_uxrce/tracker_mavros 同时运行
 /// (会争抢 setpoint; tracker 与本组件同时走 MAVROS 时争抢的是同一条 setpoint 流)。
 
+#include <string>
+
 #include <rclcpp/rclcpp.hpp>
 
 namespace flylab_vision
@@ -51,6 +53,8 @@ public:
   virtual bool isOffboard() const = 0;
   virtual bool isAutoLand() const = 0;
   virtual bool linkFresh(double timeout_sec) const = 0;  // 断链判定
+  /// 当前飞控导航模式名 (诊断日志用, 如 "OFFBOARD" / "AUTO.RTL")
+  virtual std::string modeName() const = 0;
   virtual LocalPosNED localPosition() const = 0;
 
   // ---------------- offboard 接管状态机 ----------------

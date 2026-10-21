@@ -72,7 +72,7 @@ public:
   bool armed() const override {return state_.armed;}
   bool isOffboard() const override {return state_.mode == "OFFBOARD";}
   bool isAutoLand() const override {return state_.mode == "AUTO.LAND";}
-  const std::string & currentModeName() const {return state_.mode;}
+  std::string modeName() const override {return state_.mode;}
 
   /// 最近一次飞控数据 (state 或 pose) 距现在是否仍在 timeout_sec 内 (断链判定)
   bool linkFresh(double timeout_sec) const override
@@ -167,7 +167,7 @@ public:
       RCLCPP_INFO(
         node_.get_logger(), "请求进入 OFFBOARD (第 %u 次): 当前模式=%s, "
         "已预热 %.1fs, 悬停 setpoint 持续发送中, 等待 /mavros/set_mode 服务确认 ...",
-        attempts_, currentModeName().c_str(), elapsed);
+        attempts_, modeName().c_str(), elapsed);
       requestOffboard();
       last_request_ = now;
     }

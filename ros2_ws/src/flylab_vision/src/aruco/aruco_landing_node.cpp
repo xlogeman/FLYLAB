@@ -18,7 +18,10 @@
 ///   - 目标丢失: 参考版按上次速度惯性移动, 本版简化为原地悬停 + 超时交还控制权
 ///
 /// 链路 (话题名与 flylab_tools 约定一致, 可参数覆盖):
-///   图像输入  /flylab/display/image_raw   (地面站转发的当前显示帧, 需为垂直向下视角)
+///   图像输入  /flylab/display/image_raw   (地面站转发的当前显示帧, 需俯视看到码)
+///   云台姿态  /flylab/gimbal_state        (相机机体系姿态四元数, 可选; 数据新鲜时
+///                                         水平控制走云台泛化映射, 适配任意云台
+///                                         形态; 无数据回退"刚性垂直下视"假设)
 ///   启停指令  /flylab/vision_cmd          landing_start / landing_stop
 ///   画面叠加  /flylab/annotations         algo 组: "aruco_landing" + "landing_state"
 ///   PX4 链路  link:=mavros  /mavros/* (MAVROS 桥, fcu_url:=udp://:14542@, 参照 fly_ego.launch.py)
@@ -40,6 +43,7 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/quaternion.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -100,6 +104,20 @@ double clampd(double v, double lim)
   return std::fmin(std::fmax(v, -lim), lim);
 }
 
+/// R(q)·v: 四元数旋转向量 (标准公式, q 为 body←camera 旋转)
+cv::Point3d quat_rot(const geometry_msgs::msg::Quaternion & q, double x, double y, double z)
+{
+  // t = 2 * (q_vec × v)
+  const double tx = 2.0 * (q.y * z - q.z * y);
+  const double ty = 2.0 * (q.z * x - q.x * z);
+  const double tz = 2.0 * (q.x * y - q.y * x);
+  return {
+    x + q.w * tx + (q.y * tz - q.z * ty),
+    y + q.w * ty + (q.z * tx - q.x * tz),
+    z + q.w * tz + (q.x * ty - q.y * tx)
+  };
+}
+
 /// 降落趋势角: 位移向量与竖直向下方向的夹角 (度)。移植自参考项目
 /// calculateLandingAngle (gimbal_yolov5_tracking_land L113-128)
 double landing_angle_deg(const std::vector<cv::Point3d> & positions)
@@ -137,6 +155,13 @@ public:
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
     const auto calib_path = declare_parameter<std::string>("calib", "");
     link_ = declare_parameter<std::string>("link", "mavros");    // PX4 执行链路: mavros|uxrce
+
+    // 泛化云台映射: 订阅"当前显示相机相对机体的姿态"话题 (相机 NED 体约定:
+    // x 视轴 y 图右 z 图下, 机体 FRD)。数据新鲜时水平控制用云台泛化映射
+    // (适配刚性/自稳/带 yaw 随动任意云台); 超时回退刚性下视假设 (flip 参数)。
+    const auto gimbal_topic =
+      declare_parameter<std::string>("gimbal_topic", "/flylab/gimbal_state");
+    gimbal_timeout_sec_ = declare_parameter<double>("gimbal_timeout_sec", 0.5);
 
     target_id_ = declare_parameter<int>("target_id", -1);        // -1 = 任一 (取画面里最大的并锁定)
     land_cx_ = declare_parameter<double>("land_cx", 0.5);        // 期望对中的画面位置 (归一化)
@@ -198,6 +223,12 @@ public:
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
       image_topic, rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::Image::SharedPtr msg) {on_image(*msg);});
+    gimbal_sub_ = create_subscription<geometry_msgs::msg::Quaternion>(
+      gimbal_topic, 10,
+      [this](const geometry_msgs::msg::Quaternion::SharedPtr msg) {
+        cam_ori_ = *msg;
+        cam_ori_time_ = now();
+      });
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
     control_timer_ = create_wall_timer(
@@ -259,6 +290,8 @@ private:
     landing_count_ = 0;
     land_confirmed_ = false;
     had_target_ = false;
+    ever_offboard_ = false;
+    ctrl_mode_logged_ = false;
     tracked_id_ = -1;      // 重新进入降落流程重新选目标
     lost_id_time_ = 0.0;
     trend_angle_ = 90.0;
@@ -393,6 +426,12 @@ private:
     }
   }
 
+  /// 云台姿态数据是否新鲜 (决定水平控制走泛化映射还是刚性假设)
+  bool gimbalFresh() const
+  {
+    return (now() - cam_ori_time_).seconds() <= gimbal_timeout_sec_;
+  }
+
   // ---------------- 控制主循环 ----------------
   void tick()
   {
@@ -443,6 +482,17 @@ private:
 
     // 阶段 1: 接管 offboard (心跳预热/周期请求/成功判定都在执行层状态机里)
     if (!px4_->isOffboard()) {
+      if (ever_offboard_) {
+        // 曾进入过 offboard 又被切走 = 外部接管 (飞手切出/电量 failsafe/
+        // 断流保护等)。真机安全: 不抢控制权 —— 持续重发 OFFBOARD 请求会与
+        // 飞手和安全机制抢飞机, 这里尊重当前模式, 告警后交还并退出。
+        RCLCPP_WARN(
+          get_logger(), "\033[33mOFFBOARD 被外部切换 (当前模式: %s), "
+          "判定为外部接管, 交还控制权并退出降落流程\033[0m",
+          px4_->modeName().c_str());
+        toIdle();
+        return;
+      }
       if (px4_->takeoverTick(now_t, offboard_warmup_sec_, offboard_retry_sec_) ==
         Px4OffboardClientBase::Takeover::FAILED)
       {
@@ -450,6 +500,7 @@ private:
       }
       return;
     }
+    ever_offboard_ = true;
 
     // 阶段 2: 视觉跟踪 (已确认 offboard, 心跳随每拍 sendVelocityFRD 持续发送)
     const Detection * tgt = pickTarget(dt);
@@ -489,8 +540,7 @@ private:
       image_area_ > 0 ? (tgt->bbox_wh.x * tgt->bbox_wh.y) / image_area_ : 0.0;
     const double dist_factor = (1.0 - area) * (1.0 - area);  // 距离越近增益越小, 防近距振荡
 
-    // 水平对齐 (机体系 FRD: x 前 y 右)。约定相机垂直向下、图像上边朝机头:
-    // 目标偏画面上方 (cy 小) → 向前; 偏画面右侧 (cx 大) → 向右。方向不符用 flip 参数翻转
+    // 水平对齐输出机体系 FRD 速度 (x 前 y 右), 方向映射见下方"两种模式"注释
     //
     // 高度增益缩放: 增益按归一化画面坐标定义, 而同一归一化误差在高空对应的水平距离
     // 大得多 (9.5m 高 60°FOV 视场宽约 11m, 误差 0.13 ≈ 1.4m), 固定增益下收敛时间
@@ -504,13 +554,54 @@ private:
       height_scale = std::fmin(
         std::fmax(h / align_ref_alt_, 1.0), max_height_scale_);
     }
-    double v_fwd = -vel_gain_ * (cy - land_cy_) * dist_factor * height_scale;
-    double v_right = vel_gain_ * (cx - land_cx_) * dist_factor * height_scale;
-    if (flip_forward_) {
-      v_fwd = -v_fwd;
+    // 水平对齐 —— 两种方向映射模式 (按云台数据是否新鲜自动选择):
+    //
+    // (a) 云台泛化模式 (gimbal_topic 数据新鲜): 用相机相对机体的姿态四元数
+    //     把图像误差方向旋到机体系。相机 NED 体约定 (x 视轴, y 图右, z 图下),
+    //     "图右/图下"单位方向在机体系 = R(q)·(0,1,0) / R(q)·(0,0,1), 把两轴
+    //     的水平分量按误差线性组合即期望水平速度。不假设图像上边朝机头、
+    //     不假设相机垂直向下 —— 刚性安装 (任意 roll 安装角)、二/三轴自稳
+    //     (世界系稳定)、带 yaw 随动的云台全适用, flip 参数不参与。
+    //     图右/图下方向带垂直分量时只取水平投影: 相机斜视下同一画面偏移
+    //     本来就更少对应水平位移, 幅值自然减小属正确几何行为。
+    //
+    // (b) 刚性下视假设 (无云台数据/超时): 原版公式, 假设相机垂直向下且
+    //     图像上边朝机头, flip 参数修正安装方向。
+    const bool gimbal_mode = gimbalFresh();
+    double v_fwd = 0.0;
+    double v_right = 0.0;
+    if (gimbal_mode) {
+      // 光轴 (相机 x 轴) 在机体系的朝向: 偏离垂直向下过远说明画面几何
+      // 不满足"俯视看码"前提 (斜视/平视), 告警但不中断 (增益退化仍可对齐)
+      const cv::Point3d optical = quat_rot(cam_ori_, 1.0, 0.0, 0.0);
+      const double down_cos = std::fmax(-1.0, std::fmin(1.0, optical.z));
+      const double tilt_deg = std::acos(down_cos) * 180.0 / M_PI;
+      if (tilt_deg > 45.0) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 3000,
+          "\033[33m相机光轴偏离垂直向下 %.0f°, 云台未俯拍到位, 降落几何不成立\033[0m",
+          tilt_deg);
+      }
+      const cv::Point3d u_b = quat_rot(cam_ori_, 0.0, 1.0, 0.0);  // 图右 (机体系)
+      const cv::Point3d v_b = quat_rot(cam_ori_, 0.0, 0.0, 1.0);  // 图下 (机体系)
+      const double k = vel_gain_ * dist_factor * height_scale;
+      v_fwd = k * ((cx - land_cx_) * u_b.x + (cy - land_cy_) * v_b.x);
+      v_right = k * ((cx - land_cx_) * u_b.y + (cy - land_cy_) * v_b.y);
+    } else {
+      v_fwd = -vel_gain_ * (cy - land_cy_) * dist_factor * height_scale;
+      v_right = vel_gain_ * (cx - land_cx_) * dist_factor * height_scale;
+      if (flip_forward_) {
+        v_fwd = -v_fwd;
+      }
+      if (flip_right_) {
+        v_right = -v_right;
+      }
     }
-    if (flip_right_) {
-      v_right = -v_right;
+    if (!ctrl_mode_logged_) {
+      ctrl_mode_logged_ = true;
+      RCLCPP_INFO(
+        get_logger(), "\033[36m水平控制模式: %s\033[0m", gimbal_mode ?
+        "云台姿态泛化映射 (gimbal_topic)" : "刚性下视假设 (flip 参数)");
     }
     v_fwd = clampd(v_fwd, max_h_vel_);
     v_right = clampd(v_right, max_h_vel_);
@@ -554,9 +645,10 @@ private:
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "[TRACKING] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
+      "[TRACKING][%s] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
       "对齐误差=%.3f (容差%.3f%s 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
       "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
+      gimbal_mode ? "云台泛化" : "刚性下视",
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
       align_err, align_tol_, aligned ? "已对齐" : "未对齐", height_scale,
@@ -620,6 +712,16 @@ private:
           get_logger(), "\033[32m已确认进入 AUTO.LAND, 停发 offboard, "
           "PX4 自动下降中 (等待落地自动上锁)\033[0m");
       }
+      return;
+    }
+    // AUTO.LAND 确认前模式被切走 (非 offboard): 同 TRACKING, 外部接管不抢回,
+    // 停止请求 AUTO.LAND (对 RTL/飞手接管继续抢模式等于抢飞机)
+    if (ever_offboard_ && !px4_->isOffboard()) {
+      RCLCPP_WARN(
+        get_logger(), "\033[33mOFFBOARD 被外部切换 (当前模式: %s), "
+        "AUTO.LAND 未及确认, 判定为外部接管, 交还控制权并退出降落流程\033[0m",
+        px4_->modeName().c_str());
+      toIdle();
       return;
     }
     // AUTO.LAND 确认前继续维持 offboard 心跳+悬停 (断流会触发 failsafe 抢先接管)
@@ -690,7 +792,13 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
+
+  // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻
+  geometry_msgs::msg::Quaternion cam_ori_;
+  rclcpp::Time cam_ori_time_{0, 0, RCL_ROS_TIME};
+  double gimbal_timeout_sec_ = 0.5;
 
   // 状态机
   State state_ = State::IDLE;
@@ -718,6 +826,8 @@ private:
   std::vector<cv::Point3d> positions_;  // 趋势角滑动窗口 (ENU)
   bool land_confirmed_ = false;     // 已确认 AUTO.LAND (打一次日志)
   bool had_target_ = false;         // 目标捕获/丢失事件日志用
+  bool ever_offboard_ = false;      // 本次流程曾进入过 OFFBOARD (判定外部接管用)
+  bool ctrl_mode_logged_ = false;   // 水平控制模式日志只打一次
   int tracked_id_ = -1;             // 锁定的目标码 ID (-1 = 未锁定)
   double lost_id_time_ = 0.0;       // 锁定目标持续丢失时长
   bool start_pending_ = false;      // landing_start 已挂起 (等飞控状态到达后补执行)

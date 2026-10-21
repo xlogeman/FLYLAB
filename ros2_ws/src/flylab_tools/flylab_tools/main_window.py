@@ -49,6 +49,8 @@ class MainWindow(QMainWindow):
         self._fwd_count = 0
         self._fwd_last = time.monotonic()
         self._last_src, self._last_fps = '', 0.0
+        # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
+        self._cam_ori_last = 0.0
         self.algo_panel = QGroupBox('算法')
         algo_lay = QVBoxLayout(self.algo_panel)
         algo_lay.setContentsMargins(6, 4, 6, 6)
@@ -411,6 +413,13 @@ class MainWindow(QMainWindow):
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
+        # 相机机体系姿态 (10Hz): 供 aruco_landing 做云台泛化的方向映射;
+        # 非 AirSim 源 get_cam_orientation() 返回 None, 不发布
+        now_mono = time.monotonic()
+        if now_mono - self._cam_ori_last >= 0.1:
+            self._cam_ori_last = now_mono
+            self.node.publish_cam_orientation(
+                self.camera_tab.grabber.get_cam_orientation())
 
     def _publish_display_frame(self):
         """取当前显示的帧转发给算法节点 (深度伪彩帧跳过, 无检测意义)。"""

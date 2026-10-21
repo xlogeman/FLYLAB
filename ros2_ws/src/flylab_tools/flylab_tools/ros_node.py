@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import Quaternion
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
@@ -35,6 +36,11 @@ class GroundStationNode(Node):
         # 不白白占用 CPU 序列化大图)
         self.image_pub = self.create_publisher(
             Image, config.DISPLAY_IMAGE_TOPIC, qos_profile_sensor_data)
+
+        # 相机机体系姿态 (ArUco 降落云台泛化): 当前显示相机相对机体的姿态
+        # 四元数, 界面线程按 10Hz 调 publish_cam_orientation() 发布
+        self.gimbal_pub = self.create_publisher(
+            Quaternion, config.GIMBAL_STATE_TOPIC, 30)
 
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
@@ -95,6 +101,16 @@ class GroundStationNode(Node):
         """发布算法启停等字符串指令。"""
         self.cmd_pub.publish(String(data=cmd))
         self.get_logger().info(f'发布指令: {cmd}')
+
+    def publish_cam_orientation(self, q):
+        """发布当前显示相机相对机体的姿态四元数 (x, y, z, w, 相机 NED 体约定)。
+        q 为 None (非 AirSim 源 / 尚无位姿数据) 时不发布 —— 订阅方超时后
+        自动回退刚性下视假设, 无需特殊处理。"""
+        if q is None:
+            return
+        msg = Quaternion()
+        msg.x, msg.y, msg.z, msg.w = q
+        self.gimbal_pub.publish(msg)
 
     def publish_frame(self, arr):
         """把当前显示的帧 (BGR ndarray, 原图分辨率) 发布为 sensor_msgs/Image。

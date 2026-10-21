@@ -155,7 +155,7 @@ public:
   {
     return status_.nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND;
   }
-  const char * currentModeName() const {return nav_state_name(status_.nav_state);}
+  std::string modeName() const override {return nav_state_name(status_.nav_state);}
 
   /// 最近一次飞控状态距现在是否仍在 timeout_sec 内 (链路断链判定)
   bool linkFresh(double timeout_sec) const override
@@ -269,7 +269,7 @@ public:
       RCLCPP_INFO(
         node_.get_logger(), "请求进入 OFFBOARD (第 %u 次): 当前模式=%s, "
         "已预热 %.1fs, offboard 心跳+悬停 setpoint 持续发送中, 等待飞控确认/ACK ...",
-        attempts_, currentModeName(), elapsed);
+        attempts_, modeName().c_str(), elapsed);
       requestOffboard();
       last_request_ = now;
     }
