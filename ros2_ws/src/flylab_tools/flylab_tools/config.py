@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """flylab_tools 全局配置 —— 改这里，不改代码。"""
 
+# ---------- 地面站窗口大小 ----------
+# 初始窗口大小 = 屏幕可用区域 × 比例 (画面随窗口等比缩放;
+# 窗口无固定尺寸, 启动后可直接拖拽边缘调整, 此处只影响初始大小)
+WINDOW_SIZE_RATIO = (0.4, 0.4)   # (宽, 高) 相对屏幕可用区域的比例
+
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
 
@@ -47,6 +52,18 @@ GIMBAL_PITCH_MAX_DEG = 126.87    # 俯仰上限 (绝对 +90°, 垂直向上)
 LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node']
 LANDING_START_CMD = 'landing_start'
 LANDING_STOP_CMD = 'landing_stop'
+# 降落节点的状态回传话题 (tracking/landing/landed/idle),
+# 地面站据此复位按钮并给成功/中止反馈
+LANDING_STATUS_TOPIC = '/flylab/landing_status'
+
+# ---------- 通信链路 (地面站一键拉起, 省开终端) ----------
+# uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888。供 tracker:=uxrce / aruco_landing
+# (link:=uxrce) 链路使用
+UXRCE_CMD = ['MicroXRCEAgent', 'udp4', '-p', '8888']
+# MAVROS: 经典 MAVLink 桥, 用 14542 专属实例 (14580 会被 AirSim 抢占, 详见 README)
+MAVROS_CMD = ['ros2', 'run', 'mavros', 'mavros_node', '--ros-args',
+              '-p', 'fcu_url:=udp://:14542@', '-p', 'tgt_system:=1',
+              '-p', 'tgt_component:=1']
 
 # ---------- 算法选择 (下拉框 + 运行/取消按钮) ----------
 # name=下拉框显示文字, start/stop=运行/取消时发布的指令。

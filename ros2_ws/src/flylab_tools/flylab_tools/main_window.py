@@ -9,13 +9,14 @@
 点取消自动回收 (未配 cmd 则假定节点已在外部运行, 只发启停指令)。
 """
 import os
+import signal
 import subprocess
 import time
 
 import rclpy
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QMainWindow, QPushButton,
-                           QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QMainWindow,
+                           QPushButton, QVBoxLayout, QWidget)
 
 from . import config
 from .camera_widget import CameraViewWidget
@@ -39,13 +40,18 @@ class MainWindow(QMainWindow):
         self.running_algo = None
         self.proc = None       # 本地面站拉起的算法进程 (Popen), 无则 None
         self.land_proc = None  # ArUco 降落节点进程 (独立于算法进程)
+        self._last_landing_seq = 0  # 已处理的降落状态事件序号
+        # 通信链路进程 (地面站一键拉起, 省开终端): uXRCE-DDS Agent / MAVROS
+        self.link_procs = {}   # key -> Popen
+        self.link_btns = {}    # key -> QPushButton
+        self.link_titles = {}  # key -> 按钮标题 (日志用)
         # 显示帧转发统计 (运行中每 2 秒打一条日志)
         self._fwd_count = 0
         self._fwd_last = time.monotonic()
         self._last_src, self._last_fps = '', 0.0
-        self.algo_panel = QWidget()
+        self.algo_panel = QGroupBox('算法')
         algo_lay = QVBoxLayout(self.algo_panel)
-        algo_lay.setContentsMargins(0, 0, 0, 0)
+        algo_lay.setContentsMargins(6, 4, 6, 6)
         self.algo_combo = QComboBox()
         for algo in config.ALGORITHMS:
             self.algo_combo.addItem(algo['name'])
@@ -62,19 +68,23 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.algo_cancel_btn)
         algo_lay.addLayout(btn_row)
         # ArUco 降落: 独立 toggle 按钮 (与算法下拉框互不影响, 检测可同时运行)。
-        # 按下: 拉起 aruco_landing_node 并发 landing_start 触发三态状态机;
-        # 抬起: 发 landing_stop 取消降落并交还控制权。
+        # 按下: 拉起 aruco_landing_node (按所选通信链路传 link 参数) 并发
+        # landing_start 触发三态状态机; 抬起: 发 landing_stop 取消降落并交还控制权。
         # 默认禁用, 门控见 _update_landing_btn: 需 ArUco检测运行中 且
-        # 云台俯仰转到垂直向下才可点 (降落进行中保持可点, 随时可取消)。
+        # 云台俯仰转到垂直向下 且 已选择通信链路 才可点
+        # (降落进行中保持可点, 随时可取消)。
         self.landing_btn = QPushButton('ArUco降落')
         self.landing_btn.setCheckable(True)
         self.landing_btn.setEnabled(False)
         self.landing_btn.setToolTip(
-            '需先: 1) 运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)')
+            '需先: 1) 运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)  '
+            '3) 下方选择通信链路 (uXRCE-DDS / MAVROS)')
         self.landing_btn.setStyleSheet(self._LAND_BTN_STYLE)
         self.landing_btn.clicked.connect(self._on_landing_toggle)
         algo_lay.addWidget(self.landing_btn)
+        # 右栏三个分组框: 输入源 / 云台 (camera_widget) + 算法 / 通信链路 (这里)
         self.camera_tab.add_side_widget(self.algo_panel)
+        self.camera_tab.add_side_widget(self._build_link_panel())
 
         self.setCentralWidget(self.camera_tab)
 
@@ -87,6 +97,107 @@ class MainWindow(QMainWindow):
         QPushButton { min-height: 32px; }
         QPushButton:checked { background-color: #2d8a3e; color: white; }
     """
+
+    # ---------- 通信链路面板 (uXRCE-DDS / MAVROS 一键起停) ----------
+
+    def _build_link_panel(self):
+        """通信链路分组: 两个 toggle 按钮并排一行, 互斥 (一次只开一条链路)"""
+        box = QGroupBox('通信链路')
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 4, 6, 6)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        for key, text, cmd in (
+                ('uxrce', 'uXRCE-DDS', config.UXRCE_CMD),
+                ('mavros', 'MAVROS', config.MAVROS_CMD)):
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setStyleSheet(self._BTN_STYLE)
+            btn.setToolTip(' '.join(cmd))
+            # toggled (而非 clicked): 状态变化即处理, 便于互斥时联动另一条链路
+            btn.toggled.connect(
+                lambda checked, k=key, c=cmd, t=text: self._on_link_toggled(k, checked, c, t))
+            row.addWidget(btn, stretch=1)
+            self.link_btns[key] = btn
+            self.link_titles[key] = text
+        lay.addLayout(row)
+        return box
+
+    def _on_link_toggled(self, key, checked, cmd, title):
+        """链路按钮 toggle: 起/停对应桥进程; 两条链路互斥, 开启一条先停另一条。"""
+        if not checked:
+            self._stop_link(key, title)
+            return
+        # 互斥: 开启一条链路前, 把另一条停掉 (按钮一起弹起)
+        for other_key, other_btn in self.link_btns.items():
+            if other_key != key and other_btn.isChecked():
+                self._stop_link(other_key, self.link_titles.get(other_key))
+        self._start_link(key, cmd, title)
+
+    def _start_link(self, key, cmd, title):
+        """拉起桥进程 (独立进程组, 停止时整组回收, 避免 ros2 run 留下孤儿)。"""
+        if key in self.link_procs and self.link_procs[key].poll() is None:
+            return
+        self.node.get_logger().info(f'启动 {title}: {" ".join(cmd)}')
+        try:
+            # start_new_session=True: 子进程独立进程组, 停止时 killpg 整组回收
+            proc = subprocess.Popen(cmd, start_new_session=True)
+        except (OSError, FileNotFoundError) as e:
+            self.node.get_logger().error(
+                f'{title} 启动失败: {e} (可执行文件是否在 PATH?)')
+            self._set_link_btn(key, False)
+            return
+        self.link_procs[key] = proc
+        # 0.5s 后自检: 立即退出说明命令有问题 (端口占用/二进制缺失)
+        QTimer.singleShot(500, lambda: self._verify_link(key, title))
+
+    def _verify_link(self, key, title):
+        """启动后自检: 进程已退出则报错并复位按钮。"""
+        proc = self.link_procs.get(key)
+        if proc is None or proc.poll() is None:
+            return
+        self.node.get_logger().error(
+            f'{title} 启动后立即退出 (退出码 {proc.returncode}), '
+            f'请检查端口占用 / 二进制是否存在')
+        self.link_procs.pop(key, None)
+        self._set_link_btn(key, False)
+
+    def _stop_link(self, key, title=None):
+        """停止桥进程: SIGTERM 整个进程组, 超时再 SIGKILL。"""
+        proc = self.link_procs.pop(key, None)
+        self._set_link_btn(key, False)
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+        self.node.get_logger().info(f'通信链路已停止: {title or key}')
+
+    def _set_link_btn(self, key, checked):
+        """同步按钮状态 (blockSignals 避免触发 toggle 回调重启进程)。"""
+        btn = self.link_btns.get(key)
+        if btn is None:
+            return
+        btn.blockSignals(True)
+        btn.setChecked(checked)
+        btn.blockSignals(False)
+
+    def _check_link_alive(self):
+        """轮询: 桥进程异常退出则复位按钮 (用户可重新点起)。"""
+        for key, proc in list(self.link_procs.items()):
+            if proc.poll() is not None:
+                self.node.get_logger().error(
+                    f'通信链路进程退出 (退出码 {proc.returncode}), 请重新点击启动')
+                self.link_procs.pop(key, None)
+                self._set_link_btn(key, False)
 
     _LAND_BTN_STYLE = """
         QPushButton { min-height: 32px; }
@@ -138,15 +249,30 @@ class MainWindow(QMainWindow):
 
     # ---------- ArUco 降落 (独立 toggle 按钮) ----------
 
+    def _selected_link(self):
+        """当前选中的通信链路 (uXRCE-DDS / MAVROS), 未选返回 None。"""
+        for key, btn in self.link_btns.items():
+            if btn.isChecked():
+                return key
+        return None
+
     def _update_landing_btn(self):
-        """降落按钮门控 (33ms 轮询): ArUco检测运行中 且 云台俯仰到垂直向下
-        限位 (绝对 -90°, 即相对俯仰到 GIMBAL_PITCH_MIN_DEG) 才可点。
-        降落进行中不参与门控 —— 保持可点, 随时可取消交还控制权。"""
+        """降落按钮门控 (33ms 轮询): 需同时满足
+        1) ArUco检测运行中
+        2) 云台俯仰到垂直向下限位 (绝对 -90°, 即相对俯仰到 GIMBAL_PITCH_MIN_DEG)
+        3) 下方已选择通信链路 (uXRCE-DDS / MAVROS 之一已开启)
+        降落进行中不参与门控 —— 保持可点, 随时可取消交还控制权;
+        同时禁用链路切换按钮 (换桥会断掉正在跑的降落控制)。"""
         if self.landing_btn.isChecked():
+            for btn in self.link_btns.values():
+                btn.setEnabled(False)
             return
+        for btn in self.link_btns.values():
+            btn.setEnabled(True)
         ok = False
         algo = self.running_algo
-        if algo is not None and algo.get('enables_landing'):
+        if (algo is not None and algo.get('enables_landing')
+                and self._selected_link() is not None):
             gim = self.camera_tab.grabber.get_gimbal()
             if gim is not None:
                 _, pitch = gim
@@ -156,16 +282,53 @@ class MainWindow(QMainWindow):
 
     def _on_landing_toggle(self):
         if self.landing_btn.isChecked():
+            # 链路参数跟随下方所选链路 (mavros / uxrce)
+            link = self._selected_link() or 'mavros'
+            cmd = list(config.LANDING_CMD) + ['--ros-args', '-p', f'link:={link}']
             self.node.get_logger().info(
-                f'启动降落节点进程: {" ".join(config.LANDING_CMD)}')
-            self.land_proc = subprocess.Popen(config.LANDING_CMD)
-            # 新进程 DDS 发现需要约 1s, 延迟发触发指令 (期间取消则跳过)
-            QTimer.singleShot(1000, self._send_landing_start)
+                f'启动降落节点进程 (link={link}): {" ".join(cmd)}')
+            self.land_proc = subprocess.Popen(cmd)
+            # 新进程要完成 DDS 发现 + 收到首帧飞控状态 (共 1~3s), 单发一条
+            # landing_start 撞上任何一步都会被吞掉 (表现为"第一次点击无效"),
+            # 故启动后重发多次: 节点对重复 start 幂等, 多发无副作用
+            QTimer.singleShot(1000, lambda: self._send_landing_start(6))
         else:
             self._stop_landing()
 
-    def _send_landing_start(self):
-        """延迟触发降落; 按钮已抬起或节点进程已死则跳过。"""
+    def _check_landing_status(self):
+        """降落节点状态事件处理: 成功(landed)/结束(idle) → 按钮弹起并给反馈。
+        状态带事件序号, 只在有新事件时处理 (不漏瞬时的"成功")。"""
+        status, seq = self.node.get_landing_status()
+        if seq == self._last_landing_seq:
+            return
+        self._last_landing_seq = seq
+        if not status:
+            return
+        if status == 'landed':
+            self.node.get_logger().info(
+                '\033[32mArUco 视觉降落完成, 飞机已上锁\033[0m')
+            self._flash_landing_btn('#2d8a3e')      # 绿色高亮闪一下
+        elif status == 'idle':
+            self.node.get_logger().info('降落流程已结束 (取消/中止), 按钮已复位')
+        else:
+            return
+        # 按钮弹起 (checked = 降落进行中) + 回收降落节点进程
+        self.landing_btn.setChecked(False)
+        proc = self.land_proc
+        self.land_proc = None
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+    def _flash_landing_btn(self, color):
+        """按钮背景色闪烁提示, 1.5s 后恢复原样式。"""
+        self.landing_btn.setStyleSheet(
+            self._LAND_BTN_STYLE +
+            f'\nQPushButton {{ background-color: {color}; color: white; }}')
+        QTimer.singleShot(1500, lambda: self.landing_btn.setStyleSheet(
+            self._LAND_BTN_STYLE))
+
+    def _send_landing_start(self, retries_left):
+        """触发降落并按 500ms 间隔重发; 按钮已抬起或节点进程已死则跳过。"""
         if not self.landing_btn.isChecked():
             return
         if self.land_proc is not None and self.land_proc.poll() is not None:
@@ -176,6 +339,8 @@ class MainWindow(QMainWindow):
             self.landing_btn.setChecked(False)
             return
         self.node.publish_cmd(config.LANDING_START_CMD)
+        if retries_left > 0:
+            QTimer.singleShot(500, lambda: self._send_landing_start(retries_left - 1))
 
     def _stop_landing(self):
         """取消降落: 发 landing_stop (节点自行切回 LOITER 交还控制权并清标注),
@@ -240,7 +405,9 @@ class MainWindow(QMainWindow):
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
         self._check_algo_alive()
-        self._update_landing_btn()   # 降落按钮门控 (检测运行中 + 云台垂直向下)
+        self._check_link_alive()     # 桥进程异常退出则复位按钮
+        self._check_landing_status()  # 降落结果反馈 (成功/中止 → 按钮弹起)
+        self._update_landing_btn()   # 降落按钮门控 (检测运行中 + 云台垂直向下 + 已选链路)
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
@@ -279,7 +446,7 @@ class MainWindow(QMainWindow):
             pass
 
     def shutdown(self):
-        """优雅退出: 回收算法进程, 停掉后台线程。"""
+        """退出: 回收算法进程, 停掉后台线程。"""
         if self.running_algo is not None:
             self._stop_algo()
         if self.land_proc is not None:
@@ -287,4 +454,6 @@ class MainWindow(QMainWindow):
                 self.node.publish_cmd(config.LANDING_STOP_CMD)
                 self.land_proc.terminate()
             self.land_proc = None
+        for key in list(self.link_procs):
+            self._stop_link(key)
         self.camera_tab.shutdown()

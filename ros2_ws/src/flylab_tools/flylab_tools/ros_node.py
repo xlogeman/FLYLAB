@@ -42,6 +42,17 @@ class GroundStationNode(Node):
         self._anno_last_rx = 0.0
         self.anno_fps = 0.0
 
+        # 降落节点状态回传 (tracking/landing/landed/idle):
+        # 记最新状态 + 递增序号, 界面按序号变化取事件 (不漏 "成功" 这类瞬时状态)
+        self._landing_status = ''
+        self._landing_status_seq = 0
+        self.create_subscription(
+            String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
+
+    def _landing_status_cb(self, msg):
+        self._landing_status = msg.data.strip()
+        self._landing_status_seq += 1
+
     def _anno_cb(self, msg):
         parsed = parse_message(msg.data)
         if parsed is None:
@@ -75,6 +86,10 @@ class GroundStationNode(Node):
         if time.monotonic() - self._anno_last_rx > 1.0:
             return 0.0
         return self.anno_fps
+
+    def get_landing_status(self):
+        """返回 (最新降落状态, 事件序号); 序号变化 = 有新状态事件。"""
+        return self._landing_status, self._landing_status_seq
 
     def publish_cmd(self, cmd):
         """发布算法启停等字符串指令。"""

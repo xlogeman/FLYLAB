@@ -73,7 +73,8 @@ source install/setup.bash
 bash /root/flylab/scripts/run-px4.sh                          # PX4 SITL (默认机型 none_iris)
 bash /root/flylab/scripts/run-px4.sh none_fucker_3120g_tw23 --clean   # 指定机型启动 (换机型用--clean 清缓存)
 
-MicroXRCEAgent udp4 -p 8888                 # PX4 <-> ROS2 桥 (仅 tracker:=uxrce 链路需要)
+MicroXRCEAgent udp4 -p 8888
+ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14542@ -p tgt_system:=1 -p tgt_component:=1
 
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
 ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 MAVROS 跟踪, 专属端口 14542)
@@ -100,13 +101,20 @@ ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停
 | `camera_widget.py` | 输入源控件：下拉选源 + 播放控制条 + 云台方向键 |
 | `ros_node.py` | ROS 节点：算法启停指令发布、显示画面转发、按算法分组的标注订阅 |
 | `overlay.py` | 模型输出叠加接口（按算法分组的消息 + 标注 schema） |
-| `main_window.py` | 主窗口：左画面 + 右侧算法面板（下拉框选算法 + 运行/取消按钮），管理算法进程生命周期 |
+| `main_window.py` | 主窗口：左画面 + 右侧面板（算法下拉框 + 运行/取消 + ArUco降落按钮 + 通信链路按钮），管理算法/降落/桥进程生命周期 |
 
 ```bash
 ros2 run flylab_tools ground_station   # 地面站总界面
 ```
 
 **新算法接入**：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
+
+**通信链路按钮**（右侧「通信链路」分组，免开终端）：
+- `uXRCE-DDS Agent (8888)` → `MicroXRCEAgent udp4 -p 8888`（供 `tracker:=uxrce` / `aruco_landing(link:=uxrce)` 用）
+- `MAVROS 桥 (14542)` → `mavros_node --ros-args -p fcu_url:=udp://:14542@ -p tgt_system:=1 -p tgt_component:=1`（**必须用 14542 专属实例**，14580 会被 AirSim 抢占）
+- 按钮是 toggle：点一下起、再点一下停；桥进程以独立进程组启动，停止时整组回收（不留孤儿进程）；进程异常退出时按钮自动复位并报错
+- 两条链路**互斥**：开启一条先停另一条
+- **「ArUco降落」按钮的前置条件包含"已选择链路"**（下方两个按钮之一已开启）：未选链路时按钮置灰不可点；所选链路同时作为降落节点的 `link` 参数（`link:=mavros` / `link:=uxrce`）下发；降落进行中禁止切换链路（换桥会断掉正在跑的降落控制）
 
 **显示画面转发**：地面站把当前显示帧（深度伪彩帧除外）以 30Hz 原分辨率发到 `/flylab/display/image_raw`，算法节点订阅它即可处理「用户正在看的画面」——无论输入源是 UE 相机、本机摄像头还是视频文件，切换对算法透明。无订阅者时自动跳过序列化不占 CPU；算法要吃原始相机话题时用 `-p image_topic:=/airsim/cam/front_cam/image_raw` 覆盖。
 
@@ -235,7 +243,7 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 | 端口 | 用途 | 对端 |
 |---|---|---|
 | TCP 4560 | HIL 物理仿真链路（传感器→PX4，执行器→UE） | UnrealEditor（Windows） |
-| UDP 14580→14540 | onboard 实例 | **被 AirSim 控制通道抢占**（见下） |
+| UDP 14580→14540 | onboard 实例 | **被 AirSim 控制通道抢占** |
 | UDP 14582→14542 | **MAVROS 专属实例** | MAVROS `fcu_url:=udp://:14542@` |
 | UDP 18570→14550 | GCS 实例 | QGC 等 |
 | UDP 8888 | uXRCE-DDS（`tracker:=uxrce` 链路） | MicroXRCEAgent |

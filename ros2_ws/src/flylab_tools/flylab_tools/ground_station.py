@@ -28,6 +28,7 @@ from PyQt5.QtCore import QLibraryInfo
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication
 
+from . import config
 from .main_window import MainWindow
 from .ros_node import GroundStationNode
 
@@ -46,9 +47,11 @@ def main(args=None):
 
     # QWidget 必须在 QApplication 之后创建
     win = MainWindow(node)
-    # 窗口大小按屏幕可用区域的比例设定, 画面随窗口等比缩放
+    # 窗口大小按屏幕可用区域的比例设定 (比例见 config.WINDOW_SIZE_RATIO),
+    # 画面随窗口等比缩放
     screen = app.primaryScreen().availableGeometry()
-    win.resize(int(screen.width() * 0.3), int(screen.height() * 0.32))
+    ratio_w, ratio_h = config.WINDOW_SIZE_RATIO
+    win.resize(int(screen.width() * ratio_w), int(screen.height() * ratio_h))
     win.show()
 
     # Ctrl+C 修复: 主线程阻塞在 Qt 事件循环里, 改为收到 SIGINT 直接退出事件循环

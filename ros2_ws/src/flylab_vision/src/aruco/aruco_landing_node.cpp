@@ -57,6 +57,11 @@ constexpr const char kCmdStart[] = "landing_start";
 constexpr const char kCmdStop[] = "landing_stop";
 constexpr const char kAnnoAlgo[] = "aruco_landing";     // 检测结果叠加分组
 constexpr const char kAnnoState[] = "landing_state";    // 状态机文字叠加分组
+constexpr const char kStatusTracking[] = "tracking";     // 接管 offboard, 视觉降落中
+constexpr const char kStatusLanding[] = "landing";       // 已切 AUTO.LAND
+constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机上锁)
+constexpr const char kStatusIdle[] = "idle";             // 流程结束/取消/中止
+constexpr double kStartPendingTimeout = 15.0;  // 挂起的 landing_start 等待飞控状态的最长时间 (s)
 
 /// sensor_msgs/Image -> BGR cv::Mat (与 aruco_node 相同的手动转换, 不依赖 cv_bridge)
 cv::Mat to_bgr(const sensor_msgs::msg::Image & msg)
@@ -125,6 +130,8 @@ public:
     const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/flylab/vision_cmd");
     const auto anno_topic =
       declare_parameter<std::string>("annotation_topic", "/flylab/annotations");
+    const auto status_topic =
+      declare_parameter<std::string>("status_topic", "/flylab/landing_status");
     const auto dict_name = declare_parameter<std::string>("dict_name", "DICT_4X4_1000");
     const auto marker_length = declare_parameter<double>("marker_length", 0.2);
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
@@ -136,6 +143,11 @@ public:
     land_cy_ = declare_parameter<double>("land_cy", 0.5);
     vel_gain_ = declare_parameter<double>("vel_gain", 0.6);      // 水平对齐 P 增益
     max_h_vel_ = declare_parameter<double>("max_h_vel", 0.8);    // 水平速度限幅 (m/s)
+    align_ref_alt_ = declare_parameter<double>("align_ref_alt", 2.5);   // 高度增益缩放基准高度 (m, 0=禁用)
+    max_height_scale_ = declare_parameter<double>("max_height_scale", 3.0);  // 高度缩放上限
+    far_descend_tol_ = declare_parameter<double>("far_descend_tol", 0.20);   // 未对齐时允许慢降的最大误差
+    far_descend_area_ = declare_parameter<double>("far_descend_area", 0.05); // 仅远处(面积小于此)允许边对齐边降
+    far_descend_scale_ = declare_parameter<double>("far_descend_scale", 0.5); // 边对齐边降的速度折扣
     descend_close_ = declare_parameter<double>("descend_close", 0.08);  // 面积大(近)时下降速度 (正值=向下, m/s)
     descend_far_ = declare_parameter<double>("descend_far", 0.4);       // 面积小(远)时下降速度 (正值=向下, m/s)
     area_s_thresh_ = declare_parameter<double>("area_s_thresh", 0.85);   // 速度调度分段点
@@ -180,6 +192,7 @@ public:
 
     // ---------- 地面站链路 ----------
     anno_pub_ = create_publisher<std_msgs::msg::String>(anno_topic, 10);
+    status_pub_ = create_publisher<std_msgs::msg::String>(status_topic, 10);
     cmd_sub_ = create_subscription<std_msgs::msg::String>(
       cmd_topic, 10, [this](const std_msgs::msg::String::SharedPtr msg) {on_cmd(*msg);});
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
@@ -221,11 +234,20 @@ private:
       RCLCPP_WARN(get_logger(), "已在降落流程中, 忽略重复 %s", kCmdStart);
       return;
     }
+    start_pending_ = false;
     if (!px4_->gotStatus()) {
-      RCLCPP_WARN(
-        get_logger(), link_ == "mavros" ?
-        "尚未收到飞控状态! 请先启动 MAVROS (fcu_url:=udp://:14542@) 并确认 /mavros/state 已连接" :
-        "尚未收到 PX4 飞控数据! 请先启动 MicroXRCEAgent:  MicroXRCEAgent udp4 -p 8888");
+      // 刚拉起的节点还没收到飞控状态 (DDS 发现 + 首帧状态需 1~3s), 而地面站
+      // 只在点击后发一次 landing_start —— 直接丢弃会造成"第一次点击无效"。
+      // 挂起待执行, 状态到达后在 tick() 里补执行 (限时防永久悬挂;
+      // 重复 landing_start 不刷新时限也不重复告警)
+      if (!start_pending_) {
+        start_pending_ = true;
+        start_pending_deadline_ =
+          now() + rclcpp::Duration::from_seconds(kStartPendingTimeout);
+        RCLCPP_WARN(
+          get_logger(), "\033[33m尚未收到飞控状态, %s 已挂起, "
+          "状态到达后自动触发 (限时 %.0fs)\033[0m", kCmdStart, kStartPendingTimeout);
+      }
       return;
     }
     if (!px4_->armed()) {
@@ -248,6 +270,7 @@ private:
     RCLCPP_INFO(
       get_logger(),
       "\033[32m开始 ArUco 视觉降落: 接管 offboard, 预热 %.1fs 后切模式\033[0m", offboard_warmup_sec_);
+    publishStatus(kStatusTracking);
   }
 
   void onCancel()
@@ -266,10 +289,25 @@ private:
     toIdle();
   }
 
-  void toIdle()
+  void toIdle(bool notify = true)
   {
     state_ = State::IDLE;
+    start_pending_ = false;  // 取消/完成时丢弃尚未触发的挂起指令
+    if (notify) {
+      publishStatus(kStatusIdle);
+    }
     clear_annotations();
+  }
+
+  // ---------------- 状态回传 (地面站据此复位按钮/给反馈) ----------------
+  // tracking: 已接管 offboard 开始视觉降落; landing: 已切 AUTO.LAND;
+  // landed: 降落成功 (飞机上锁); idle: 流程结束/取消/中止
+  void publishStatus(const char * status)
+  {
+    std_msgs::msg::String msg;
+    msg.data = status;
+    status_pub_->publish(msg);
+    RCLCPP_INFO(get_logger(), "[状态] %s", status);
   }
 
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------
@@ -362,6 +400,18 @@ private:
     const double dt = std::fmax(0.001, (now_t - last_tick_).seconds());
     last_tick_ = now_t;
     if (state_ == State::IDLE) {
+      // 有挂起的 landing_start: 飞控状态已到则补执行, 超时则放弃
+      if (start_pending_) {
+        if (px4_->gotStatus()) {
+          start_pending_ = false;
+          onStart();
+        } else if ((now_t - start_pending_deadline_).seconds() > 0.0) {
+          start_pending_ = false;
+          RCLCPP_WARN(
+            get_logger(), "\033[33m挂起的 %s 等待飞控状态超时 (%.0fs) 已放弃, "
+            "请检查链路后重新点击\033[0m", kCmdStart, kStartPendingTimeout);
+        }
+      }
       return;
     }
     // 链路断链告警 (只报警不中断, 与 tracker 链路一致)
@@ -441,8 +491,21 @@ private:
 
     // 水平对齐 (机体系 FRD: x 前 y 右)。约定相机垂直向下、图像上边朝机头:
     // 目标偏画面上方 (cy 小) → 向前; 偏画面右侧 (cx 大) → 向右。方向不符用 flip 参数翻转
-    double v_fwd = -vel_gain_ * (cy - land_cy_) * dist_factor;
-    double v_right = vel_gain_ * (cx - land_cx_) * dist_factor;
+    //
+    // 高度增益缩放: 增益按归一化画面坐标定义, 而同一归一化误差在高空对应的水平距离
+    // 大得多 (9.5m 高 60°FOV 视场宽约 11m, 误差 0.13 ≈ 1.4m), 固定增益下收敛时间
+    // τ = 视场宽/(gain×dist_factor) 随高度线性变长 → 高空对齐极慢。
+    // 按当前高度/基准高度放大增益, 使归一化收敛速率与高度无关; 封顶防高空过冲,
+    // 基准高度 (低空近距) 以下不放大, 近距行为与原版一致
+    const auto & pos = px4_->localPosition();
+    double height_scale = 1.0;
+    if (align_ref_alt_ > 0.0 && pos.z_valid) {
+      const double h = std::fmax(0.5, -pos.z);
+      height_scale = std::fmin(
+        std::fmax(h / align_ref_alt_, 1.0), max_height_scale_);
+    }
+    double v_fwd = -vel_gain_ * (cy - land_cy_) * dist_factor * height_scale;
+    double v_right = vel_gain_ * (cx - land_cx_) * dist_factor * height_scale;
     if (flip_forward_) {
       v_fwd = -v_fwd;
     }
@@ -459,6 +522,11 @@ private:
     double v_down = 0.0;
     if (aligned) {
       v_down = descendSchedule(area);
+    } else if (area < far_descend_area_ && align_err < far_descend_tol_) {
+      // 高空边对齐边慢降: 距离远时目标离画面中心再偏也仍有出画余量,
+      // 纯对齐干等浪费时间。下降会让同一水平偏移对应的归一化误差增大,
+      // 误差超出门限即自动停降回去对齐, 自平衡不会把目标推出画面
+      v_down = descendSchedule(area) * far_descend_scale_;
     }
 
     // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应, 移植自参考 L519-527/683-693)
@@ -477,21 +545,21 @@ private:
         area, align_err, trend_angle_);
       state_ = State::LANDING;
       last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+      publishStatus(kStatusLanding);
       return;
     }
 
     px4_->sendVelocityFRD(v_fwd, v_right, v_down);
     publishStatusAnno(now_t, area, align_err, v_fwd, v_right, v_down);
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
-    const auto & pos = px4_->localPosition();
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
       "[TRACKING] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
-      "对齐误差=%.3f (容差%.3f%s) 趋势角=%.0f°(门限%.0f°) "
+      "对齐误差=%.3f (容差%.3f%s 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
       "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
-      align_err, align_tol_, aligned ? "已对齐" : "未对齐",
+      align_err, align_tol_, aligned ? "已对齐" : "未对齐", height_scale,
       trend_angle_, vertical_threshold_deg_,
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
   }
@@ -541,7 +609,8 @@ private:
   {
     if (!px4_->armed()) {
       RCLCPP_INFO(get_logger(), "\033[32m飞机已上锁, ArUco 视觉降落完成\033[0m");
-      toIdle();
+      publishStatus(kStatusLanded);   // 成功: 地面站据此复位按钮并给反馈
+      toIdle(false);                   // 不再发 idle, 避免覆盖"成功"事件
       return;
     }
     if (px4_->isAutoLand()) {
@@ -618,6 +687,7 @@ private:
   // 视觉与地面站
   std::unique_ptr<ArucoDetector> detector_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -632,6 +702,8 @@ private:
   // 调参项
   int target_id_;
   double land_cx_, land_cy_, vel_gain_, max_h_vel_;
+  double align_ref_alt_, max_height_scale_;
+  double far_descend_tol_, far_descend_area_, far_descend_scale_;
   double descend_close_, descend_far_, area_s_thresh_;
   double align_tol_, land_area_thresh_, vertical_threshold_deg_;
   int min_landing_frames_, angle_window_min_, angle_window_max_;
@@ -648,6 +720,8 @@ private:
   bool had_target_ = false;         // 目标捕获/丢失事件日志用
   int tracked_id_ = -1;             // 锁定的目标码 ID (-1 = 未锁定)
   double lost_id_time_ = 0.0;       // 锁定目标持续丢失时长
+  bool start_pending_ = false;      // landing_start 已挂起 (等飞控状态到达后补执行)
+  rclcpp::Time start_pending_deadline_{0, 0, RCL_ROS_TIME};  // 挂起超时时刻
   rclcpp::Time last_mode_cmd_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_tick_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_status_anno_{0, 0, RCL_ROS_TIME};

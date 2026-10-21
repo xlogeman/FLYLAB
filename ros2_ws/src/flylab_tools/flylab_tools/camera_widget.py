@@ -18,8 +18,8 @@ import threading
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout,
-                           QHBoxLayout, QLabel, QPushButton, QSlider,
-                           QVBoxLayout, QWidget)
+                           QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                           QSlider, QVBoxLayout, QWidget)
 
 from . import config
 from .camera_grabber import (DEFAULT_CAMERAS, FILE_PREFIX, LOCAL_PREFIX,
@@ -96,7 +96,7 @@ class CameraViewWidget(QWidget):
         ctrl_layout.addWidget(self.slider, stretch=1)
         ctrl_layout.addWidget(self.time_label)
         self.file_ctrl.setEnabled(False)
-        self._build_gimbal()
+        self._build_gimbal(in_group=side_panel)
 
         src_label = QLabel('输入源:')
         if side_panel:                       # 左画面+控制条 / 右栏 (地面站)
@@ -111,11 +111,19 @@ class CameraViewWidget(QWidget):
             outer.addWidget(line)
             panel = QVBoxLayout()
             outer.addLayout(panel)
-            panel.addWidget(src_label)
-            panel.addWidget(self.combo)
+            # 输入源 / 云台 各自成框 (分组标题已说明用途, 框内不再重复标题)
+            src_box = QGroupBox('输入源')
+            src_lay = QVBoxLayout(src_box)
+            src_lay.setContentsMargins(6, 4, 6, 6)
+            src_lay.addWidget(self.combo)
+            panel.addWidget(src_box)
             self._panel = panel
             self._panel_stretch_index = panel.count()
-            panel.addWidget(self.gimbal)
+            gimbal_box = QGroupBox('云台')
+            gim_lay = QVBoxLayout(gimbal_box)
+            gim_lay.setContentsMargins(6, 4, 6, 6)
+            gim_lay.addWidget(self.gimbal)
+            panel.addWidget(gimbal_box)
             self._panel_stretch_index += 1
             panel.addStretch(1)
             panel.addWidget(self.status)
@@ -140,9 +148,10 @@ class CameraViewWidget(QWidget):
             self._panel.insertWidget(self._panel_stretch_index, w)
             self._panel_stretch_index += 1
 
-    def _build_gimbal(self):
+    def _build_gimbal(self, in_group=False):
         """云台控制面板: 方向键步进 + 回中 + 角度读数。
-        仅 AirSim 相机源可用 (本机/文件源在 _refresh 里置灰)。"""
+        仅 AirSim 相机源可用 (本机/文件源在 _refresh 里置灰)。
+        in_group=True 时外面已有分组框, 面板内不再重复"云台:"标题。"""
         step = config.GIMBAL_STEP_DEG
         self._gimbal_btns = {}   # 方向键 -> 按钮 (到限位标红), 见 _update_gimbal_limit
         self._btn_styles = {}    # 按钮当前样式缓存, 避免每帧重复 setStyleSheet
@@ -169,7 +178,8 @@ class CameraViewWidget(QWidget):
         self.gimbal_angle.setStyleSheet(
             'color: #444; font-family: monospace;')
         self.gimbal_angle.setToolTip(limit_tip)
-        g.addWidget(title, 0, 0, 1, 3)
+        if not in_group:
+            g.addWidget(title, 0, 0, 1, 3)
         g.addWidget(dir_btn('pitch+', '↑', f'俯仰上 {step}°', 0, +step), 1, 1)
         g.addWidget(dir_btn('yaw-', '←', f'偏航左 {step}°', -step, 0), 2, 0)
         btn_center = QPushButton('回中')
