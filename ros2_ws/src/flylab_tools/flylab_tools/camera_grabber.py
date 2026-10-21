@@ -3,8 +3,10 @@
 
 被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
 附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)，
-世界系参考：偏航绕世界竖直轴、俯仰绕水平轴，机体倾斜时方向依然端正，
-地平线不滚动（详见 _apply_gimbal）。
+世界系参考：偏航绕世界竖直轴、俯仰绕水平轴。相机是机体刚性挂载，云台角
+须按当前机体姿态周期性重下发 (GIMBAL_HOLD_HZ) 才能在飞行中保持按键方向
+纯正——否则基准冻结在按键瞬间，下次按键会带着姿态差一起跳变
+（详见 _apply_gimbal 与主循环）。
 """
 import glob
 import json
@@ -221,6 +223,7 @@ class Grabber(threading.Thread):
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
         self._gimbal_dirty = False
+        self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
         self.running = True
         self._conn_last_log = 0.0   # AirSim 未连接时的日志节流 (每 10 秒一条)
 
@@ -570,8 +573,19 @@ class Grabber(threading.Thread):
                 with self.lock:
                     self._anim_tick()    # 回中动画: 每帧推进并置 dirty
                     gim_dirty, gim = self._gimbal_dirty, self._gimbal
-                if gim_dirty:
+                # 云台角只在按键瞬间按当时机体姿态换算一次, 相机随后刚性跟
+                # 随机体; 飞行中机体姿态一变 (前飞俯身/转向偏航), 记忆的
+                # (yaw,pitch) 就与实际视角脱钩, 下次按键会把积累的姿态差一
+                # 次性归零 —— 方向键不再纯上下/左右。因此除 dirty 立即下发
+                # 外, 还周期性按当前机体姿态重下发保持基准新鲜 (回中动画
+                # 每帧置 dirty 本就连续下发, 方向键路径在此补齐)。
+                now = time.monotonic()
+                if gim_dirty or (
+                        config.GIMBAL_HOLD_HZ > 0 and gim != (0.0, 0.0)
+                        and now - self._gimbal_apply_t
+                        >= 1.0 / config.GIMBAL_HOLD_HZ):
                     self._apply_gimbal(client, *gim)
+                    self._gimbal_apply_t = now
                 # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
                 # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
                 # PF_FloatRGBA ensure 断言并返回无效数据 (NaN/Inf)
