@@ -4,6 +4,9 @@
 数据来源 (AirSim RPC / ROS 话题 / 算法结果) 由各功能模块决定，
 把处理好的 BGR numpy 数组喂给 show_frame() 即可。
 """
+import base64
+
+import cv2
 import numpy as np
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter, QPolygonF
@@ -187,6 +190,27 @@ class VideoLabel(QLabel):
         self._annotations = annos
         self._redraw()
 
+    def _decode_image_anno(self, anno):
+        """image 图元: base64 -> QImage。同一份 data 只解码一次 (缓存 1 条),
+        每帧更新的稠密输出 (深度图) 与窗口重绘都走缓存, 不重复解码。"""
+        data = anno.get('data', '')
+        if not data:
+            return None
+        cached_data, cached_img = getattr(self, '_img_anno_cache', ('', None))
+        if data == cached_data:
+            return cached_img
+        try:
+            buf = np.frombuffer(base64.b64decode(data), np.uint8)
+            bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if bgr is None:
+                return None
+            h, w = bgr.shape[:2]
+            img = QImage(bgr.data, w, h, w * 3, QImage.Format_BGR888).copy()
+        except Exception:
+            return None
+        self._img_anno_cache = (data, img)
+        return img
+
     def _draw_annotations(self, painter, scaled):
         """把原图坐标的标注画到缩放后的显示 pixmap 上
         (pixmap 即缩放后的图像本身, 无需再加居中偏移)。"""
@@ -227,6 +251,22 @@ class VideoLabel(QLabel):
                 painter.drawPolyline(QPolygonF(qpts))
                 if a.get('close'):
                     painter.drawLine(qpts[-1], qpts[0])
+            elif a['type'] == 'image':
+                img = self._decode_image_anno(a)
+                if img is None:
+                    continue
+                iw, ih = img.width(), img.height()
+                # 绘制宽度: w 为原图像素, 省略按图像原生尺寸
+                dw = a.get('w') or iw
+                dh = ih * dw / iw
+                x, y = a['pos']
+                painter.save()
+                alpha = a.get('alpha', 1.0)
+                if alpha < 1.0:
+                    painter.setOpacity(alpha)
+                painter.drawImage(
+                    QRectF(x * scale, y * scale, dw * scale, dh * scale), img)
+                painter.restore()
             elif a['type'] == 'text':
                 tx, ty = a['pos']
                 text = a.get('text', '')

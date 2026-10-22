@@ -128,6 +128,8 @@ ros2 run flylab_tools ground_station   # 地面站总界面
   {"type": "text",     "pos": [x, y],         "text": "..."}]}
 ```
 
+稠密图像类输出（如深度估计）用 `image` 图元：`{"type": "image", "pos": [x,y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}`——pos 为原图左上角、w 为绘制宽度（原图像素，高按纵横比），alpha 叠加不透明度，地面站对同一份 data 只解码一次。
+
 **其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧不积压；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——其自带 Qt 与 PyQt5 冲突）。
 
 ### 4.2. flylab_vision 算法包
@@ -138,6 +140,8 @@ ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解�
 flylab_vision/
 ├── include/aruco/aruco_detector.hpp        # 核心检测库接口 (无 ROS 依赖)
 ├── include/yolo/yolo_detector.hpp          # YOLO 目标检测库接口 (pimpl 隔离 onnxruntime)
+├── include/yolo/yolo_classifier.hpp        # YOLO 图像分类库接口 (同上)
+├── include/yolo/yolo_depth.hpp             # YOLO 单目深度估计库接口 (同上)
 ├── include/control/                        # PX4 执行层 (可复用组件, 业务无关)
 │   ├── px4_offboard_client.hpp             #   总入口 (使用文档 + 兼容别名)
 │   ├── px4_offboard_client_base.hpp        #   公共接口 (基类 + 坐标约定: FRD 速度 / NED 位置)
@@ -149,7 +153,11 @@ flylab_vision/
 │   └── aruco_landing_node.cpp              # 降落业务节点 (三态状态机)
 ├── src/yolo/
 │   ├── yolo_detector.cpp                   # onnxruntime 推理 (letterbox/解码/NMS)
-│   └── yolo_node.cpp                       # 检测展示节点 (yolo_detect_node)
+│   ├── yolo_node.cpp                       # 检测展示节点 (yolo_detect_node)
+│   ├── yolo_classifier.cpp                 # 分类 onnxruntime 推理 + top-k
+│   ├── yolo_cls_node.cpp                   # 分类展示节点 (yolo_cls_node)
+│   ├── yolo_depth.cpp                      # 深度 onnxruntime 推理 + 伪彩 JPEG 编码
+│   └── yolo_depth_node.cpp                 # 深度展示节点 (yolo_depth_node, image 图元)
 ├── thirdparty/onnxruntime/                 # 预编译推理库 (系统 OpenCV 4.5.x DNN 不支持 yolo26)
 ├── models/<task>/                          # 预训练权重按任务分类
 └── CMakeLists.txt / package.xml

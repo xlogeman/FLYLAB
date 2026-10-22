@@ -19,6 +19,11 @@ std_msgs/String。坐标一律为原图像素坐标。
       折线/多边形 (ArUco 用: 码四边形轮廓 + RGB 位姿轴; close=true 时首尾闭合)
   {"type": "text",     "pos": [x, y],         "text": "fps 30", "color": ...}
       自由文字 (可选 "align": "right" 表示 pos.x 为文字右边缘, 用于右上角)
+  {"type": "image",    "pos": [x, y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}
+      位图叠加 (深度图等稠密图像类算法输出): pos 为原图坐标左上角,
+      w 为绘制宽度 (原图像素, 高按图像纵横比), 省略则按图像原生尺寸;
+      alpha 为不透明度 0~1 (省略 = 1 全不透明), data 为 base64 编码的 JPEG
+      (或 PNG)。仅解码一次后缓存, 适合每帧更新的稠密输出
 
 示例（检测节点发布）：
   msg = {"algo": "yolo", "items": [
@@ -78,6 +83,22 @@ def normalize(anno):
                 'points': [[float(v) for v in p] for p in pts],
                 'close': bool(anno.get('close', False)),
                 'color': _color(anno.get('color'))}
+    if t == 'image':
+        pos = anno.get('pos')
+        data = anno.get('data')
+        if not (isinstance(pos, (list, tuple)) and len(pos) == 2):
+            return None
+        if not isinstance(data, str) or not data:
+            return None
+        w = anno.get('w', 0)
+        try:
+            alpha = float(anno.get('alpha', 1.0))
+        except (TypeError, ValueError):
+            alpha = 1.0
+        return {'type': 'image', 'pos': [float(v) for v in pos],
+                'w': float(w) if w else 0.0,
+                'alpha': min(max(alpha, 0.0), 1.0),
+                'data': data}
     if t == 'text':
         pos = anno.get('pos')
         if not (isinstance(pos, (list, tuple)) and len(pos) == 2):

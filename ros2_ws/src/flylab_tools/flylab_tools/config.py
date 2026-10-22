@@ -101,5 +101,9 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_cls_node',
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
      'start': 'cls_start', 'stop': 'cls_stop'},
+    {'name': '深度估计',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_depth_node',
+             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+     'start': 'depth_start', 'stop': 'depth_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]
