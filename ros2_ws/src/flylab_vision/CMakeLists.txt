@@ -55,6 +55,14 @@ target_include_directories(yolo_depth PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(yolo_depth ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
 
+# ---------- 核心算法库: YOLO OBB 旋转框检测 (无 ROS 依赖, onnxruntime 推理) ----------
+add_library(yolo_obb src/yolo/yolo_obb.cpp)
+target_include_directories(yolo_obb PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${ORT_ROOT}/include
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(yolo_obb ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
+
 # ---------- ROS2 节点: YOLO 目标检测 (默认模型 share/<pkg>/models/detect/) ----------
 add_executable(yolo_detect_node src/yolo/yolo_node.cpp)
 target_link_libraries(yolo_detect_node yolo_detector)
@@ -72,13 +80,21 @@ add_executable(yolo_depth_node src/yolo/yolo_depth_node.cpp)
 target_link_libraries(yolo_depth_node yolo_depth)
 ament_target_dependencies(
   yolo_depth_node rclcpp sensor_msgs std_msgs ament_index_cpp)
+
+# ---------- ROS2 节点: YOLO OBB 旋转框检测 (默认模型 share/<pkg>/models/obb/) ----------
+add_executable(yolo_obb_node src/yolo/yolo_obb_node.cpp)
+target_link_libraries(yolo_obb_node yolo_obb)
+ament_target_dependencies(
+  yolo_obb_node rclcpp sensor_msgs std_msgs ament_index_cpp)
 # 安装后 libonnxruntime 在 lib/ 根目录, 各目标按相对位置解析
 set_target_properties(yolo_detector PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_classifier PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_depth PROPERTIES INSTALL_RPATH "$ORIGIN")
+set_target_properties(yolo_obb PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_detect_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_cls_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_depth_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
+set_target_properties(yolo_obb_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 
 # ---------- ROS2 节点: 地面站视觉工具链路 ----------
 add_executable(aruco_node src/aruco/aruco_node.cpp)
@@ -98,8 +114,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib
   FILES_MATCHING PATTERN "libonnxruntime*")
 
-install(TARGETS aruco_detector yolo_detector yolo_classifier yolo_depth
-  aruco_node yolo_detect_node yolo_cls_node yolo_depth_node aruco_landing_node
+install(TARGETS aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb
+  aruco_node yolo_detect_node yolo_cls_node yolo_depth_node yolo_obb_node aruco_landing_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
