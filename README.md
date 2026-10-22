@@ -143,6 +143,7 @@ flylab_vision/
 ├── include/yolo/yolo_classifier.hpp        # YOLO 图像分类库接口 (同上)
 ├── include/yolo/yolo_depth.hpp             # YOLO 单目深度估计库接口 (同上)
 ├── include/yolo/yolo_obb.hpp               # YOLO OBB 旋转框检测库接口 (同上)
+├── include/yolo/yolo_pose.hpp              # YOLO 姿态估计库接口 (同上)
 ├── include/control/                        # PX4 执行层 (可复用组件, 业务无关)
 │   ├── px4_offboard_client.hpp             #   总入口 (使用文档 + 兼容别名)
 │   ├── px4_offboard_client_base.hpp        #   公共接口 (基类 + 坐标约定: FRD 速度 / NED 位置)
@@ -161,6 +162,8 @@ flylab_vision/
 │   ├── yolo_depth_node.cpp                 # 深度展示节点 (yolo_depth_node, image 图元)
 │   ├── yolo_obb.cpp                        # OBB 旋转框检测: onnxruntime 推理 + 旋转框 NMS (rotatedRectangleIntersection)
 │   └── yolo_obb_node.cpp                   # OBB 展示节点 (yolo_obb_node, 4 角点闭合多边形 + 文字标注)
+│   ├── yolo_pose.cpp                       # 姿态估计: onnxruntime 推理 + 17 关键点解码 + 水平框 NMS
+│   ├── yolo_pose_node.cpp                  # 姿态展示节点 (yolo_pose_node, 骨架连线 + 可见关键点)
 ├── thirdparty/onnxruntime/                 # 预编译推理库 (系统 OpenCV 4.5.x DNN 不支持 yolo26)
 ├── models/<task>/                          # 预训练权重按任务分类
 └── CMakeLists.txt / package.xml

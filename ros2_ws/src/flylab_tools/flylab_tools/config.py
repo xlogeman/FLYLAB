@@ -109,5 +109,9 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_obb_node',
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
      'start': 'obb_start', 'stop': 'obb_stop'},
+    {'name': '姿态估计',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
+             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+     'start': 'pose_start', 'stop': 'pose_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]
