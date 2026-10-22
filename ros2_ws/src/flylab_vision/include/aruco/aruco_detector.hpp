@@ -63,7 +63,7 @@ private:
   cv::Ptr<cv::aruco::DetectorParameters> params_;
 };
 
-/// 读取 OpenCV/SpireCV 格式标定 yaml (camera_matrix + distortion_coefficients)。
+/// 读取 OpenCV 格式标定 yaml (camera_matrix + distortion_coefficients)。
 /// 失败抛 std::runtime_error。
 void load_calib(const std::string & path, cv::Mat & K, cv::Mat & D);
 

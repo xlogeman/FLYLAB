@@ -1,37 +1,21 @@
 // Copyright 2026 flylab
-/// ArUco 视觉降落节点 —— 三态状态机 (移植自 landing_reference, Prometheus/SpireCV 链路)
+/// ArUco 视觉降落节点 —— 三态状态机
 ///
-/// 分层: PX4 执行层 (offboard 心跳/速度 setpoint/模式切换/接管时序) 已抽到
-/// px4_offboard_client.hpp 供其他控制算法复用, 本文件只含降落业务:
+///   IDLE     等待 landing_start 指令, 不发任何飞控指令
+///   TRACKING 接管 offboard → 图像空间水平对齐 → 按目标面积调速下降
+///            → (对齐 + 面积阈值 + 降落趋势角) 连续 N 帧后进入 LANDING
+///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
-/// 状态机:
-///   IDLE     等待 landing_start 指令 (地面站 "ArUco降落" 按钮), 不发任何飞控指令
-///   TRACKING 接管 offboard → 图像空间水平对齐 (cx/cy) → 按"目标占画面面积"调度下降速度
-///            → 满足 (对齐 + 面积阈值 + 降落趋势角) 连续 N 帧后进入 LANDING
-///   LANDING  切 PX4 AUTO.LAND (由 PX4 完成最终降落), 上锁后复位回 IDLE
+/// 只用 cx/cy/面积做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
+/// 执行层经 px4_offboard_client (link:=mavros|uxrce 选链路)。
 ///
-/// 与参考项目的差异 (适配 flylab):
-///   - 无云台: 参考 gimbal 版的云台俯拍条件用 "目标面积 + 对齐误差" 等价替代
-///   - 图像空间控制: 只用 cx/cy/面积, 不依赖 3D 位姿 (未标定时位姿尺度不可信)
-///   - 执行层不走 prometheus uav_controller, 经 px4_offboard_client 下发
-///     (link 参数选链路: mavros=MAVROS 桥 / uxrce=uXRCE-DDS 直连, 与 tracker 链路约定一致)
-///   - 目标丢失: 参考版按上次速度惯性移动, 本版简化为原地悬停 + 超时交还控制权
+/// 话题: 图像 /flylab/display/image_raw (地面站转发帧, 需俯视看到码);
+///       云台 /flylab/gimbal_state (相机相对机体姿态, 必需, 断流则悬停等待);
+///       指令 /flylab/vision_cmd; 叠加 /flylab/annotations; 状态 /flylab/landing_status
 ///
-/// 链路 (话题名与 flylab_tools 约定一致, 可参数覆盖):
-///   图像输入  /flylab/display/image_raw   (地面站转发的当前显示帧, 需俯视看到码)
-///   云台姿态  /flylab/gimbal_state        (相机机体系姿态四元数, 可选; 数据新鲜时
-///                                         水平控制走云台泛化映射, 适配任意云台
-///                                         形态; 无数据回退"刚性垂直下视"假设)
-///   启停指令  /flylab/vision_cmd          landing_start / landing_stop
-///   画面叠加  /flylab/annotations         algo 组: "aruco_landing" + "landing_state"
-///   PX4 链路  link:=mavros  /mavros/* (MAVROS 桥, fcu_url:=udp://:14542@, 参照 fly_ego.launch.py)
-///             link:=uxrce   /fmu/in/* + /fmu/out/* (依赖 MicroXRCEAgent udp4 -p 8888)
-///
-/// 使用前提: 已解锁升空 (QGC 起飞或任意链路), 相机画面垂直向下看到 ArUco 码。
-///
-/// 运行:
-///   ros2 run flylab_vision aruco_landing_node
-///   ros2 run flylab_vision aruco_landing_node --ros-args -p vel_gain:=0.6 -p target_id:=92
+/// 使用前提: 已解锁升空, 相机画面垂直向下看到 ArUco 码。
+/// 运行: ros2 run flylab_vision aruco_landing_node
+///       ros2 run flylab_vision aruco_landing_node --ros-args -p vel_gain:=1.0 -p target_id:=92
 
 #include <chrono>
 #include <cmath>
@@ -118,8 +102,7 @@ cv::Point3d quat_rot(const geometry_msgs::msg::Quaternion & q, double x, double 
   };
 }
 
-/// 降落趋势角: 位移向量与竖直向下方向的夹角 (度)。移植自参考项目
-/// calculateLandingAngle (gimbal_yolov5_tracking_land L113-128)
+/// 降落趋势角: 位移向量与竖直向下方向的夹角 (度)
 double landing_angle_deg(const std::vector<cv::Point3d> & positions)
 {
   const auto & a = positions.front();
@@ -156,9 +139,8 @@ public:
     const auto calib_path = declare_parameter<std::string>("calib", "");
     link_ = declare_parameter<std::string>("link", "mavros");    // PX4 执行链路: mavros|uxrce
 
-    // 泛化云台映射: 订阅"当前显示相机相对机体的姿态"话题 (相机 NED 体约定:
-    // x 视轴 y 图右 z 图下, 机体 FRD)。数据新鲜时水平控制用云台泛化映射
-    // (适配刚性/自稳/带 yaw 随动任意云台); 超时回退刚性下视假设 (flip 参数)。
+    // 云台姿态话题 (相机 NED 体约定: x 视轴 y 图右 z 图下, 相对机体 FRD)。
+    // 水平控制用它把图像误差旋到机体系; 无数据/断流则悬停等待。
     const auto gimbal_topic =
       declare_parameter<std::string>("gimbal_topic", "/flylab/gimbal_state");
     gimbal_timeout_sec_ = declare_parameter<double>("gimbal_timeout_sec", 0.5);
@@ -166,15 +148,15 @@ public:
     target_id_ = declare_parameter<int>("target_id", -1);        // -1 = 任一 (取画面里最大的并锁定)
     land_cx_ = declare_parameter<double>("land_cx", 0.5);        // 期望对中的画面位置 (归一化)
     land_cy_ = declare_parameter<double>("land_cy", 0.5);
-    vel_gain_ = declare_parameter<double>("vel_gain", 0.6);      // 水平对齐 P 增益
-    max_h_vel_ = declare_parameter<double>("max_h_vel", 0.8);    // 水平速度限幅 (m/s)
-    align_ref_alt_ = declare_parameter<double>("align_ref_alt", 2.5);   // 高度增益缩放基准高度 (m, 0=禁用)
-    max_height_scale_ = declare_parameter<double>("max_height_scale", 3.0);  // 高度缩放上限
-    far_descend_tol_ = declare_parameter<double>("far_descend_tol", 0.20);   // 未对齐时允许慢降的最大误差
-    far_descend_area_ = declare_parameter<double>("far_descend_area", 0.05); // 仅远处(面积小于此)允许边对齐边降
+    vel_gain_ = declare_parameter<double>("vel_gain", 1.0);      // 水平对齐 P 增益
+    max_h_vel_ = declare_parameter<double>("max_h_vel", 1.2);    // 水平速度限幅 (m/s)
+    align_ref_alt_ = declare_parameter<double>("align_ref_alt", 2.5);    // 高度增益缩放基准高度 (m, 0=禁用)
+    max_height_scale_ = declare_parameter<double>("max_height_scale", 3.0);   // 高度缩放上限
+    far_descend_tol_ = declare_parameter<double>("far_descend_tol", 0.20);    // 未对齐时允许慢降的最大误差
+    far_descend_area_ = declare_parameter<double>("far_descend_area", 0.05);  // 仅远处(面积小于此)允许边对齐边降
     far_descend_scale_ = declare_parameter<double>("far_descend_scale", 0.5); // 边对齐边降的速度折扣
-    descend_close_ = declare_parameter<double>("descend_close", 0.08);  // 面积大(近)时下降速度 (正值=向下, m/s)
-    descend_far_ = declare_parameter<double>("descend_far", 0.4);       // 面积小(远)时下降速度 (正值=向下, m/s)
+    descend_close_ = declare_parameter<double>("descend_close", 0.3);    // 面积大(近)时下降速度 (正值=向下, m/s)
+    descend_far_ = declare_parameter<double>("descend_far", 0.5);        // 面积小(远)时下降速度 (正值=向下, m/s)
     area_s_thresh_ = declare_parameter<double>("area_s_thresh", 0.85);   // 速度调度分段点
     align_tol_ = declare_parameter<double>("align_tol", 0.06);   // 对齐容差 (归一化画面)
     land_area_thresh_ = declare_parameter<double>("land_area_thresh", 0.12);
@@ -188,8 +170,6 @@ public:
     offboard_warmup_sec_ = declare_parameter<double>("offboard_warmup_sec", 1.0);
     offboard_retry_sec_ = declare_parameter<double>("offboard_retry_sec", 10.0);
     control_hz_ = declare_parameter<double>("control_hz", 20.0);
-    flip_forward_ = declare_parameter<bool>("flip_forward", false);
-    flip_right_ = declare_parameter<bool>("flip_right", false);
 
     DetectorConfig cfg;
     cfg.dict_name = dict_name;
@@ -228,6 +208,7 @@ public:
       [this](const geometry_msgs::msg::Quaternion::SharedPtr msg) {
         cam_ori_ = *msg;
         cam_ori_time_ = now();
+        gimbal_ever_ = true;  // 标记数据源存在过 (中断时悬停告警区分诊断用)
       });
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
@@ -267,10 +248,8 @@ private:
     }
     start_pending_ = false;
     if (!px4_->gotStatus()) {
-      // 刚拉起的节点还没收到飞控状态 (DDS 发现 + 首帧状态需 1~3s), 而地面站
-      // 只在点击后发一次 landing_start —— 直接丢弃会造成"第一次点击无效"。
-      // 挂起待执行, 状态到达后在 tick() 里补执行 (限时防永久悬挂;
-      // 重复 landing_start 不刷新时限也不重复告警)
+      // 飞控状态未到 (地面站只在点击时发一次指令): 挂起待状态到达后在
+      // tick() 里补执行, 限时防永久悬挂
       if (!start_pending_) {
         start_pending_ = true;
         start_pending_deadline_ =
@@ -291,7 +270,6 @@ private:
     land_confirmed_ = false;
     had_target_ = false;
     ever_offboard_ = false;
-    ctrl_mode_logged_ = false;
     tracked_id_ = -1;      // 重新进入降落流程重新选目标
     lost_id_time_ = 0.0;
     trend_angle_ = 90.0;
@@ -363,11 +341,9 @@ private:
     }
   }
 
-  /// 目标选择 (带 ID 锁定): 多码环境下防止逐帧独立选"最大"导致目标跳变
-  /// (跳变 → 对齐误差乱跳 → 控制指令抖动)。逻辑参考 prosim 版 tracked_id 机制:
-  ///   target_id >= 0  只认指定 ID (用户显式钉死, 不参与锁定逻辑)
-  ///   target_id = -1  首帧选画面里最大的码并锁定其 ID; 之后只跟锁定目标,
-  ///                   锁定目标持续丢失超过 reacquire_sec 才重新选择
+  /// 目标选择 (带 ID 锁定, 防多码下逐帧选"最大"导致目标跳变):
+  ///   target_id >= 0  只认指定 ID
+  ///   target_id = -1  首帧选画面最大的码并锁定, 持续丢失超 reacquire_sec 才重选
   const Detection * pickTarget(double dt)
   {
     if (detections_.empty()) {
@@ -426,7 +402,7 @@ private:
     }
   }
 
-  /// 云台姿态数据是否新鲜 (决定水平控制走泛化映射还是刚性假设)
+  /// 云台姿态数据是否新鲜 (不新鲜则水平控制悬停等待)
   bool gimbalFresh() const
   {
     return (now() - cam_ori_time_).seconds() <= gimbal_timeout_sec_;
@@ -483,9 +459,7 @@ private:
     // 阶段 1: 接管 offboard (心跳预热/周期请求/成功判定都在执行层状态机里)
     if (!px4_->isOffboard()) {
       if (ever_offboard_) {
-        // 曾进入过 offboard 又被切走 = 外部接管 (飞手切出/电量 failsafe/
-        // 断流保护等)。真机安全: 不抢控制权 —— 持续重发 OFFBOARD 请求会与
-        // 飞手和安全机制抢飞机, 这里尊重当前模式, 告警后交还并退出。
+        // 曾进入过 offboard 又被切走 = 外部接管 (飞手/failsafe), 不抢控制权
         RCLCPP_WARN(
           get_logger(), "\033[33mOFFBOARD 被外部切换 (当前模式: %s), "
           "判定为外部接管, 交还控制权并退出降落流程\033[0m",
@@ -505,7 +479,7 @@ private:
     // 阶段 2: 视觉跟踪 (已确认 offboard, 心跳随每拍 sendVelocityFRD 持续发送)
     const Detection * tgt = pickTarget(dt);
     if (tgt == nullptr) {
-      // 目标丢失: 原地悬停 (参考版为惯性移动, 此处简化), 超时交还控制权
+      // 目标丢失: 原地悬停, 超时交还控制权
       px4_->sendHover();
       lost_time_ += dt;
       if (had_target_) {
@@ -540,13 +514,8 @@ private:
       image_area_ > 0 ? (tgt->bbox_wh.x * tgt->bbox_wh.y) / image_area_ : 0.0;
     const double dist_factor = (1.0 - area) * (1.0 - area);  // 距离越近增益越小, 防近距振荡
 
-    // 水平对齐输出机体系 FRD 速度 (x 前 y 右), 方向映射见下方"两种模式"注释
-    //
-    // 高度增益缩放: 增益按归一化画面坐标定义, 而同一归一化误差在高空对应的水平距离
-    // 大得多 (9.5m 高 60°FOV 视场宽约 11m, 误差 0.13 ≈ 1.4m), 固定增益下收敛时间
-    // τ = 视场宽/(gain×dist_factor) 随高度线性变长 → 高空对齐极慢。
-    // 按当前高度/基准高度放大增益, 使归一化收敛速率与高度无关; 封顶防高空过冲,
-    // 基准高度 (低空近距) 以下不放大, 近距行为与原版一致
+    // 高度增益缩放: 归一化误差在高空对应更大水平距离, 按高度/基准高度放大
+    // 增益使收敛速率与高度无关; 封顶防高空过冲, 低空不放大
     const auto & pos = px4_->localPosition();
     double height_scale = 1.0;
     if (align_ref_alt_ > 0.0 && pos.z_valid) {
@@ -554,76 +523,51 @@ private:
       height_scale = std::fmin(
         std::fmax(h / align_ref_alt_, 1.0), max_height_scale_);
     }
-    // 水平对齐 —— 两种方向映射模式 (按云台数据是否新鲜自动选择):
-    //
-    // (a) 云台泛化模式 (gimbal_topic 数据新鲜): 用相机相对机体的姿态四元数
-    //     把图像误差方向旋到机体系。相机 NED 体约定 (x 视轴, y 图右, z 图下),
-    //     "图右/图下"单位方向在机体系 = R(q)·(0,1,0) / R(q)·(0,0,1), 把两轴
-    //     的水平分量按误差线性组合即期望水平速度。不假设图像上边朝机头、
-    //     不假设相机垂直向下 —— 刚性安装 (任意 roll 安装角)、二/三轴自稳
-    //     (世界系稳定)、带 yaw 随动的云台全适用, flip 参数不参与。
-    //     图右/图下方向带垂直分量时只取水平投影: 相机斜视下同一画面偏移
-    //     本来就更少对应水平位移, 幅值自然减小属正确几何行为。
-    //
-    // (b) 刚性下视假设 (无云台数据/超时): 原版公式, 假设相机垂直向下且
-    //     图像上边朝机头, flip 参数修正安装方向。
-    const bool gimbal_mode = gimbalFresh();
-    double v_fwd = 0.0;
-    double v_right = 0.0;
-    if (gimbal_mode) {
-      // 光轴 (相机 x 轴) 在机体系的朝向: 偏离垂直向下过远说明画面几何
-      // 不满足"俯视看码"前提 (斜视/平视), 告警但不中断 (增益退化仍可对齐)
-      const cv::Point3d optical = quat_rot(cam_ori_, 1.0, 0.0, 0.0);
-      const double down_cos = std::fmax(-1.0, std::fmin(1.0, optical.z));
-      const double tilt_deg = std::acos(down_cos) * 180.0 / M_PI;
-      if (tilt_deg > 45.0) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 3000,
-          "\033[33m相机光轴偏离垂直向下 %.0f°, 云台未俯拍到位, 降落几何不成立\033[0m",
-          tilt_deg);
-      }
-      const cv::Point3d u_b = quat_rot(cam_ori_, 0.0, 1.0, 0.0);  // 图右 (机体系)
-      const cv::Point3d v_b = quat_rot(cam_ori_, 0.0, 0.0, 1.0);  // 图下 (机体系)
-      const double k = vel_gain_ * dist_factor * height_scale;
-      v_fwd = k * ((cx - land_cx_) * u_b.x + (cy - land_cy_) * v_b.x);
-      v_right = k * ((cx - land_cx_) * u_b.y + (cy - land_cy_) * v_b.y);
-    } else {
-      v_fwd = -vel_gain_ * (cy - land_cy_) * dist_factor * height_scale;
-      v_right = vel_gain_ * (cx - land_cx_) * dist_factor * height_scale;
-      if (flip_forward_) {
-        v_fwd = -v_fwd;
-      }
-      if (flip_right_) {
-        v_right = -v_right;
-      }
+    // 水平对齐 (输出机体系 FRD 速度): 用相机姿态四元数把"图右/图下"方向
+    // R(q)·(0,1,0)、R(q)·(0,0,1) 旋到机体系, 垂直分量只取水平投影 ——
+    // 不假设相机垂直向下, 刚性/自稳/yaw 随动云台全适用
+    if (!gimbalFresh()) {
+      px4_->sendHover();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "\033[33m云台姿态数据不可用 (%s), 原地悬停等待, 数据恢复后自动继续降落\033[0m",
+        gimbal_ever_ ? "此前曾收到后中断" : "未收到过, 需地面站 AirSim 相机源");
+      return;
     }
-    if (!ctrl_mode_logged_) {
-      ctrl_mode_logged_ = true;
-      RCLCPP_INFO(
-        get_logger(), "\033[36m水平控制模式: %s\033[0m", gimbal_mode ?
-        "云台姿态泛化映射 (gimbal_topic)" : "刚性下视假设 (flip 参数)");
+    // 光轴偏离垂直向下过远 = 云台未俯拍到位, 告警但不中断 (增益退化仍可对齐)
+    const cv::Point3d optical = quat_rot(cam_ori_, 1.0, 0.0, 0.0);
+    const double down_cos = std::fmax(-1.0, std::fmin(1.0, optical.z));
+    const double tilt_deg = std::acos(down_cos) * 180.0 / M_PI;
+    if (tilt_deg > 45.0) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "\033[33m相机光轴偏离垂直向下 %.0f°, 云台未俯拍到位, 降落几何不成立\033[0m",
+        tilt_deg);
     }
+    const cv::Point3d u_b = quat_rot(cam_ori_, 0.0, 1.0, 0.0);  // 图右 (机体系)
+    const cv::Point3d v_b = quat_rot(cam_ori_, 0.0, 0.0, 1.0);  // 图下 (机体系)
+    const double k = vel_gain_ * dist_factor * height_scale;
+    double v_fwd = k * ((cx - land_cx_) * u_b.x + (cy - land_cy_) * v_b.x);
+    double v_right = k * ((cx - land_cx_) * u_b.y + (cy - land_cy_) * v_b.y);
     v_fwd = clampd(v_fwd, max_h_vel_);
     v_right = clampd(v_right, max_h_vel_);
 
     // 对齐达标后才开始下降 (先水平对齐再下降, 防止高度低时目标出画)。
-    // 下降速度按目标面积分段线性调度 (移植自参考 L626-660): 近慢远快
+    // 下降速度按目标面积分段线性调度: 近慢远快
     const double align_err = std::hypot(cx - land_cx_, cy - land_cy_);
     const bool aligned = align_err < align_tol_;
     double v_down = 0.0;
     if (aligned) {
       v_down = descendSchedule(area);
     } else if (area < far_descend_area_ && align_err < far_descend_tol_) {
-      // 高空边对齐边慢降: 距离远时目标离画面中心再偏也仍有出画余量,
-      // 纯对齐干等浪费时间。下降会让同一水平偏移对应的归一化误差增大,
-      // 误差超出门限即自动停降回去对齐, 自平衡不会把目标推出画面
+      // 高空边对齐边慢降: 下降会放大归一化误差, 超限即停降回去对齐, 自平衡
       v_down = descendSchedule(area) * far_descend_scale_;
     }
 
-    // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应, 移植自参考 L519-527/683-693)
+    // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应)
     updateTrendAngle(area);
 
-    // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直, 连续 N 帧确认 (移植自参考 L453-478)
+    // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直, 连续 N 帧确认
     if (aligned && area >= land_area_thresh_ && trend_angle_ < vertical_threshold_deg_) {
       landing_count_++;
     } else {
@@ -645,10 +589,9 @@ private:
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "[TRACKING][%s] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
+      "[TRACKING][云台泛化] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
       "对齐误差=%.3f (容差%.3f%s 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
       "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
-      gimbal_mode ? "云台泛化" : "刚性下视",
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
       align_err, align_tol_, aligned ? "已对齐" : "未对齐", height_scale,
@@ -656,10 +599,8 @@ private:
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
   }
 
-  /// 下降速度调度: 返回值正值=向下 (FRD/NED 的 z 轴约定)。
-  /// s=(1-面积)^2, 近处(s→0) descend_close 慢降, 远处(s→1) descend_far 快降。
-  /// 两段线性、段间连续 (与参考四段调度等价; 参考项目 z 轴向上为正故为负值,
-  /// 本节点全部速度统一 FRD 下正, 已翻转符号)
+  /// 下降速度调度 (正值=向下): 按 s=(1-面积)² 两段线性插值,
+  /// 近处(s→0) descend_close 慢降, 远处(s→1) descend_far 快降
   double descendSchedule(double area) const
   {
     double s = std::fmax(0.0, std::fmin(1.0, 1.0 - area));
@@ -681,7 +622,7 @@ private:
       return;
     }
     const cv::Point3d p{pos.y, pos.x, -pos.z};       // NED -> ENU
-    // 窗口大小随面积自适应: 距离越远窗口越大 (移植自参考 L519-527)
+    // 窗口大小随面积自适应: 距离越远窗口越大
     double win = (1.0 - area) * (1.0 - area) * 12.0;
     win = std::fmax(
       static_cast<double>(angle_window_min_),
@@ -714,8 +655,7 @@ private:
       }
       return;
     }
-    // AUTO.LAND 确认前模式被切走 (非 offboard): 同 TRACKING, 外部接管不抢回,
-    // 停止请求 AUTO.LAND (对 RTL/飞手接管继续抢模式等于抢飞机)
+    // AUTO.LAND 确认前被外部切走: 同 TRACKING, 不抢回, 交还控制权
     if (ever_offboard_ && !px4_->isOffboard()) {
       RCLCPP_WARN(
         get_logger(), "\033[33mOFFBOARD 被外部切换 (当前模式: %s), "
@@ -799,6 +739,7 @@ private:
   geometry_msgs::msg::Quaternion cam_ori_;
   rclcpp::Time cam_ori_time_{0, 0, RCL_ROS_TIME};
   double gimbal_timeout_sec_ = 0.5;
+  bool gimbal_ever_ = false;  // 本次运行曾收到过云台数据 (中断悬停判定用)
 
   // 状态机
   State state_ = State::IDLE;
@@ -817,7 +758,6 @@ private:
   int min_landing_frames_, angle_window_min_, angle_window_max_;
   double lost_timeout_sec_, offboard_warmup_sec_, offboard_retry_sec_, control_hz_;
   double reacquire_sec_;
-  bool flip_forward_, flip_right_;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长
@@ -827,7 +767,6 @@ private:
   bool land_confirmed_ = false;     // 已确认 AUTO.LAND (打一次日志)
   bool had_target_ = false;         // 目标捕获/丢失事件日志用
   bool ever_offboard_ = false;      // 本次流程曾进入过 OFFBOARD (判定外部接管用)
-  bool ctrl_mode_logged_ = false;   // 水平控制模式日志只打一次
   int tracked_id_ = -1;             // 锁定的目标码 ID (-1 = 未锁定)
   double lost_id_time_ = 0.0;       // 锁定目标持续丢失时长
   bool start_pending_ = false;      // landing_start 已挂起 (等飞控状态到达后补执行)
