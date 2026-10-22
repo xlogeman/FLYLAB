@@ -39,14 +39,30 @@ target_include_directories(yolo_detector PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(yolo_detector ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
 
+# ---------- 核心算法库: YOLO 图像分类 (无 ROS 依赖, onnxruntime 推理) ----------
+add_library(yolo_classifier src/yolo/yolo_classifier.cpp)
+target_include_directories(yolo_classifier PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${ORT_ROOT}/include
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(yolo_classifier ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
+
 # ---------- ROS2 节点: YOLO 目标检测 (默认模型 share/<pkg>/models/detect/) ----------
 add_executable(yolo_detect_node src/yolo/yolo_node.cpp)
 target_link_libraries(yolo_detect_node yolo_detector)
 ament_target_dependencies(
   yolo_detect_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-# 安装后 libonnxruntime 在 lib/ 根目录, 两个目标各自按相对位置解析
+
+# ---------- ROS2 节点: YOLO 图像分类 (默认模型 share/<pkg>/models/classify/) ----------
+add_executable(yolo_cls_node src/yolo/yolo_cls_node.cpp)
+target_link_libraries(yolo_cls_node yolo_classifier)
+ament_target_dependencies(
+  yolo_cls_node rclcpp sensor_msgs std_msgs ament_index_cpp)
+# 安装后 libonnxruntime 在 lib/ 根目录, 各目标按相对位置解析
 set_target_properties(yolo_detector PROPERTIES INSTALL_RPATH "$ORIGIN")
+set_target_properties(yolo_classifier PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_detect_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
+set_target_properties(yolo_cls_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 
 # ---------- ROS2 节点: 地面站视觉工具链路 ----------
 add_executable(aruco_node src/aruco/aruco_node.cpp)
@@ -66,8 +82,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib
   FILES_MATCHING PATTERN "libonnxruntime*")
 
-install(TARGETS aruco_detector yolo_detector aruco_node yolo_detect_node
-  aruco_landing_node
+install(TARGETS aruco_detector yolo_detector yolo_classifier
+  aruco_node yolo_detect_node yolo_cls_node aruco_landing_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

@@ -97,5 +97,9 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detect_node',
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
      'start': 'detect_start', 'stop': 'detect_stop'},
+    {'name': '图像分类',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_cls_node',
+             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+     'start': 'cls_start', 'stop': 'cls_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]

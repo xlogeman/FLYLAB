@@ -229,6 +229,29 @@ class VideoLabel(QLabel):
                     painter.drawLine(qpts[-1], qpts[0])
             elif a['type'] == 'text':
                 tx, ty = a['pos']
+                text = a.get('text', '')
+                if not text:
+                    continue
+                painter.save()
+                # 加粗放大一号, 空拍画面里也醒目
+                f = painter.font()
+                f.setBold(True)
+                f.setPointSize(f.pointSize() + 1)
+                painter.setFont(f)
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(text)
+                x = int(tx * scale)
+                y = int(ty * scale)
+                # align=right 时 pos.x 为文字右边缘 (绘制端量宽, C++ 侧
+                # 不知道字体宽度, 只能发右锚点)
+                if a.get('align') == 'right':
+                    x -= tw
+                # 半透明黑底条: 任何画面下都有足够对比度 (同 HUD 处理)
+                pad = 3
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(0, 0, 0, 150))
+                painter.drawRect(x - pad, y - fm.ascent() - pad,
+                                 tw + 2 * pad, fm.height() + 2 * pad)
                 painter.setPen(QPen(c))
-                painter.drawText(int(tx * scale), int(ty * scale),
-                                 a.get('text', ''))
+                painter.drawText(x, y, text)
+                painter.restore()

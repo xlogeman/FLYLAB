@@ -18,7 +18,7 @@ std_msgs/String。坐标一律为原图像素坐标。
   {"type": "polyline", "points": [[x,y],...], "close": false, "color": ...}
       折线/多边形 (ArUco 用: 码四边形轮廓 + RGB 位姿轴; close=true 时首尾闭合)
   {"type": "text",     "pos": [x, y],         "text": "fps 30", "color": ...}
-      自由文字
+      自由文字 (可选 "align": "right" 表示 pos.x 为文字右边缘, 用于右上角)
 
 示例（检测节点发布）：
   msg = {"algo": "yolo", "items": [
@@ -82,8 +82,12 @@ def normalize(anno):
         pos = anno.get('pos')
         if not (isinstance(pos, (list, tuple)) and len(pos) == 2):
             return None
+        align = anno.get('align', 'left')
+        if align not in ('left', 'right'):
+            align = 'left'
         return {'type': 'text', 'pos': [float(v) for v in pos],
                 'text': str(anno.get('text', '')),
+                'align': align,
                 'color': _color(anno.get('color'))}
     return None
 

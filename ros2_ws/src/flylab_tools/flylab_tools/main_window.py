@@ -407,7 +407,16 @@ class MainWindow(QMainWindow):
             rclpy.spin_once(self.node, timeout_sec=0)
         except Exception:
             pass
-        self.camera_tab.video.set_annotations(self.node.get_annotations())
+        # 标注上屏门控: 仅在"算法运行中或降落进行中"时显示。防止外部遗留的
+        # 算法节点进程 (仍处于 start 状态) 在用户未运行任何算法时擅自叠加;
+        # 此种场景直接清掉已有分组, 不让来路不明的过期标注上屏
+        if self.running_algo is None and not self.landing_btn.isChecked():
+            if self.node.get_annotations():
+                self.node.clear_annotations()
+            annos = []
+        else:
+            annos = self.node.get_annotations()
+        self.camera_tab.video.set_annotations(annos)
         # HUD 第二行: 算法输出帧率 (运行中才显示, 停止/无输出自动隐藏)
         fps = self.node.get_algo_fps() if self.running_algo is not None else 0.0
         self.camera_tab.video.set_algo_hud(
