@@ -10,7 +10,8 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Quaternion
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy,
+                       qos_profile_sensor_data)
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -33,9 +34,14 @@ class GroundStationNode(Node):
             String, config.ANNOTATION_TOPIC, self._anno_cb, 10)
 
         # 显示画面转发: 当前显示的帧发给算法节点 (无订阅者时自动跳过,
-        # 不白白占用 CPU 序列化大图)
+        # 不白白占用 CPU 序列化大图)。reliable: 900KB 大图走 UDP 分片,
+        # best-effort 下丢一个分片整帧就没了 (实测丢帧率可达 40%+);
+        # keep-last 2 保证接收端永远只处理最新帧, 不积压
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST, depth=2)
         self.image_pub = self.create_publisher(
-            Image, config.DISPLAY_IMAGE_TOPIC, qos_profile_sensor_data)
+            Image, config.DISPLAY_IMAGE_TOPIC, qos)
 
         # 相机机体系姿态 (ArUco 降落云台泛化): 当前显示相机相对机体的姿态
         # 四元数, 界面线程按 10Hz 调 publish_cam_orientation() 发布
@@ -97,10 +103,11 @@ class GroundStationNode(Node):
         """返回 (最新降落状态, 事件序号); 序号变化 = 有新状态事件。"""
         return self._landing_status, self._landing_status_seq
 
-    def publish_cmd(self, cmd):
-        """发布算法启停等字符串指令。"""
+    def publish_cmd(self, cmd, quiet=False):
+        """发布算法启停等字符串指令; quiet=True 不打日志 (重发指令降噪)。"""
         self.cmd_pub.publish(String(data=cmd))
-        self.get_logger().info(f'发布指令: {cmd}')
+        if not quiet:
+            self.get_logger().info(f'发布指令: {cmd}')
 
     def publish_cam_orientation(self, q):
         """发布当前显示相机相对机体的姿态四元数 (x, y, z, w, 相机 NED 体约定)。

@@ -16,6 +16,7 @@
   <depend>geometry_msgs</depend>
   <depend>mavros_msgs</depend>
   <depend>libopencv-dev</depend>
+  <depend>ament_index_cpp</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

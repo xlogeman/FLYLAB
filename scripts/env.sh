@@ -19,6 +19,17 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:\
 /root/flylab/ORB_SLAM3_FIXED/Thirdparty/DBoW2/lib:\
 /root/flylab/ORB_SLAM3_FIXED/Thirdparty/g2o/lib
 
+# onnxruntime CUDA EP 依赖: providers 插件在 pip onnxruntime-gpu 的 capi 目录,
+# CUDA/cuDNN 运行库在 pip nvidia-* 包里 (yolo_detect_node device:=cuda 用)
+_ort_capi=/usr/local/lib/python3.10/dist-packages/onnxruntime/capi
+if [ -d "$_ort_capi" ]; then
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$_ort_capi
+    for _d in /usr/local/lib/python3.10/dist-packages/nvidia/*/lib; do
+        [ -d "$_d" ] && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$_d
+    done
+    unset _ort_capi _d
+fi
+
 # AirSim 所在的 Windows 宿主机 (WSL 默认网关)
 export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
 

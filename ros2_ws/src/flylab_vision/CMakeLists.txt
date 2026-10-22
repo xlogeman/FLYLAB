@@ -16,7 +16,13 @@ find_package(std_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc aruco calib3d)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc aruco calib3d dnn)
+find_package(ament_index_cpp REQUIRED)
+
+# ---------- onnxruntime (第三方预编译包, yolo 推理后端) ----------
+# 系统 OpenCV 4.5.x DNN 解析不了 yolo26 的 attention Split 节点, 推理交给 ort;
+# dnn 组件仍保留 (只借用 cv::dnn::NMSBoxes 做 NMS)
+set(ORT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime)
 
 # ---------- 核心算法库 (无 ROS 依赖) ----------
 add_library(aruco_detector src/aruco/aruco_detector.cpp)
@@ -24,6 +30,23 @@ target_include_directories(aruco_detector PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(aruco_detector ${OpenCV_LIBS})
+
+# ---------- 核心算法库: YOLO 目标检测 (无 ROS 依赖, onnxruntime 推理) ----------
+add_library(yolo_detector src/yolo/yolo_detector.cpp)
+target_include_directories(yolo_detector PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${ORT_ROOT}/include
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(yolo_detector ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
+
+# ---------- ROS2 节点: YOLO 目标检测 (默认模型 share/<pkg>/models/detect/) ----------
+add_executable(yolo_detect_node src/yolo/yolo_node.cpp)
+target_link_libraries(yolo_detect_node yolo_detector)
+ament_target_dependencies(
+  yolo_detect_node rclcpp sensor_msgs std_msgs ament_index_cpp)
+# 安装后 libonnxruntime 在 lib/ 根目录, 两个目标各自按相对位置解析
+set_target_properties(yolo_detector PROPERTIES INSTALL_RPATH "$ORIGIN")
+set_target_properties(yolo_detect_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 
 # ---------- ROS2 节点: 地面站视觉工具链路 ----------
 add_executable(aruco_node src/aruco/aruco_node.cpp)
@@ -35,7 +58,16 @@ add_executable(aruco_landing_node src/aruco/aruco_landing_node.cpp)
 target_link_libraries(aruco_landing_node aruco_detector)
 ament_target_dependencies(aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 
-install(TARGETS aruco_detector aruco_node aruco_landing_node
+# 模型权重装到 share/<pkg>/models/, yolo_detect_node 经 ament_index 解析默认路径
+install(DIRECTORY models
+  DESTINATION share/${PROJECT_NAME})
+# onnxruntime 动态库 (含版本符号链接) 装到 lib/, 供 rpath 解析
+install(DIRECTORY ${ORT_ROOT}/lib/
+  DESTINATION lib
+  FILES_MATCHING PATTERN "libonnxruntime*")
+
+install(TARGETS aruco_detector yolo_detector aruco_node yolo_detect_node
+  aruco_landing_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

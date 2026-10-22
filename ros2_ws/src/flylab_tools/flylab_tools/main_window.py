@@ -230,8 +230,11 @@ class MainWindow(QMainWindow):
         self.node.get_logger().info(f'启动算法进程: {" ".join(cmd)}')
         return subprocess.Popen(cmd)
 
-    def _send_start(self, algo):
-        """延迟发送启动指令; 触发前算法被取消/切换/进程已死则跳过。"""
+    def _send_start(self, algo, retries_left=6):
+        """发送启动指令并按 400ms 间隔重发多次: 新进程的 DDS 发现可能
+        超过 1s, 单发一条 start 撞上发现窗口就永远丢掉 (volatile 消息
+        不补发, 表现为"点了运行没反应"); 节点对重复 start 幂等, 多发无副作用。
+        触发前算法被取消/切换/进程已死则跳过。"""
         if self.running_algo is not algo:
             return
         if self.proc is not None and self.proc.poll() is not None:
@@ -240,7 +243,10 @@ class MainWindow(QMainWindow):
                 f'请检查 config.ALGORITHMS 里的 cmd')
             self._reset_algo()
             return
-        self.node.publish_cmd(algo['start'])
+        self.node.publish_cmd(algo['start'], quiet=retries_left < 6)
+        if retries_left > 0:
+            QTimer.singleShot(
+                400, lambda: self._send_start(algo, retries_left - 1))
 
     def _on_cancel_algo(self):
         """取消当前正在运行的算法 (停止的是运行中的, 与下拉框当前选中无关)。"""
@@ -435,24 +441,18 @@ class MainWindow(QMainWindow):
         self._log_forward_stats()
 
     def _log_forward_stats(self):
-        """运行中每 2 秒汇报一次画面转发情况, 链路断在哪一眼可见。"""
+        """转发完全断流时告警 (正常运行不刷屏)。"""
         now = time.monotonic()
         if now - self._fwd_last < 2.0:
             return
         self._fwd_last = now
-        cnt, subs = self._fwd_count, self.node.image_pub.get_subscription_count()
+        cnt = self._fwd_count
         self._fwd_count = 0
         if self.running_algo is None:
             return
         if cnt == 0:
             self.node.get_logger().warning(
                 f'画面转发: 近 2 秒 0 帧 (源 {self._last_src or "?"} 无图像?)')
-        else:
-            # 例行统计日志 (排查链路时再打开):
-            # self.node.get_logger().info(
-            #     f'画面转发: {self._last_src} @{self._last_fps:.0f}fps, '
-            #     f'近 2 秒发 {cnt} 帧, 算法订阅者 {subs}')
-            pass
 
     def shutdown(self):
         """退出: 回收算法进程, 停掉后台线程。"""

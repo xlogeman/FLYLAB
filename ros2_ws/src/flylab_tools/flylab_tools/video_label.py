@@ -194,7 +194,8 @@ class VideoLabel(QLabel):
         if w == 0 or h == 0:
             return
         scale = scaled.width() / w
-        lw = max(1, round(2 * scale))
+        lw = max(1, round(1.5 * scale))            # point/polyline/text 线宽
+        lw_box = max(2, round(2.5 * scale))        # bbox 目标框: 加粗一档更醒目
         for a in self._annotations:
             c = QColor(*a.get('color', [0, 255, 0]))
             label = a.get('label', '')
@@ -202,7 +203,7 @@ class VideoLabel(QLabel):
                 x, y, bw, bh = a['box']
                 r = QRectF(x * scale, y * scale,
                            bw * scale, bh * scale)
-                painter.setPen(QPen(c, lw))
+                painter.setPen(QPen(c, lw_box))
                 painter.drawRect(r)
                 if label:
                     painter.setPen(QPen(c))
