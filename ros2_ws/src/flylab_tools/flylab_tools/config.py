@@ -109,6 +109,10 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_obb_node',
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
      'start': 'obb_start', 'stop': 'obb_stop'},
+    {'name': '实例分割',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_segment_node',
+             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+     'start': 'seg_start', 'stop': 'seg_stop'},
     {'name': '姿态估计',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU

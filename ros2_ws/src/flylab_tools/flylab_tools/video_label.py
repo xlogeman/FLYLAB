@@ -248,9 +248,19 @@ class VideoLabel(QLabel):
                     continue
                 qpts = [QPointF(px * scale, py * scale) for px, py in pts]
                 painter.setPen(QPen(c, lw))
-                painter.drawPolyline(QPolygonF(qpts))
-                if a.get('close'):
-                    painter.drawLine(qpts[-1], qpts[0])
+                if a.get('close') and a.get('fill'):
+                    # 闭合多边形填充为半透明色块 (实例分割掩码), 轮廓仍描边。
+                    # save/restore 防止 brush 泄漏到后续图元
+                    painter.save()
+                    fc = QColor(c)
+                    fc.setAlphaF(a.get('fill_alpha', 0.45))
+                    painter.setBrush(fc)
+                    painter.drawPolygon(QPolygonF(qpts))
+                    painter.restore()
+                else:
+                    painter.drawPolyline(QPolygonF(qpts))
+                    if a.get('close'):
+                        painter.drawLine(qpts[-1], qpts[0])
             elif a['type'] == 'image':
                 img = self._decode_image_anno(a)
                 if img is None:

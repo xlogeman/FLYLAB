@@ -71,6 +71,15 @@ target_include_directories(yolo_pose PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(yolo_pose ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
 
+# ---------- 核心算法库: YOLO 实例分割 (无 ROS 依赖, onnxruntime 推理) ----------
+# 链接 yolo_detector 复用 coco_names() (分割同为 COCO 80 类)
+add_library(yolo_segment src/yolo/yolo_segment.cpp)
+target_include_directories(yolo_segment PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${ORT_ROOT}/include
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(yolo_segment yolo_detector ${OpenCV_LIBS})
+
 # ---------- ROS2 节点: YOLO 目标检测 (默认模型 share/<pkg>/models/detect/) ----------
 add_executable(yolo_detect_node src/yolo/yolo_node.cpp)
 target_link_libraries(yolo_detect_node yolo_detector)
@@ -100,17 +109,25 @@ add_executable(yolo_pose_node src/yolo/yolo_pose_node.cpp)
 target_link_libraries(yolo_pose_node yolo_pose)
 ament_target_dependencies(
   yolo_pose_node rclcpp sensor_msgs std_msgs ament_index_cpp)
+
+# ---------- ROS2 节点: YOLO 实例分割 (默认模型 share/<pkg>/models/segment/) ----------
+add_executable(yolo_segment_node src/yolo/yolo_segment_node.cpp)
+target_link_libraries(yolo_segment_node yolo_segment)
+ament_target_dependencies(
+  yolo_segment_node rclcpp sensor_msgs std_msgs ament_index_cpp)
 # 安装后 libonnxruntime 在 lib/ 根目录, 各目标按相对位置解析
 set_target_properties(yolo_detector PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_classifier PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_depth PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_obb PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_pose PROPERTIES INSTALL_RPATH "$ORIGIN")
+set_target_properties(yolo_segment PROPERTIES INSTALL_RPATH "$ORIGIN")
 set_target_properties(yolo_detect_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_cls_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_depth_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_obb_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 set_target_properties(yolo_pose_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
+set_target_properties(yolo_segment_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
 
 # ---------- ROS2 节点: 地面站视觉工具链路 ----------
 add_executable(aruco_node src/aruco/aruco_node.cpp)
@@ -130,8 +147,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib
   FILES_MATCHING PATTERN "libonnxruntime*")
 
-install(TARGETS aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose
-  aruco_node yolo_detect_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node aruco_landing_node
+install(TARGETS aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment
+  aruco_node yolo_detect_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node aruco_landing_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

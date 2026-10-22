@@ -16,7 +16,9 @@ std_msgs/String。坐标一律为原图像素坐标。
   {"type": "point",    "point": [x, y],       "label": "...", "color": ...}
       关键点/中心点
   {"type": "polyline", "points": [[x,y],...], "close": false, "color": ...}
-      折线/多边形 (ArUco 用: 码四边形轮廓 + RGB 位姿轴; close=true 时首尾闭合)
+      折线/多边形 (ArUco 用: 码四边形轮廓 + RGB 位姿轴; close=true 时首尾闭合)。
+      可选 "fill": true 将闭合多边形填充为半透明色块 (实例分割掩码用),
+      配套 "fill_alpha" 控制填充不透明度 0~1 (省略 = 0.45), 轮廓线仍正常描边
   {"type": "text",     "pos": [x, y],         "text": "fps 30", "color": ...}
       自由文字 (可选 "align": "right" 表示 pos.x 为文字右边缘, 用于右上角)
   {"type": "image",    "pos": [x, y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}
@@ -82,6 +84,8 @@ def normalize(anno):
         return {'type': 'polyline',
                 'points': [[float(v) for v in p] for p in pts],
                 'close': bool(anno.get('close', False)),
+                'fill': bool(anno.get('fill', False)),
+                'fill_alpha': _alpha(anno.get('fill_alpha', 0.45)),
                 'color': _color(anno.get('color'))}
     if t == 'image':
         pos = anno.get('pos')
@@ -118,6 +122,14 @@ def _color(c):
     if isinstance(c, (list, tuple)) and len(c) == 3:
         return [int(v) for v in c]
     return [0, 255, 0]
+
+
+def _alpha(a):
+    """不透明度夹到 0~1, 非法回退 0.45。"""
+    try:
+        return min(max(float(a), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 0.45
 
 
 def parse_annotations(json_str):
