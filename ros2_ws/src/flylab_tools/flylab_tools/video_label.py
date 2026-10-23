@@ -192,7 +192,9 @@ class VideoLabel(QLabel):
 
     def _decode_image_anno(self, anno):
         """image 图元: base64 -> QImage。同一份 data 只解码一次 (缓存 1 条),
-        每帧更新的稠密输出 (深度图) 与窗口重绘都走缓存, 不重复解码。"""
+        每帧更新的稠密输出 (深度图) 与窗口重绘都走缓存, 不重复解码。
+        支持带透明通道的 PNG (4 通道, 语义分割叠加用: 无效像素透明不遮挡
+        原画面) 与普通 JPEG (3 通道, 深度伪彩画中画), 按解码结果自动区分。"""
         data = anno.get('data', '')
         if not data:
             return None
@@ -201,11 +203,20 @@ class VideoLabel(QLabel):
             return cached_img
         try:
             buf = np.frombuffer(base64.b64decode(data), np.uint8)
-            bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-            if bgr is None:
+            mat = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+            if mat is None:
                 return None
-            h, w = bgr.shape[:2]
-            img = QImage(bgr.data, w, h, w * 3, QImage.Format_BGR888).copy()
+            if mat.ndim == 3 and mat.shape[2] == 4:
+                # BGRA -> RGBA (Qt Format_RGBA8888 逐字节对应), 保留透明度
+                rgba = cv2.cvtColor(mat, cv2.COLOR_BGRA2RGBA)
+                h, w = rgba.shape[:2]
+                img = QImage(rgba.data, w, h, w * 4,
+                             QImage.Format_RGBA8888).copy()
+            else:
+                bgr = mat if (mat.ndim == 3 and mat.shape[2] == 3) \
+                    else cv2.cvtColor(mat, cv2.COLOR_GRAY2BGR)
+                h, w = bgr.shape[:2]
+                img = QImage(bgr.data, w, h, w * 3, QImage.Format_BGR888).copy()
         except Exception:
             return None
         self._img_anno_cache = (data, img)
