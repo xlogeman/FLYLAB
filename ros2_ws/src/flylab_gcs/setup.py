@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'flylab_tools'
+package_name = 'flylab_gcs'
 
 setup(
     name=package_name,
@@ -20,8 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'camera_view = flylab_tools.camera_view:main',
-            'ground_station = flylab_tools.ground_station:main',
+            'camera_view = flylab_gcs.camera_view:main',
+            'ground_station = flylab_gcs.ground_station:main',
         ],
     },
 )

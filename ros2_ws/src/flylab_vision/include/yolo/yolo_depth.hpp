@@ -71,7 +71,7 @@ private:
   DepthConfig config_;
 };
 
-/// 深度图 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 深度图 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}:
 ///   image 图元: turbo 伪彩深度图 (min-max 归一化) 经 JPEG+base64 编码,
 ///     以不透明小窗贴在画面右下角 (pip_scale 控制窗宽占原帧比例),

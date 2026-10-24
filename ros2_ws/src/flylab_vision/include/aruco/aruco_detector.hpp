@@ -68,7 +68,7 @@ void load_calib(const std::string & path, cv::Mat & K, cv::Mat & D);
 /// 字典名 -> 预定义字典; 未知名字抛 std::invalid_argument
 cv::Ptr<cv::aruco::Dictionary> make_dictionary(const std::string & name);
 
-/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每个 marker:
 ///   四边形轮廓 polyline (绿) + 首角点/中心 point (红) + id 距离 text (黄)
 ///   + 位姿轴 3 条 polyline (x红/y绿/z蓝, has_pose 时)

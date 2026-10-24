@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// YOLO 语义分割 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
 ///
-/// 链路 (与 yolo_segment_node 相同, 话题名与 flylab_tools/config.py 保持一致,
+/// 链路 (与 yolo_segment_node 相同, 话题名与 flylab_gcs/config.py 保持一致,
 /// 均可用参数覆盖):
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 semantic_start / semantic_stop 启停

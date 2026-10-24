@@ -5,8 +5,8 @@
 地面站里同功能的选项卡见 camera_widget.py（共用 camera_grabber.py）。
 
 用法：
-  ros2 run flylab_tools camera_view
-  ros2 run flylab_tools camera_view --ros-args -p host:=<UE主机IP> -p port:=41451
+  ros2 run flylab_gcs camera_view
+  ros2 run flylab_gcs camera_view --ros-args -p host:=<UE主机IP> -p port:=41451
   host 默认取环境变量 PX4_SIM_HOST_ADDR（跨主机看 UE），否则 127.0.0.1
 """
 import os

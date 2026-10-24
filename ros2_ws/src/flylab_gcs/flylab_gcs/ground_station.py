@@ -8,7 +8,7 @@
               (schema 见 overlay.py，任何模型都能接入)
 
 用法：
-  ros2 run flylab_tools ground_station
+  ros2 run flylab_gcs ground_station
 
 模块结构：
   config.py        全局配置（按钮、话题、端口，改这里）

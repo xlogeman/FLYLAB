@@ -67,7 +67,7 @@ private:
   YoloPoseConfig config_;
 };
 
-/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每个人体:
 ///   骨架连线 polyline (close=false) + 可见关键点 point
 /// (box/conf 只用于内部解码与 NMS, 不输出到画面 —— 单人类别下骨架

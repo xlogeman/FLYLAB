@@ -76,7 +76,7 @@ const std::vector<std::string> & cityscapes_names();
 /// cityscapes 19 类标准配色 (RGB, 下标 = 类别 id)
 const std::vector<cv::Vec3b> & cityscapes_palette_rgb();
 
-/// 语义分割结果 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 语义分割结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 可视化同深度估计的画中画模式 (to_depth_annotations_json):
 ///   image 图元: 类别图按 cityscapes 配色着色 (无效像素半透明深灰打底,
 ///     保持窗口完整感同时暗示"无类别归属"), 先缩到画中画窗尺寸再以

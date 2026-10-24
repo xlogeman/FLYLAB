@@ -82,16 +82,16 @@ ros2 launch flylab_flight fly_ego.launch.py tracker:=uxrce  # EGO 避障 (uXRCE-
 ros2 launch flylab_flight fly_super.launch.py               # SUPER 避障 (GPULidar)
 
 # 4. 地面站
-ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停 / ArUco降落按钮)
+ros2 run flylab_gcs ground_station          # 地面站总界面 (算法启停 / ArUco降落按钮)
 ```
 
 ---
 
 ## 4. 视觉算法实验区
 
-### 4.1. flylab_tools 地面站
+### 4.1. flylab_gcs 地面站
 
-可视化与算法实验工具集（`ros2_ws/src/flylab_tools`），模块化结构：界面 / 抓取 / ROS 三层解耦
+可视化与算法实验工具集（`ros2_ws/src/flylab_gcs`），模块化结构：界面 / 抓取 / ROS 三层解耦
 
 | 模块 | 说明 |
 |---|---|
@@ -104,7 +104,7 @@ ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停
 | `main_window.py` | 主窗口：左画面 + 右侧面板（算法下拉框 + 运行/取消 + ArUco降落按钮 + 通信链路按钮），管理算法/降落/桥进程生命周期 |
 
 ```bash
-ros2 run flylab_tools ground_station   # 地面站总界面
+ros2 run flylab_gcs ground_station   # 地面站总界面
 ```
 
 **新算法接入**：在 `config.ALGORITHMS` 加一项 `{name, cmd, start, stop}`——节点遵循「收到 start 开始、收到 stop 停止、标注按组发到 `/flylab/annotations`」即可出现在下拉框；`cmd` 不填则假定节点已在外部运行，只发启停指令。
@@ -292,7 +292,7 @@ PX4 SITL + Cosys-AirSim + ROS2 之间的全部通信端口（配置位于 `px4.1
 | UDP 14582→14542 | **MAVROS 专属实例** | MAVROS `fcu_url:=udp://:14542@` |
 | UDP 18570→14550 | GCS 实例 | QGC 等 |
 | UDP 8888 | uXRCE-DDS（`tracker:=uxrce` 链路） | MicroXRCEAgent |
-| TCP 41451 | AirSim RPC API（传感器/相机直连） | airsim_sensor_* / flylab_tools |
+| TCP 41451 | AirSim RPC API（传感器/相机直连） | airsim_sensor_* / flylab_gcs |
 
 **坑 ：14580 onboard 实例会被 AirSim 抢占。** 即使 `settings.json` 里 `UseTcp: true`，Cosys-AirSim 仍会从 Windows 向 `ControlIp:ControlPortRemote`（即 WSL 的 14580）发 1 Hz 心跳；PX4 的 MAVLink 实例只锁定一次对端（`mavlink_receiver.cpp`），AirSim 先到先得，把整条链路的数据流全部导向 UE，导致 MAVROS `/mavros/state.connected` 永远为 false。因此 MAVROS 必须使用 14582↔14542 专属实例，不要动 14580
 

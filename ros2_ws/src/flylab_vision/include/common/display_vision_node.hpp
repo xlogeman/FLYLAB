@@ -15,14 +15,14 @@
 namespace flylab_vision
 {
 
-/// 接入地面站视觉工具体系的展示型算法节点基类 (flylab_tools 既有约定)。
+/// 接入地面站视觉工具体系的展示型算法节点基类 (flylab_gcs 既有约定)。
 ///
-/// 封装统一链路 (话题名与 flylab_tools/config.py 保持一致, 均可用参数覆盖):
+/// 封装统一链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: 订阅 /flylab/vision_cmd, 收 cmd_start / cmd_stop 启停
 ///      (常驻运行, 不用每次重启节点); 停止时发 clear_json() 清自己的分组标注
 ///   3. 画面叠加: 每帧把 process() 返回的 JSON 发往 /flylab/annotations
-///      (schema 见 flylab_tools/overlay.py, 各算法独立分组, 可并存)
+///      (schema 见 flylab_gcs/overlay.py, 各算法独立分组, 可并存)
 ///   4. 诊断: 每 2 秒检查收帧情况, 收不到帧主动告警; 首帧图像/首帧推理日志
 ///
 /// 子类职责 (三步接入, 不用再碰任何通信代码):

@@ -66,7 +66,7 @@ private:
   YoloSegmentConfig config_;
 };
 
-/// 分割结果 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 分割结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每个实例:
 ///   掩码轮廓 (polyline 闭合多边形 + fill 半透明填充, 颜色按类别 id
 ///   稳定生成, 每实例最多取 3 个最大轮廓) + 类别置信度文字 (text)

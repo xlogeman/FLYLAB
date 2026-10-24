@@ -62,7 +62,7 @@ private:
   YoloConfig config_;
 };
 
-/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_tools/overlay.py)。
+/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每个目标:
 ///   bbox (box=[x,y,w,h], label="类别 置信度", 颜色按类别 id 稳定生成)
 /// 坐标为原图像素, 图像源须与地面站显示的相机/分辨率一致。
