@@ -23,11 +23,13 @@ import rclpy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QMainWindow,
                            QMenu, QPushButton, QToolBar, QToolButton,
-                           QVBoxLayout)
+                           QVBoxLayout, QWidget)
 
 from . import config
 from .camera_widget import CameraViewWidget
+from .compass import Compass
 from .log_panel import LogPanel
+from .telemetry_bar import TelemetryBar
 from .processes import ManagedProcess
 from .teleop_pad import VirtualJoystick
 from .vehicle_control import VehicleController
@@ -51,6 +53,8 @@ class MainWindow(QMainWindow):
         # 日志框: TeeLogger 分流先挂上, 后续所有日志都能上屏
         self.log_panel = LogPanel()
         self.log_line.connect(self.log_panel.append_line)
+        self.tele_bar = TelemetryBar()   # QGC 式遥测六值条 (画面下方, 日志框之上)
+        self.camera_tab.add_bottom_widget(self.tele_bar)
         self.camera_tab.add_bottom_widget(self.log_panel)
         self.node.set_log_sink(
             lambda level, text: self.log_line.emit(level, text))
@@ -98,6 +102,15 @@ class MainWindow(QMainWindow):
         # 开启: 拉起 teleop_node (按所选通信链路传 link 参数) 并发 teleop_start
         # 接管 offboard; 摇杆控速度、松开回中悬停; 关闭: 交还控制权。
         # 与视觉反控 (ArUco降落) 互斥 (都走 offboard, 会争抢 setpoint)
+        # 右栏布局: 第一行 = 云台 (左) + 罗盘 (右, 撑满等高) 并排,
+        # 手动遥控独占下一行
+        self.compass = Compass()
+        top_row = QWidget()
+        row_lay = QHBoxLayout(top_row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.addWidget(self.camera_tab.gimbal_box, stretch=2)
+        row_lay.addWidget(self.compass, stretch=1)
+        self.camera_tab.add_side_widget(top_row)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
 
         self.setCentralWidget(self.camera_tab)
@@ -701,6 +714,10 @@ class MainWindow(QMainWindow):
             rclpy.spin_once(self.node, timeout_sec=0)
         except Exception:
             pass
+        # 遥测六值条 + 罗盘刷新 (数据随 0.5s 飞控心跳采样)
+        tele = self.veh_ctrl.get_telemetry()
+        self.tele_bar.update_values(tele)
+        self.compass.set_heading(tele.get('hdg', 0.0))
         # 标注上屏门控: 仅在"算法运行中或降落进行中"时显示。防止外部遗留的
         # 算法节点进程 (仍处于 start 状态) 在用户未运行任何算法时擅自叠加;
         # 此种场景直接清掉已有分组, 不让来路不明的过期标注上屏

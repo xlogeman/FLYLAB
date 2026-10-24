@@ -5,7 +5,7 @@
 # 初始窗口大小 = 屏幕可用区域 × 比例 (画面随窗口等比缩放;
 # 窗口无固定尺寸, 启动后可直接拖拽边缘调整, 此处只影响初始大小)。
 # 高度取大些: 画面下方留出日志框 (免切终端看日志)
-WINDOW_SIZE_RATIO = (0.4, 0.4)   # (宽, 高) 相对屏幕可用区域的比例
+WINDOW_SIZE_RATIO = (0.5, 0.4)   # (宽, 高) 相对屏幕可用区域的比例
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -40,7 +40,7 @@ ANNOTATION_TOPIC = '/flylab/annotations'
 GIMBAL_STATE_TOPIC = '/flylab/gimbal_state'
 
 # ---------- 云台 (AirSim 相机视角旋转, 经 simSetCameraPose) ----------
-GIMBAL_STEP_DEG = 1.0     # 每次按键步进角度 (按钮支持按住连发)
+GIMBAL_JOY_RATE_DEG_S = 60.0   # 云台摇杆满偏时的转动角速度 (°/s), 偏转量线性缩放
 
 # 飞行中姿态跟随频率 (Hz)。相机是刚性挂载, 云台角只在下发瞬间按当时机体
 # 姿态换算; 飞行中机体姿态一变, 记忆的云台角就与实际视角脱钩, 下次按键会

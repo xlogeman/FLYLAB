@@ -2,7 +2,7 @@
 """AirSim 相机抓取器 —— 直连 AirSim RPC 拉图 + 本机 V4L2 摄像头，与界面解耦。
 
 被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
-附带软件云台：经 simSetCameraPose 旋转相机视角 (yaw/pitch 步进 + 回中)，
+附带软件云台：经 simSetCameraPose 旋转相机视角 (摇杆角速度 + 回中)，
 世界系稳定云台：视线方位/仰角钉在世界系 (方位参考机头朝向)，机体怎么
 转、怎么斜都由周期重下发 (GIMBAL_HOLD_HZ) 补偿——垂直向下时原地旋转
 仍保持垂直向下，方向键上下左右与机体姿态无关。
@@ -238,6 +238,9 @@ class Grabber(threading.Thread):
          self._gimbal_last) = _load_gimbal_state()
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
+        # 摇杆连续转动: 当前角速度 (°/s) 与上次帧时刻 (None=未在转动)
+        self._gimbal_rate = (0.0, 0.0)
+        self._rate_t_prev = None
         self._gimbal_dirty = False
         # 会话内限位拒绝标记 (方向 -> bool): 仅当按键被限位卡住时标红,
         # 该方向恢复可动即清; 不持久化, 地面站重启后一律不红
@@ -289,42 +292,63 @@ class Grabber(threading.Thread):
 
     # ---------- 软件云台 (界面线程调用, 角度由抓取线程经 RPC 写入相机) ----------
 
-    def gimbal_step(self, dyaw, dpitch):
-        """步进云台角度 (yaw 正=向右, pitch 正=向上), 同步作用到所有 AirSim
-        相机 (left/front/right/depth 一起转)。限位见 config.GIMBAL_*_LIMIT_DEG,
-        到限位后不再动作 (不会回绕到机尾), 被卡住的方向记入 _gimbal_blocked
-        供界面标红。本机/视频文件源为空操作。"""
+    def gimbal_set_rate(self, yaw_rate, pitch_rate):
+        """设置云台连续转动角速度 (°/s, 摇杆控制): 抓取线程每帧按限位
+        夹紧步进 (_rate_tick), 回零即停 (位置保持)。限位卡住的方向记入
+        _gimbal_blocked 供界面标红。本机/视频文件源为空操作。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
-            yaw, pitch = self._gimbal
-            nyaw, npitch = _clamp_gimbal(yaw + dyaw, pitch + dpitch)
-            # 该方向按键被限位拒绝 => 标红; 该方向有实际动作 => 清红
-            if dyaw > 0:
-                self._gimbal_blocked['yaw+'] = nyaw == yaw
-                if nyaw != yaw:
-                    self._gimbal_blocked['yaw-'] = False
-            elif dyaw < 0:
-                self._gimbal_blocked['yaw-'] = nyaw == yaw
-                if nyaw != yaw:
-                    self._gimbal_blocked['yaw+'] = False
-            if dpitch > 0:
-                self._gimbal_blocked['pitch+'] = npitch == pitch
-                if npitch != pitch:
-                    self._gimbal_blocked['pitch-'] = False
-            elif dpitch < 0:
-                self._gimbal_blocked['pitch-'] = npitch == pitch
-                if npitch != pitch:
-                    self._gimbal_blocked['pitch+'] = False
+            if yaw_rate == 0.0 and pitch_rate == 0.0:
+                if any(self._gimbal_rate):
+                    _save_gimbal_state(self._gimbal, self._gimbal_mount,
+                                       self._gimbal_last)   # 停止时落盘最终角
+                self._gimbal_rate = (0.0, 0.0)
+                return
+            self._gimbal_rate = (yaw_rate, pitch_rate)
+            self._gimbal_anim = None   # 摇杆打断回中/摆位动画
+            self._rate_t_prev = None   # 下一帧重新计时
+
+    def _rate_tick(self):
+        """摇杆连续转动: 每帧按当前角速度步进 (限位夹紧, 被夹住的方向
+        标红, 该方向恢复可动即清)。仅在 _gimbal_rate 非零期间生效;
+        角度落盘延后到摇杆回零时一次完成 (避免每帧写文件)。"""
+        ry, rp = self._gimbal_rate
+        if ry == 0.0 and rp == 0.0:
+            self._rate_t_prev = None
+            return
+        now = time.monotonic()
+        if self._rate_t_prev is None:
+            self._rate_t_prev = now
+            return
+        dt = min(0.1, now - self._rate_t_prev)
+        self._rate_t_prev = now
+        yaw, pitch = self._gimbal
+        nyaw, npitch = _clamp_gimbal(yaw + ry * dt, pitch + rp * dt)
+        # 限位拒绝标记: 该方向被夹住 => 标红; 有实际动作 => 清对向红
+        if ry > 0:
+            self._gimbal_blocked['yaw+'] = nyaw == yaw
+            if nyaw != yaw:
+                self._gimbal_blocked['yaw-'] = False
+        elif ry < 0:
+            self._gimbal_blocked['yaw-'] = nyaw == yaw
+            if nyaw != yaw:
+                self._gimbal_blocked['yaw+'] = False
+        if rp > 0:
+            self._gimbal_blocked['pitch+'] = npitch == pitch
+            if npitch != pitch:
+                self._gimbal_blocked['pitch-'] = False
+        elif rp < 0:
+            self._gimbal_blocked['pitch-'] = npitch == pitch
+            if npitch != pitch:
+                self._gimbal_blocked['pitch+'] = False
+        if (nyaw, npitch) != (yaw, pitch):
             self._gimbal = (nyaw, npitch)
-            self._gimbal_anim = None   # 手动操作打断回中动画
-            self._gimbal_dirty = True
-            _save_gimbal_state(self._gimbal, self._gimbal_mount,
-                               self._gimbal_last)
+            self._gimbal_dirty = True   # RPC 下发由节流周期负责
 
     def gimbal_reset(self):
         """云台回中: 启动平滑回中动画 (非瞬跳), 角速度见
-        config.GIMBAL_SLEW_RATE_DEG_S; 按任意方向键可打断。"""
+        config.GIMBAL_SLEW_RATE_DEG_S; 摇杆可打断。"""
         with self.lock:
             self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
@@ -674,6 +698,7 @@ class Grabber(threading.Thread):
 
                 is_depth = 'depth' in cam.lower()
                 with self.lock:
+                    self._rate_tick()    # 摇杆连续转动: 每帧按角速度推进
                     self._anim_tick()    # 回中动画: 每帧推进并置 dirty
                     gim_dirty, gim = self._gimbal_dirty, self._gimbal
                 # 云台角只在按键瞬间按当时机体姿态换算一次, 相机随后刚性跟

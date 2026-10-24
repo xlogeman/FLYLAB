@@ -16,6 +16,7 @@
 注意: 飞控方法 (takeoff/land/...) 在 MultirotorClient 上, 抓图用的
 VehicleClient 没有 (armDisarm 两边都有) —— 本模块统一用 MultirotorClient。
 """
+import math
 import threading
 import time
 
@@ -43,6 +44,14 @@ class VehicleController(threading.Thread):
         self._cmd = None        # 待执行命令 key (界面 request 置入)
         self._connected = False
         self._flying = False    # 已解锁且在空中 (视觉反控门控依据)
+        # QGC 式遥测 (0.5s 心跳顺带采样 kinematics, 飞行中积分行程/时长):
+        # alt=相对起飞点高度 hs=水平速度 vs=垂直速度 hdg=航向 dist=累计行程
+        # ftime=飞行时间(秒) flying=是否在空中
+        self._tele = {'alt': 0.0, 'hs': 0.0, 'vs': 0.0, 'hdg': 0.0,
+                      'dist': 0.0, 'ftime': 0.0, 'flying': False}
+        self._tele_t = 0.0        # 上次遥测采样时刻 (monotonic, 0=未采样)
+        self._tele_prev = None    # 上次采样水平位置 (x, y)
+        self._z_ground = 0.0      # 起飞点 z (NED), 高度基准
         self._client = None     # 持久 RPC 客户端 (ping 失败时重建)
         self.running = True
 
@@ -57,6 +66,11 @@ class VehicleController(threading.Thread):
         """已解锁且在空中 (视觉反控门控依据); 未连通/查询失败为 False。"""
         with self._lock:
             return self._flying
+
+    def get_telemetry(self):
+        """最近一次采样遥测 (dict, 界面 33ms 轮询读, 采样随 0.5s 心跳)。"""
+        with self._lock:
+            return dict(self._tele)
 
     def request(self, key):
         """请求执行飞控命令, 置入队列立即返回 (执行在本线程)。"""
@@ -99,21 +113,55 @@ class VehicleController(threading.Thread):
         self._poll_flying()
 
     def _poll_flying(self):
-        """随心跳低频查询飞行状态 (离地), 供视觉反控门控。
+        """随心跳低频查询飞行状态 (离地, 供视觉反控门控) + 采集遥测六值。
         注: 不用 st.rc.armed —— PX4 SITL 经 MAVLink 通道解锁时 RCData.armed
         不可靠 (不走模拟遥控器通道, 恒为 False)。改用 LandedState 判离地:
-        Landed=在地面, Takeoff/Landing/Flying=离空。状态迁移打一条日志
-        (排查门控问题), 查询失败视为不在地面流程 (下次心跳恢复)。"""
+        Landed=在地面, Takeoff/Landing/Flying=离空。状态迁移打一条日志;
+        单次查询失败保持上次状态 (RPC 抖动不产生假迁移), 下个心跳恢复。
+        遥测: 高度=相对起飞点 (起飞瞬间记 z 基准), 垂直速度 NED 上为正,
+        航向 0-360°; 飞行中按采样间隔积分水平行程与飞行时长 (0.5s 采样,
+        行程为折线近似, 略短于实际轨迹), 起飞瞬间清零按次累计, 落地保留;
+        高度/速度落地后显示 0, 航向始终跟随。"""
         try:
             st = self._client.getMultirotorState()
             flying = st.landed_state != airsim.LandedState.Landed
         except Exception:
             return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
+        kin = st.kinematics_estimated
+        pos, vel, q = kin.position, kin.linear_velocity, kin.orientation
+        now = time.monotonic()
         with self._lock:
             was, self._flying = self._flying, flying
         if was != flying:
             self.log.info(
                 f'飞行控制: 飞行状态 -> {"空中 (反控可用)" if flying else "地面"}')
+        if flying and not was:   # 起飞瞬间: 记高度基准, 行程/时长清零按次累计
+            self._z_ground = pos.z_val
+            self._tele_t = now
+            self._tele_prev = (pos.x_val, pos.y_val)
+        tele = dict(self._tele)
+        tele['flying'] = flying
+        if flying:
+            dt = max(0.0, now - self._tele_t) if self._tele_t else 0.0
+            if self._tele_prev is not None and dt > 0:
+                tele['dist'] = self._tele['dist'] + math.hypot(
+                    pos.x_val - self._tele_prev[0],
+                    pos.y_val - self._tele_prev[1])
+                tele['ftime'] = self._tele['ftime'] + dt
+            self._tele_prev = (pos.x_val, pos.y_val)
+            self._tele_t = now
+            tele['alt'] = max(0.0, self._z_ground - pos.z_val)   # NED z 下为正
+            tele['hs'] = math.hypot(vel.x_val, vel.y_val)
+            tele['vs'] = -vel.z_val                              # 上为正
+        else:
+            self._tele_prev = None
+            self._tele_t = 0.0
+            tele['alt'] = tele['hs'] = tele['vs'] = 0.0
+        tele['hdg'] = (math.degrees(math.atan2(
+            2.0 * (q.w_val * q.z_val + q.x_val * q.y_val),
+            1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val))) + 360.0) % 360.0
+        with self._lock:
+            self._tele.update(tele)
 
     def _exec(self, key):
         """执行命令: 短超时客户端 + ping 不通快速失败, 绝不长阻塞。"""
