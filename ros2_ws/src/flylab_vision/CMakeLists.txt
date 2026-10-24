@@ -155,9 +155,11 @@ add_executable(aruco_landing_node src/aruco/aruco_landing_node.cpp)
 target_link_libraries(aruco_landing_node aruco_detector)
 ament_target_dependencies(aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 
-# 模型权重装到 share/<pkg>/models/, yolo_detect_node 经 ament_index 解析默认路径
+# 模型权重装到 share/<pkg>/models/, 各节点经 ament_index 解析默认路径。
+# 只装 .onnx 推理模型: .pt 是训练权重 (~200MB), 运行时无用, 不随包拷贝
 install(DIRECTORY models
-  DESTINATION share/${PROJECT_NAME})
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING PATTERN "*.onnx")
 # onnxruntime 动态库 (含版本符号链接) 装到 lib/, 供 rpath 解析
 install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib

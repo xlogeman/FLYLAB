@@ -191,11 +191,11 @@ YoloSemanticSegmenter::YoloSemanticSegmenter(const YoloSemanticConfig & config)
   // 空跑一次确认模型可用并记录输出分辨率 (加载失败在这里抛, 不拖到首帧)
   cv::Mat probe(
     impl_->input_size, impl_->input_size, CV_8UC3, cv::Scalar(114, 114, 114));
-  std::vector<float> blob = make_blob(probe);
+  cv::Mat blob = make_blob(probe);
   const std::array<int64_t, 4> shape{
     1, 3, impl_->input_size, impl_->input_size};
   auto in = Ort::Value::CreateTensor<float>(
-    impl_->mem, blob.data(), blob.size(), shape.data(), shape.size());
+    impl_->mem, blob.ptr<float>(), blob.total(), shape.data(), shape.size());
   const char * in_names[] = {impl_->input_name.c_str()};
   const char * out_names[] = {impl_->output_name.c_str()};
   auto outs = impl_->session->Run(

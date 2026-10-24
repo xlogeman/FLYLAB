@@ -9,7 +9,6 @@
 ///     (QoS 与 flylab/tracker_uxrce 一致: best_effort + transient_local)
 ///   - /fmu/out 三个订阅者: vehicle_status / vehicle_local_position / vehicle_command_ack
 
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 
@@ -162,9 +161,6 @@ public:
   {
     return got_status_ && (node_.now() - last_status_time_).seconds() <= timeout_sec;
   }
-
-  const px4_msgs::msg::VehicleStatus & status() const {return status_;}
-  const px4_msgs::msg::VehicleLocalPosition & rawLocalPosition() const {return position_;}
 
   LocalPosNED localPosition() const override
   {

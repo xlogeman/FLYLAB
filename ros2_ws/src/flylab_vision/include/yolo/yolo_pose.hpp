@@ -11,12 +11,6 @@
 namespace flylab_vision
 {
 
-/// COCO 17 人体关键点名 (yolo26s-pose 默认训练集), 下标即关键点 id
-const std::vector<std::string> & coco_kpt_names();
-
-/// COCO 人体骨架连接表 (关键点 id 对, 用于绘制肢体连线)
-const std::vector<std::pair<int, int>> & coco_skeleton();
-
 /// Pose 估计器配置
 struct YoloPoseConfig
 {
@@ -59,7 +53,6 @@ public:
   /// 单帧推理 (BGR), 返回 NMS 后的结果; 无目标返回空
   std::vector<YoloPoseDetection> detect(const cv::Mat & bgr);
 
-  const YoloPoseConfig & config() const {return config_;}
   /// 关键点个数 (由模型输出通道数推出, COCO-pose 为 17)
   int kpt_count() const;
 

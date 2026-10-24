@@ -55,7 +55,6 @@ public:
   /// 单帧推理 (BGR), 返回与原帧同尺寸的类别图; 输入为空返回空结果
   YoloSemanticResult segment(const cv::Mat & bgr);
 
-  const YoloSemanticConfig & config() const {return config_;}
 
   /// 实际使用的输入边长 (config.input_size=0 时为模型固定尺寸)
   int input_size() const;

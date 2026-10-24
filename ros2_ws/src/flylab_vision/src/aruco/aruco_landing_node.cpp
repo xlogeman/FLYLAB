@@ -7,6 +7,8 @@
 ///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
 /// 只用 cx/cy/面积做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
+/// 多尺度嵌套码支持: target_id 指定精准落点码 (小码), 不可见时回退跟踪画面
+/// 最大码 (高空大码), 指定码出现后自动切换对齐目标 (target_fallback:=false 关闭回退)。
 /// 执行层经 px4_offboard_client (link:=mavros|uxrce 选链路)。
 ///
 /// 话题: 图像 /flylab/display/image_raw (地面站转发帧, 需俯视看到码);
@@ -19,7 +21,6 @@
 
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -145,7 +146,9 @@ public:
       declare_parameter<std::string>("gimbal_topic", "/flylab/gimbal_state");
     gimbal_timeout_sec_ = declare_parameter<double>("gimbal_timeout_sec", 0.5);
 
-    target_id_ = declare_parameter<int>("target_id", -1);        // -1 = 任一 (取画面里最大的并锁定)
+    target_id_ = declare_parameter<int>("target_id", 41);        // 指定精准落点码 ID, 不可见时回退最大码;
+                                                                 // -1 = 任一 (取画面里最大的并锁定)
+    target_fallback_ = declare_parameter<bool>("target_fallback", true);  // 指定 ID 不可见时回退画面最大码
     land_cx_ = declare_parameter<double>("land_cx", 0.5);        // 期望对中的画面位置 (归一化)
     land_cy_ = declare_parameter<double>("land_cy", 0.5);
     vel_gain_ = declare_parameter<double>("vel_gain", 1.0);      // 水平对齐 P 增益
@@ -341,25 +344,42 @@ private:
     }
   }
 
-  /// 目标选择 (带 ID 锁定, 防多码下逐帧选"最大"导致目标跳变):
-  ///   target_id >= 0  只认指定 ID
-  ///   target_id = -1  首帧选画面最大的码并锁定, 持续丢失超 reacquire_sec 才重选
+  /// 目标选择 (指定 ID 优先 + 最大码回退, 适配多尺度嵌套码场景):
+  ///   target_id = -1  自动模式: 首帧选画面最大的码并锁定, 持续丢失超
+  ///                   reacquire_sec 才重选 (原逻辑不变)
+  ///   target_id >= 0  指定模式: 指定 ID (如嵌套小码) 出现 → 对齐目标切到它;
+  ///                   不可见 → 回退跟踪画面最大码 (target_fallback=true, 默认),
+  ///                   或只认指定 ID (target_fallback=false, 原严格模式)
+  /// 回退目标软锁定: 仍在画面就继续跟, 防多个大码间逐帧跳变; 指定 ID 重新
+  /// 出现则立即切回 (两码同心布置时中心重合, 切换无水平跳变, 无需确认帧)
   const Detection * pickTarget(double dt)
   {
     if (detections_.empty()) {
       noteTargetMissed(dt);
       return nullptr;
     }
+    // 指定 ID 优先: 出现即切换对齐目标
     if (target_id_ >= 0) {
       for (const auto & d : detections_) {
         if (d.id == target_id_) {
+          if (tracked_id_ != target_id_) {
+            RCLCPP_INFO(
+              get_logger(), "\033[32m对齐目标切换: id=%d (指定目标出现%s)\033[0m",
+              target_id_, tracked_id_ >= 0 ? ", 从回退码接管" : "");
+          }
+          tracked_id_ = target_id_;
+          lost_id_time_ = 0.0;
           return &d;
         }
       }
-      return nullptr;
+      if (!target_fallback_) {
+        noteTargetMissed(dt);
+        return nullptr;  // 严格模式: 只认指定 ID
+      }
+      // 指定 ID 未出现: 回退跟踪画面最大码 (软锁定, 防跳变)
     }
-    // 锁定目标仍在画面: 直接跟它
-    if (tracked_id_ >= 0) {
+    // 锁定目标仍在画面: 直接跟它 (指定模式下 tracked_id_ 已是回退码)
+    if (tracked_id_ >= 0 && tracked_id_ != target_id_) {
       for (const auto & d : detections_) {
         if (d.id == tracked_id_) {
           lost_id_time_ = 0.0;
@@ -386,18 +406,24 @@ private:
       }
     }
     if (best != nullptr) {
+      if (target_id_ >= 0) {
+        RCLCPP_INFO(
+          get_logger(), "\033[33m指定目标 id=%d 不可见, 回退画面最大码 id=%d "
+          "(共检出 %zu 个码)\033[0m", target_id_, best->id, detections_.size());
+      } else {
+        RCLCPP_INFO(
+          get_logger(), "\033[32m选定跟踪目标: id=%d (画面最大, 共检出 %zu 个码, "
+          "此后锁定该 ID)\033[0m", best->id, detections_.size());
+      }
       tracked_id_ = best->id;
       lost_id_time_ = 0.0;
-      RCLCPP_INFO(
-        get_logger(), "\033[32m选定跟踪目标: id=%d (画面最大, 共检出 %zu 个码, "
-        "此后锁定该 ID)\033[0m", tracked_id_, detections_.size());
     }
     return best;
   }
 
   void noteTargetMissed(double dt)
   {
-    if (target_id_ < 0 && tracked_id_ >= 0) {
+    if (tracked_id_ >= 0) {
       lost_id_time_ += dt;
     }
   }
@@ -750,6 +776,7 @@ private:
 
   // 调参项
   int target_id_;
+  bool target_fallback_;
   double land_cx_, land_cy_, vel_gain_, max_h_vel_;
   double align_ref_alt_, max_height_scale_;
   double far_descend_tol_, far_descend_area_, far_descend_scale_;

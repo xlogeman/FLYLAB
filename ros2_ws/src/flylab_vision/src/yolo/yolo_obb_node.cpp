@@ -141,7 +141,7 @@ public:
       cmd_topic, 10,
       [this](const std_msgs::msg::String::SharedPtr msg) {on_cmd(*msg);});
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      image_topic, rclcpp::QoS(rclcpp::KeepLast(2)).reliable(),
+      image_topic, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
       [this](const sensor_msgs::msg::Image::SharedPtr msg) {on_image(*msg);});
 
     RCLCPP_INFO(

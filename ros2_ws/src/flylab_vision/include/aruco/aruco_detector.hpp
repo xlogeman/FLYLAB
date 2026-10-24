@@ -23,7 +23,6 @@ struct Detection
   cv::Vec3d rvec{0.0, 0.0, 0.0};     // 相机系位姿 (x右 y下 z前, 米)
   cv::Vec3d tvec{0.0, 0.0, 0.0};
   bool has_pose = false;             // solvePnP 是否成功
-  double yaw_img_deg = 0.0;          // 图像 2D 方向角 (顶边中点相对中心, 粗对准用)
   // 位姿轴端点投影: [原点, x端, y端, z端] (像素); has_pose 时有效,
   // 供可视化画 RGB 轴
   std::vector<cv::Point2f> axis_pts;
@@ -53,7 +52,6 @@ public:
   /// 是否使用了真实标定 (false 时内参为估算值, 位姿仅供参考)
   bool calibrated() const {return !config_.K.empty();}
 
-  const DetectorConfig & config() const {return config_;}
 
 private:
   cv::Mat K_for(const cv::Mat & bgr) const;  // 有标定用标定, 否则按分辨率+FOV 估算

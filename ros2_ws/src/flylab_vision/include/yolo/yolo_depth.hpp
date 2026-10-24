@@ -4,7 +4,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <opencv2/core.hpp>
 
@@ -57,7 +56,6 @@ public:
   /// 单帧推理 (BGR), 返回与原帧同尺寸的深度图; 输入为空返回空结果
   DepthResult estimate(const cv::Mat & bgr);
 
-  const DepthConfig & config() const {return config_;}
 
   /// 实际使用的输入边长 (config.input_size=0 时为模型固定尺寸)
   int input_size() const;

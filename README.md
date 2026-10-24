@@ -21,7 +21,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
-| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | `configs/mapping.json` | 深度图 → 点云 → 占据地图 |
+| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | octomap 参数内联于 launch | 深度图 → 点云 → 占据地图 |
 | EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|uxrce` 选择跟踪链路 |
 | OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
 | VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |

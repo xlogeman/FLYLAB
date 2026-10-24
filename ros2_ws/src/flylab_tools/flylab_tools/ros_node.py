@@ -4,19 +4,99 @@
 界面通过 get_annotations() 轮询取模型标注、调用 publish_* 发指令，
 不直接接触任何 rclpy 对象。将来加订阅/发布只改这里。
 """
+import threading
 import time
 
-import numpy as np
 import rclpy
 from geometry_msgs.msg import Quaternion
 from rclpy.node import Node
-from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy,
-                       qos_profile_sensor_data)
+from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy)
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 from . import config
 from .overlay import parse_message
+
+
+class DisplayForwarder(threading.Thread):
+    """显示帧转发线程 —— 大图序列化/publish 从 GUI 线程整体挪出。
+
+    为什么必须独立线程: RELIABLE 大图 (~1MB) 的 publish() 在写端历史被
+    未确认样本占满时会阻塞等待 ACK —— 实测把 GUI 线程的 33ms 定时器拖到
+    只剩 ~5Hz (ros2 topic hz 实测 display 4.5Hz / annotations 17Hz),
+    画面帧率与解算帧率随之崩塌。转发与界面彻底解耦后:
+    - GUI 线程只往单槽里放最新帧引用 (set_frame, 加锁赋值, 不拷贝不序列化)
+    - 本线程按固定频率取"最新帧"发布; 上一帧还没发完 (publish 阻塞在
+      ACK 上) 就跳过本轮, 新帧继续覆盖单槽 —— 永不排队积压, 永不阻塞
+      任何别的线程, 行为等价于"最新帧优先, 慢了就丢帧"
+    线程持有独立 node (rclpy 允许每线程一个 node), 无订阅者时不序列化。
+    """
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self._lock = threading.Lock()
+        self._frame = None        # 最新待发帧 (ndarray 引用)
+        self._publishing = False  # 上一帧是否仍在发送中 (阻塞时跳帧)
+        self.fwd_count = 0        # 2s 统计窗口内的实际发布帧数 (供界面告警)
+        self._running = True
+
+    def set_frame(self, arr):
+        """GUI 线程调用: 记录最新帧引用 (O(1), 无拷贝)。"""
+        with self._lock:
+            self._frame = arr
+
+    def take_fwd_count(self):
+        """取出并清零统计窗口计数 (界面每 2s 取一次)。"""
+        with self._lock:
+            count, self.fwd_count = self.fwd_count, 0
+        return count
+
+    def stop(self):
+        self._running = False
+
+    def _to_msg(self, arr):
+        msg = Image()
+        msg.height, msg.width = arr.shape[:2]
+        msg.encoding = 'bgr8'
+        msg.step = int(arr.strides[0])
+        msg.header.frame_id = 'display'
+        msg.header.stamp = self._node.get_clock().now().to_msg()
+        msg.data = arr.tobytes()
+        return msg
+
+    def run(self):
+        self._node = rclpy.create_node('ground_station_display')
+        # reliable: 大图走 UDP 分片, best-effort 丢一个分片整帧就没了
+        # (实测丢帧率可达 40%+); 阻塞代价已由独立线程 + 跳帧机制消化。
+        # 若测量发现 ACK 等待仍限制吞吐 (发布端稳定低于源帧率), 改
+        # config.DISPLAY_IMAGE_RELIABLE = False 切 best-effort
+        qos = QoSProfile(
+            reliability=(
+                ReliabilityPolicy.RELIABLE if config.DISPLAY_IMAGE_RELIABLE
+                else ReliabilityPolicy.BEST_EFFORT),
+            history=HistoryPolicy.KEEP_LAST, depth=2)
+        pub = self._node.create_publisher(
+            Image, config.DISPLAY_IMAGE_TOPIC, qos)
+        period = 1.0 / max(config.DISPLAY_IMAGE_HZ, 1)
+        try:
+            while self._running and rclpy.ok():
+                t0 = time.monotonic()
+                with self._lock:
+                    frame = self._frame
+                    self._frame = None
+                    busy = self._publishing
+                # 无订阅者/上一帧未发完: 跳过, 新帧留在单槽里等下一轮
+                if (frame is not None and not busy
+                        and pub.get_subscription_count() > 0):
+                    self._publishing = True
+                    try:
+                        pub.publish(self._to_msg(frame))
+                        self.fwd_count += 1
+                    finally:
+                        self._publishing = False
+                time.sleep(max(0.0, period - (time.monotonic() - t0)))
+        finally:
+            self._node.destroy_node()
 
 
 class GroundStationNode(Node):
@@ -33,15 +113,11 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.ANNOTATION_TOPIC, self._anno_cb, 10)
 
-        # 显示画面转发: 当前显示的帧发给算法节点 (无订阅者时自动跳过,
-        # 不白白占用 CPU 序列化大图)。reliable: 900KB 大图走 UDP 分片,
-        # best-effort 下丢一个分片整帧就没了 (实测丢帧率可达 40%+);
-        # keep-last 2 保证接收端永远只处理最新帧, 不积压
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST, depth=2)
-        self.image_pub = self.create_publisher(
-            Image, config.DISPLAY_IMAGE_TOPIC, qos)
+        # 显示画面转发: 独立线程负责 (大图序列化/publish/等 ACK 全部
+        # 移出 GUI 线程, 见 DisplayForwarder 类注释)。界面只往单槽里
+        # 放最新帧引用, 无订阅者时转发线程自动跳过不序列化
+        self.display_forwarder = DisplayForwarder()
+        self.display_forwarder.start()
 
         # 相机机体系姿态 (ArUco 降落云台泛化): 当前显示相机相对机体的姿态
         # 四元数, 界面线程按 10Hz 调 publish_cam_orientation() 发布
@@ -119,17 +195,15 @@ class GroundStationNode(Node):
         msg.x, msg.y, msg.z, msg.w = q
         self.gimbal_pub.publish(msg)
 
-    def publish_frame(self, arr):
-        """把当前显示的帧 (BGR ndarray, 原图分辨率) 发布为 sensor_msgs/Image。
-        无订阅者时跳过序列化。返回是否真正发布。"""
-        if self.image_pub.get_subscription_count() == 0:
-            return False
-        msg = Image()
-        msg.height, msg.width = arr.shape[:2]
-        msg.encoding = 'bgr8'
-        msg.step = int(arr.strides[0])
-        msg.header.frame_id = 'display'
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.data = arr.tobytes()
-        self.image_pub.publish(msg)
-        return True
+    def set_display_frame(self, arr):
+        """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。
+        真正的 tobytes/序列化/publish 在 DisplayForwarder 线程完成。"""
+        self.display_forwarder.set_frame(arr)
+
+    def take_fwd_count(self):
+        """取 2s 统计窗口内的实际转发帧数 (取后清零)。"""
+        return self.display_forwarder.take_fwd_count()
+
+    def shutdown(self):
+        """停止转发线程 (程序退出时调用, 先于 rclpy.shutdown())。"""
+        self.display_forwarder.stop()

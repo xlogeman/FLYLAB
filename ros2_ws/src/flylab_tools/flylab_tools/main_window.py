@@ -45,10 +45,10 @@ class MainWindow(QMainWindow):
         self.link_procs = {}   # key -> Popen
         self.link_btns = {}    # key -> QPushButton
         self.link_titles = {}  # key -> 按钮标题 (日志用)
-        # 显示帧转发统计 (运行中每 2 秒打一条日志)
-        self._fwd_count = 0
+        # 显示帧转发统计 (运行中每 2 秒打一条日志; 计数在转发线程累计)
         self._fwd_last = time.monotonic()
-        self._last_src, self._last_fps = '', 0.0
+        self._algo_started_at = 0.0   # 算法进程启动时刻 (发现窗口内不告警)
+        self._last_src = ''
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
         self.algo_panel = QGroupBox('算法')
@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
         if self.running_algo is not None and self.running_algo is not algo:
             self._stop_algo()
         self.running_algo = algo
+        self._algo_started_at = time.monotonic()
         self.proc = self._launch_process(algo)
         # 新进程的 DDS 发现需要约 1s, 延迟发 start; 节点对重复 start 无副作用
         delay_ms = 1000 if self.proc is not None else 0
@@ -428,6 +429,7 @@ class MainWindow(QMainWindow):
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
+        self._log_forward_stats()   # 转发断流告警 (2s 一次, 计数在转发线程)
         # 相机机体系姿态 (10Hz): 供 aruco_landing 做云台泛化的方向映射;
         # 非 AirSim 源 get_cam_orientation() 返回 None, 不发布
         now_mono = time.monotonic()
@@ -437,17 +439,17 @@ class MainWindow(QMainWindow):
                 self.camera_tab.grabber.get_cam_orientation())
 
     def _publish_display_frame(self):
-        """取当前显示的帧转发给算法节点 (深度伪彩帧跳过, 无检测意义)。"""
+        """取当前显示的帧交给转发线程 (深度伪彩帧跳过, 无检测意义)。
+        这里只做 O(1) 引用传递: 大图的 tobytes/序列化/publish/等 ACK
+        全部在 DisplayForwarder 线程完成, 不再占用 GUI 线程。"""
         frame, src, fps = self.camera_tab.grabber.get()
         if frame is None:
             return
-        self._last_src, self._last_fps = src, fps
+        self._last_src = src
         arr, is_depth = frame
         if is_depth or arr.ndim != 3:
             return
-        if self.node.publish_frame(arr):
-            self._fwd_count += 1
-        self._log_forward_stats()
+        self.node.set_display_frame(arr)
 
     def _log_forward_stats(self):
         """转发完全断流时告警 (正常运行不刷屏)。"""
@@ -455,11 +457,12 @@ class MainWindow(QMainWindow):
         if now - self._fwd_last < 2.0:
             return
         self._fwd_last = now
-        cnt = self._fwd_count
-        self._fwd_count = 0
+        cnt = self.node.take_fwd_count()
         if self.running_algo is None:
             return
-        if cnt == 0:
+        # 启动后 3s 内是算法节点的 DDS 发现窗口, 订阅者尚未匹配,
+        # 转发计数为 0 是正常现象, 不告警
+        if cnt == 0 and now - self._algo_started_at > 3.0:
             self.node.get_logger().warning(
                 f'画面转发: 近 2 秒 0 帧 (源 {self._last_src or "?"} 无图像?)')
 

@@ -125,14 +125,8 @@ public:
             "近 2 秒未收到任何图像帧! 检查: 1) 地面站是否在运行 2) 画面源"
             "是否有帧 3) 图像话题 %s 是否一致",
             image_topic_.c_str());
-        } else {
-          // 例行统计日志 (排查链路时再打开):
-          // RCLCPP_INFO(
-          //   get_logger(), "检测统计: 近 2 秒收到 %u 帧, 检出 %u 个码",
-          //   rx_since_log_, rx_markers_);
         }
         rx_since_log_ = 0;
-        rx_markers_ = 0;
       });
   }
 
@@ -171,7 +165,6 @@ private:
     }
     const auto results = detector_->detect(bgr);
     rx_since_log_ += 1;
-    rx_markers_ += static_cast<uint32_t>(results.size());
     std_msgs::msg::String out;
     out.data = to_annotations_json(results);
     anno_pub_->publish(out);
@@ -184,7 +177,6 @@ private:
   rclcpp::TimerBase::SharedPtr stats_timer_;
   std::string image_topic_;
   uint32_t rx_since_log_ = 0;    // 距上次统计周期收到的帧数
-  uint32_t rx_markers_ = 0;      // 距上次统计周期检出的码数
   bool enabled_ = false;
   bool got_first_frame_ = false;
 };

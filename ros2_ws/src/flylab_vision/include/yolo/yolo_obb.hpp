@@ -54,7 +54,6 @@ public:
   /// 单帧检测 (BGR), 返回按类旋转 NMS 后的结果; 无目标返回空
   std::vector<YoloObbDetection> detect(const cv::Mat & bgr);
 
-  const YoloObbConfig & config() const {return config_;}
 
   /// CUDA EP 是否真正生效 (use_cuda=true 但注册失败时为 false, 已回退 CPU)
   bool cuda_active() const;

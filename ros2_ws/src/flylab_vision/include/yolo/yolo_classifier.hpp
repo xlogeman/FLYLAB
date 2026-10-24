@@ -51,14 +51,11 @@ public:
   /// 单帧分类 (BGR), 返回按置信度降序的 top-k 结果
   std::vector<ClsPrediction> classify(const cv::Mat & bgr);
 
-  const ClsConfig & config() const {return config_;}
 
   /// 类别总数
   int num_classes() const;
   /// 实际使用的输入边长 (config.input_size=0 时为模型固定尺寸)
   int input_size() const;
-  /// 实际使用的类别名表 (下标即类别 id)
-  const std::vector<std::string> & labels() const;
 
   /// CUDA EP 是否真正生效 (use_cuda=true 但注册失败时为 false, 已回退 CPU)
   bool cuda_active() const;

@@ -63,6 +63,7 @@ def main(args=None):
         ret = 0
     finally:
         win.shutdown()          # 停抓取线程/释放摄像头, 避免 C++ 栈被硬杀
+        node.shutdown()         # 停显示帧转发线程 (先于 rclpy.shutdown)
         node.destroy_node()
         try:
             rclpy.shutdown()

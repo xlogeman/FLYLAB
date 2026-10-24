@@ -31,13 +31,6 @@ namespace flylab_vision
 namespace
 {
 
-/// COCO 17 人体关键点
-const std::vector<std::string> kCocoKptNames = {
-  "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-  "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-  "left_wrist", "right_wrist", "left_hip", "right_hip",
-  "left_knee", "right_knee", "left_ankle", "right_ankle"};
-
 /// COCO 骨架连接 (Ultralytics 官方 skeleton)
 const std::vector<std::pair<int, int>> kCocoSkeleton = {
   {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12},
@@ -141,16 +134,6 @@ cv::Scalar pose_class_color(int class_id)
 
 }  // namespace
 
-const std::vector<std::string> & coco_kpt_names()
-{
-  return kCocoKptNames;
-}
-
-const std::vector<std::pair<int, int>> & coco_skeleton()
-{
-  return kCocoSkeleton;
-}
-
 /// pimpl: onnxruntime 对象全部藏在实现里, 头文件不暴露其依赖
 struct YoloPoseDetector::Impl
 {
@@ -194,11 +177,11 @@ YoloPoseDetector::YoloPoseDetector(const YoloPoseConfig & config)
   // 空跑一次确认模型可用并记录输出布局 (加载失败在这里抛, 不拖到首帧)
   cv::Mat probe(
     config_.input_size, config_.input_size, CV_8UC3, cv::Scalar(114, 114, 114));
-  std::vector<float> blob = make_blob(probe);
+  cv::Mat blob = make_blob(probe);
   const std::array<int64_t, 4> in_shape{
     1, 3, config_.input_size, config_.input_size};
   auto in = Ort::Value::CreateTensor<float>(
-    impl_->mem, blob.data(), blob.size(), in_shape.data(), in_shape.size());
+    impl_->mem, blob.ptr<float>(), blob.total(), in_shape.data(), in_shape.size());
   const char * in_names[] = {impl_->input_name.c_str()};
   const char * out_names[] = {impl_->output_name.c_str()};
   auto outs = impl_->session->Run(

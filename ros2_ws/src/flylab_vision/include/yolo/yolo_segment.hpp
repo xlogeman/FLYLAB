@@ -54,7 +54,6 @@ public:
   /// 单帧分割 (BGR), 返回按类 NMS 后的结果; 无目标返回空
   std::vector<YoloSegmentDetection> segment(const cv::Mat & bgr);
 
-  const YoloSegmentConfig & config() const {return config_;}
 
   /// CUDA EP 是否真正生效 (use_cuda=true 但注册失败时为 false, 已回退 CPU)
   bool cuda_active() const;

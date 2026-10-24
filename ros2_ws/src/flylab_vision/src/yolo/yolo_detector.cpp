@@ -54,19 +54,23 @@ const std::vector<std::string> kCocoNames = {
   "hair drier", "toothbrush"};
 
 /// 等比缩放 + 灰边填充到 size x size, 返回画布并带回缩放比 / pad
-cv::Mat letterbox(
-  const cv::Mat & bgr, int size, float & scale, int & pad_x, int & pad_y)
+/// letterbox 的复用缓冲版: 画布由调用方持有 (首次分配, 之后 setTo+ROI 写入,
+/// 免每帧 ~0.9MB 堆分配)
+void letterbox_into(
+  const cv::Mat & bgr, cv::Mat & canvas, int size,
+  float & scale, int & pad_x, int & pad_y)
 {
   const float r = std::min(size / (float)bgr.rows, size / (float)bgr.cols);
   const int nh = std::round(bgr.rows * r), nw = std::round(bgr.cols * r);
-  cv::Mat resized;
-  cv::resize(bgr, resized, cv::Size(nw, nh), 0, 0, cv::INTER_LINEAR);
   pad_x = (size - nw) / 2;
   pad_y = (size - nh) / 2;
-  cv::Mat canvas(size, size, CV_8UC3, cv::Scalar(114, 114, 114));
-  resized.copyTo(canvas(cv::Rect(pad_x, pad_y, nw, nh)));
   scale = r;
-  return canvas;
+  if (canvas.size() != cv::Size(size, size) || canvas.type() != CV_8UC3) {
+    canvas.create(size, size, CV_8UC3);
+  }
+  canvas.setTo(cv::Scalar(114, 114, 114));
+  cv::resize(bgr, canvas(cv::Rect(pad_x, pad_y, nw, nh)),
+             cv::Size(nw, nh), 0, 0, cv::INTER_LINEAR);
 }
 
 std::string num(double v, int prec = 1)
@@ -77,12 +81,15 @@ std::string num(double v, int prec = 1)
 }
 
 /// letterbox 画布 -> NCHW float blob (RGB, /255)。
-/// 行级单次遍历手写平面化 (不依赖 dnn 模块, 无中间分配)
-cv::Mat make_blob(const cv::Mat & canvas)
+/// 行级单次遍历手写平面化 (不依赖 dnn 模块, 无中间分配);
+/// 复用缓冲版: blob 由调用方持有 (640 下 ~4.9MB, 首次分配后每帧只重写)
+void make_blob_into(const cv::Mat & canvas, cv::Mat & blob)
 {
   const int size = canvas.rows;
   const int plane = size * size;
-  cv::Mat blob(1, 3 * plane, CV_32F);
+  if (blob.total() != static_cast<size_t>(3) * plane || blob.type() != CV_32F) {
+    blob.create(1, 3 * plane, CV_32F);
+  }
   float * base = blob.ptr<float>();
   for (int y = 0; y < size; ++y) {
     const uchar * row = canvas.ptr<uchar>(y);
@@ -95,7 +102,6 @@ cv::Mat make_blob(const cv::Mat & canvas)
       db[x] = row[3 * x + 0] * (1.f / 255.f);   // B
     }
   }
-  return blob;
 }
 
 /// 输出张量形状归一化: 去掉首尾的 1 维。
@@ -155,6 +161,8 @@ struct YoloDetector::Impl
       OrtArenaAllocator, OrtMemTypeDefault)};
   std::string input_name, output_name;
   Layout layout;          // 首次空跑时确定, 之后复用
+  cv::Mat canvas;         // letterbox 画布 (detect 每帧复用, 免重复分配)
+  cv::Mat blob;           // NCHW float 输入 (640 下 ~4.9MB, 同上)
   bool cuda_ok = false;
   std::string cuda_err;   // CUDA EP 注册失败原因 (成功则为空)
 };
@@ -190,11 +198,12 @@ YoloDetector::YoloDetector(const YoloConfig & config)
   // 空跑一次确认模型可用并记录输出布局 (加载失败在这里抛, 不拖到首帧)
   cv::Mat probe(
     config_.input_size, config_.input_size, CV_8UC3, cv::Scalar(114, 114, 114));
-  std::vector<float> blob = make_blob(probe);
+  make_blob_into(probe, impl_->blob);
   const std::array<int64_t, 4> in_shape{
     1, 3, config_.input_size, config_.input_size};
   auto in = Ort::Value::CreateTensor<float>(
-    impl_->mem, blob.data(), blob.size(), in_shape.data(), in_shape.size());
+    impl_->mem, impl_->blob.ptr<float>(), impl_->blob.total(),
+    in_shape.data(), in_shape.size());
   const char * in_names[] = {impl_->input_name.c_str()};
   const char * out_names[] = {impl_->output_name.c_str()};
   auto outs = impl_->session->Run(
@@ -225,13 +234,12 @@ std::vector<YoloDetection> YoloDetector::detect(const cv::Mat & bgr)
   }
   float scale = 1.f;
   int pad_x = 0, pad_y = 0;
-  const cv::Mat canvas = letterbox(bgr, config_.input_size, scale, pad_x, pad_y);
-  cv::Mat blob = make_blob(canvas);
+  letterbox_into(bgr, impl_->canvas, config_.input_size, scale, pad_x, pad_y);
+  make_blob_into(impl_->canvas, impl_->blob);
   const std::array<int64_t, 4> in_shape{
     1, 3, config_.input_size, config_.input_size};
   auto in = Ort::Value::CreateTensor<float>(
-    impl_->mem, blob.ptr<float>(),
-    static_cast<size_t>(3) * config_.input_size * config_.input_size,
+    impl_->mem, impl_->blob.ptr<float>(), impl_->blob.total(),
     in_shape.data(), in_shape.size());
   const char * in_names[] = {impl_->input_name.c_str()};
   const char * out_names[] = {impl_->output_name.c_str()};

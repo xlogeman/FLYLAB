@@ -38,9 +38,6 @@
 namespace flylab_vision
 {
 
-/// 兼容旧名: 未指定链路时默认 uXRCE 实现
-using Px4OffboardClient = Px4OffboardClientUxrce;
-
 }  // namespace flylab_vision
 
 #endif  // PX4_OFFBOARD_CLIENT_HPP_

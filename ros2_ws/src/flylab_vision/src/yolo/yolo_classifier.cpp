@@ -302,11 +302,6 @@ int YoloClassifier::input_size() const
   return impl_->in_size;
 }
 
-const std::vector<std::string> & YoloClassifier::labels() const
-{
-  return impl_->labels;
-}
-
 std::vector<ClsPrediction> YoloClassifier::classify(const cv::Mat & bgr)
 {
   if (bgr.empty()) {

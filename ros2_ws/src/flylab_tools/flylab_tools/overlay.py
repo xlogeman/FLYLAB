@@ -130,14 +130,3 @@ def _alpha(a):
         return min(max(float(a), 0.0), 1.0)
     except (TypeError, ValueError):
         return 0.45
-
-
-def parse_annotations(json_str):
-    """解析模型节点发来的 JSON 标注列表，非法项跳过。"""
-    try:
-        items = json.loads(json_str)
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(items, list):
-        return []
-    return [a for a in (normalize(it) for it in items) if a is not None]

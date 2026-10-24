@@ -10,7 +10,6 @@
 ///     插件内部负责 ENU->NED 转换; 不发额外心跳——持续 setpoint 流即心跳)
 ///   - 模式切换: /mavros/set_mode 服务 (OFFBOARD / AUTO.LAND / AUTO.LOITER)
 
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>

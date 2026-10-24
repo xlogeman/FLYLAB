@@ -241,9 +241,23 @@ class VideoLabel(QLabel):
                 painter.setPen(QPen(c, lw_box))
                 painter.drawRect(r)
                 if label:
+                    # 类别名+置信度放框内左上角 (半透明黑底, 任何画面可读);
+                    # 框太矮放不下文字时贴底部内缘, 横向越界时向左收
+                    fm = painter.fontMetrics()
+                    tw = fm.horizontalAdvance(label)
+                    pad = 2
+                    tx = int(r.left()) + pad
+                    ty = int(r.top()) + fm.ascent() + pad
+                    if bh * scale < fm.height() + 2 * pad:
+                        ty = int(r.bottom()) - pad
+                    if tx + tw + 2 * pad > scaled.width():
+                        tx = scaled.width() - tw - 2 * pad
+                    painter.fillRect(
+                        QRect(tx - pad, ty - fm.ascent() - pad,
+                              tw + 2 * pad, fm.height() + 2 * pad),
+                        QColor(0, 0, 0, 150))
                     painter.setPen(QPen(c))
-                    painter.drawText(
-                        int(r.left()), int(r.top()) - 4, label)
+                    painter.drawText(tx, ty, label)
             elif a['type'] == 'point':
                 px, py = a['point']
                 painter.setPen(QPen(c, lw))

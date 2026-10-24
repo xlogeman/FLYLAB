@@ -203,11 +203,6 @@ std::vector<Detection> ArucoDetector::detect(const cv::Mat & bgr)
       }
     }
 
-    // 图像 2D 方向角: 顶边中点相对中心
-    const cv::Point2f top_mid = (d.corners[0] + d.corners[1]) / 2.0f;
-    const cv::Point2f dir = top_mid - d.center_px;
-    d.yaw_img_deg = std::atan2(-dir.y, dir.x) * 180.0 / CV_PI;
-
     results.push_back(d);
   }
   return results;
