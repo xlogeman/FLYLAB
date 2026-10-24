@@ -218,6 +218,7 @@ class Grabber(threading.Thread):
         self.lock = threading.Lock()
         self.camera = DEFAULT_CAMERAS[0]
         self.frame = None      # (np.ndarray, is_depth)
+        self._gen = 0          # 切源代数: 阻塞读取期间切源, 旧源的帧作废
         self.fps = 0.0
         self.n, self.t_prev = 0, time.time()
         self.cap = None        # 本机摄像头/视频文件的 VideoCapture (仅抓取线程访问)
@@ -238,13 +239,19 @@ class Grabber(threading.Thread):
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
         self._gimbal_dirty = False
+        # 会话内限位拒绝标记 (方向 -> bool): 仅当按键被限位卡住时标红,
+        # 该方向恢复可动即清; 不持久化, 地面站重启后一律不红
+        self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
+                                'pitch+': False, 'pitch-': False}
         self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
         self.running = True
+        self._airsim_ok = False     # AirSim RPC 是否已连通 (云台可用性依据)
         self._conn_last_log = 0.0   # AirSim 未连接时的日志节流 (每 10 秒一条)
 
     def set_camera(self, name):
         with self.lock:
             self.camera = name
+            self._gen += 1      # 旧源正在读取中的帧提交时会被本代数拒绝
             self.frame = None   # 丢弃旧相机画面，避免切换时闪现错图
 
     def stop(self):
@@ -285,12 +292,31 @@ class Grabber(threading.Thread):
     def gimbal_step(self, dyaw, dpitch):
         """步进云台角度 (yaw 正=向右, pitch 正=向上), 同步作用到所有 AirSim
         相机 (left/front/right/depth 一起转)。限位见 config.GIMBAL_*_LIMIT_DEG,
-        到限位后不再动作 (不会回绕到机尾)。本机/视频文件源为空操作。"""
+        到限位后不再动作 (不会回绕到机尾), 被卡住的方向记入 _gimbal_blocked
+        供界面标红。本机/视频文件源为空操作。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
             yaw, pitch = self._gimbal
-            self._gimbal = _clamp_gimbal(yaw + dyaw, pitch + dpitch)
+            nyaw, npitch = _clamp_gimbal(yaw + dyaw, pitch + dpitch)
+            # 该方向按键被限位拒绝 => 标红; 该方向有实际动作 => 清红
+            if dyaw > 0:
+                self._gimbal_blocked['yaw+'] = nyaw == yaw
+                if nyaw != yaw:
+                    self._gimbal_blocked['yaw-'] = False
+            elif dyaw < 0:
+                self._gimbal_blocked['yaw-'] = nyaw == yaw
+                if nyaw != yaw:
+                    self._gimbal_blocked['yaw+'] = False
+            if dpitch > 0:
+                self._gimbal_blocked['pitch+'] = npitch == pitch
+                if npitch != pitch:
+                    self._gimbal_blocked['pitch-'] = False
+            elif dpitch < 0:
+                self._gimbal_blocked['pitch-'] = npitch == pitch
+                if npitch != pitch:
+                    self._gimbal_blocked['pitch+'] = False
+            self._gimbal = (nyaw, npitch)
             self._gimbal_anim = None   # 手动操作打断回中动画
             self._gimbal_dirty = True
             _save_gimbal_state(self._gimbal, self._gimbal_mount,
@@ -300,11 +326,17 @@ class Grabber(threading.Thread):
         """云台回中: 启动平滑回中动画 (非瞬跳), 角速度见
         config.GIMBAL_SLEW_RATE_DEG_S; 按任意方向键可打断。"""
         with self.lock:
+            self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 self._gimbal = (0.0, 0.0)
                 return
             self._gimbal_anim = (0.0, 0.0)
             self._anim_t_prev = time.monotonic()
+
+    def airsim_connected(self):
+        """AirSim RPC 是否已连通 (断线/未 play 时为 False)。"""
+        with self.lock:
+            return self._airsim_ok
 
     def get_gimbal(self):
         """当前云台角度 (yaw, pitch)；非 AirSim 源返回 None。"""
@@ -312,6 +344,12 @@ class Grabber(threading.Thread):
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return None
             return self._gimbal
+
+    def get_gimbal_blocked(self):
+        """会话内被限位卡住的方向 (按键不再动作), 界面标红用;
+        非 AirSim 源恒为全 False。"""
+        with self.lock:
+            return dict(self._gimbal_blocked)
 
     def get_cam_orientation(self):
         """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
@@ -417,6 +455,8 @@ class Grabber(threading.Thread):
                     self._gimbal = (0.0, 0.0)
                     self._gimbal_mount = {}
                     self._gimbal_dirty = True
+                    self._gimbal_blocked = {k: False
+                                            for k in self._gimbal_blocked}
                 else:
                     self._gimbal_dirty = False   # 相机未动, 记忆仍然有效
         except Exception as e:
@@ -478,9 +518,13 @@ class Grabber(threading.Thread):
         finally:
             self._gimbal_dirty = False
 
-    def _commit(self, arr, is_depth):
-        """写入最新帧并统计 fps。"""
+    def _commit(self, arr, is_depth, gen):
+        """写入最新帧并统计 fps。gen 与当前切源代数不符 (读取阻塞期间
+        发生了切源) 时丢弃 —— 否则旧源最后一帧会在切源后回填, 界面清屏
+        被覆盖, 表现为"卡在旧画面, 要再切一次才出现等待提示"。"""
         with self.lock:
+            if gen != self._gen:
+                return
             self.frame = (arr, is_depth)
         self.n += 1
         now = time.time()
@@ -574,16 +618,17 @@ class Grabber(threading.Thread):
                 t_start = time.monotonic()
                 with self.lock:
                     cam = self.camera
+                    gen = self._gen   # 本轮帧的切源代数, 提交时校验
                 if cam.startswith(LOCAL_PREFIX):    # 本机摄像头: 不经 AirSim
                     arr = self._read_local(cam[len(LOCAL_PREFIX):])
                     if arr is not None:
-                        self._commit(arr, False)
+                        self._commit(arr, False, gen)
                     time.sleep(max(0.0, 1.0 / LOCAL_HZ - (time.monotonic() - t_start)))
                     continue
                 if cam.startswith(FILE_PREFIX):     # 视频文件: 按文件帧率循环播放
                     arr = self._read_file(cam[len(FILE_PREFIX):])
                     if arr is not None:
-                        self._commit(arr, False)
+                        self._commit(arr, False, gen)
                     time.sleep(max(0.0, self.file_interval - (time.monotonic() - t_start)))
                     continue
                 if self.cap_dev is not None:        # 切回 AirSim 相机时释放本机设备
@@ -604,9 +649,13 @@ class Grabber(threading.Thread):
                         if time.monotonic() - self._conn_last_log > 10.0:
                             self.log(f'等待 AirSim {self.host}:{self.port}: {e}')
                             self._conn_last_log = time.monotonic()
+                        with self.lock:
+                            self._airsim_ok = False
                         time.sleep(1.0)
                         continue
                     client = airsim.VehicleClient(ip=self.host, port=self.port)
+                    with self.lock:
+                        self._airsim_ok = True
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
                     # 判断 UE 是否重新 play: play 过则回中, 没过则沿用记忆
                     self._restore_or_reset(client)
@@ -647,7 +696,7 @@ class Grabber(threading.Thread):
                     else:          # BGR
                         arr = np.ascontiguousarray(_to_np(
                             r.image_data_uint8, np.uint8).reshape(r.height, r.width, 3))
-                    self._commit(arr, is_depth)
+                    self._commit(arr, is_depth, gen)
                 else:
                     time.sleep(0.05)
                 # 自适应节流: 扣除 RPC 往返耗时后再补足剩余间隔。

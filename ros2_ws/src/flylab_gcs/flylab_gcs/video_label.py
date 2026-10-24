@@ -54,6 +54,23 @@ class VideoLabel(QLabel):
         self._img_size = (w, h)
         self._redraw()
 
+    def set_waiting(self, text='等待图像...'):
+        """无信号占位: 清掉旧画面/标注/HUD, 等待文字显示在画面中央
+        (QLabel 文字与 pixmap 互斥, setText 即清掉画面)。
+        新帧到来后 show_frame 自动以画面取代文字。"""
+        self._pixmap = None
+        self._img_size = (0, 0)
+        self._annotations = []
+        self._hud = None
+        self._hud_algo = None
+        self.setText(text)
+
+    def clear_frame(self):
+        """清屏: 丢弃当前画面回到占位文字。切换输入源时调用 ——
+        新源暂时无帧时不残留上一源的定格画面 (看起来像图传卡死),
+        旧源标注/HUD 一并清除, 避免叠加物串场。"""
+        self.set_waiting()
+
     # ---------- 框选 ----------
 
     def set_select_enabled(self, on):

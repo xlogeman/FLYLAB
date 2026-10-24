@@ -50,8 +50,7 @@ class CameraViewWidget(QWidget):
 
         # 输入源下拉框 (展开时重扫本机摄像头, 支持启动后插入设备)
         self._scanning = False
-        self.combo = _SourceCombo()
-        self.combo.setEditable(True)
+        self.combo = _SourceCombo()          # 只读下拉框, 不允许键盘输入
         self.combo.addItems(
             list(DEFAULT_CAMERAS)
             + [f'{LOCAL_PREFIX}{d}' for d in list_local_cameras()]
@@ -59,7 +58,6 @@ class CameraViewWidget(QWidget):
         self.combo.popup_shown.connect(self._refresh_local_cameras)
         self.combo.cams_found.connect(self._add_local_cameras)
         self.combo.activated.connect(self._on_source_changed)
-        self.combo.lineEdit().returnPressed.connect(self._on_source_changed)
 
         self.video = VideoLabel()
         self.status = QLabel('未连接')
@@ -190,16 +188,12 @@ class CameraViewWidget(QWidget):
         g.addWidget(dir_btn('pitch-', '↓', f'俯仰下 {step}°', 0, -step), 3, 1)
         g.addWidget(self.gimbal_angle, 4, 0, 1, 3)
 
-    def _update_gimbal_limit(self, yaw, pitch):
-        """到限位提示: 该方向不能再转的方向键标红 (不禁用, 保持按住回转的
-        手感); 样式只在变化时更新。"""
-        eps = 1e-3
-        blocked = {
-            'yaw+': yaw >= config.GIMBAL_YAW_LIMIT_DEG - eps,
-            'yaw-': yaw <= -config.GIMBAL_YAW_LIMIT_DEG + eps,
-            'pitch+': pitch >= config.GIMBAL_PITCH_MAX_DEG - eps,
-            'pitch-': pitch <= config.GIMBAL_PITCH_MIN_DEG + eps,
-        }
+    def _update_gimbal_limit(self):
+        """到限位提示: 按键被限位拒绝 (再按不再动作) 的方向键标红, 该方向
+        恢复可动即清红 (不禁用按钮, 保持按住回转的手感)。拒绝状态由
+        grabber 在会话内判定, 打开地面站时一律不红, 不沿用上次会话停在哪;
+        样式只在变化时更新。"""
+        blocked = self.grabber.get_gimbal_blocked()
         for key, btn in self._gimbal_btns.items():
             style = 'color: #d9534f; font-weight: bold;' if blocked[key] else ''
             if self._btn_styles.get(key) != style:
@@ -228,6 +222,13 @@ class CameraViewWidget(QWidget):
             if self.combo.findText(item) < 0:
                 self.combo.addItem(item)
 
+    def _switch_source(self, name):
+        """切换抓取源并立即清屏: 新源暂时无帧 (设备不存在/UE 相机未配置/
+        文件打不开等) 时, 界面回到"等待图像..."占位, 而不是残留上一源的
+        定格画面 (看起来像图传卡死)。"""
+        self.video.clear_frame()
+        self.grabber.set_camera(name)
+
     def _on_source_changed(self):
         text = self.combo.currentText().strip()
         if not text:
@@ -243,13 +244,13 @@ class CameraViewWidget(QWidget):
             if self.combo.findText(label) < 0:
                 self.combo.addItem(label)
             self.combo.setCurrentText(label)
-            self.grabber.set_camera(f'{FILE_PREFIX}{path}')
+            self._switch_source(f'{FILE_PREFIX}{path}')
             return
         if text.startswith(FILE_PREFIX):     # 之前加过的视频文件条目
             path = self._file_map.get(text, text[len(FILE_PREFIX):])
-            self.grabber.set_camera(f'{FILE_PREFIX}{path}')
+            self._switch_source(f'{FILE_PREFIX}{path}')
             return
-        self.grabber.set_camera(text)        # AirSim 相机 / 本机摄像头
+        self._switch_source(text)            # AirSim 相机 / 本机摄像头
 
     def _on_play_clicked(self):
         paused = not self.grabber.file_paused
@@ -274,15 +275,18 @@ class CameraViewWidget(QWidget):
     def _refresh(self):
         self._refresh_playback()
         gim = self.grabber.get_gimbal()
-        self.gimbal.setEnabled(gim is not None)   # 仅 AirSim 源可用
+        # 仅 AirSim 源且 RPC 已连通可用: 打开地面站/UE 未 play 时默认置灰
+        self.gimbal.setEnabled(
+            gim is not None and self.grabber.airsim_connected())
         if gim is not None:
             yaw, pitch = gim
             self.gimbal_angle.setText(f'航向 {yaw:+.0f}° 俯仰 {pitch:+.0f}°')
-            self._update_gimbal_limit(yaw, pitch)
+            self._update_gimbal_limit()
         frame, src, fps = self.grabber.get()
         if frame is None:
-            self.status.setText(f'[{src}] 等待图像...')
-            self.video.set_hud(None)
+            # 无信号提示直接写在画面中央 (带源名), 右栏状态条不再重复
+            self.video.set_waiting(f'[{src}] 等待图像...')
+            self.status.setText('')
             return
         arr, is_depth = frame
         if is_depth:
