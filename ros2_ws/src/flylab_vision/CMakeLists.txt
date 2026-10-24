@@ -86,6 +86,11 @@ target_link_libraries(aruco_landing_node aruco_detector vision_common)
 ament_target_dependencies(
   aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 
+# ---------- ROS2 节点: 手动遥控 (方向键 → offboard 速度+偏航角速率) ----------
+add_executable(teleop_node src/teleop/teleop_node.cpp)
+target_link_libraries(teleop_node vision_common)
+ament_target_dependencies(teleop_node rclcpp std_msgs px4_msgs geometry_msgs mavros_msgs)
+
 # 模型权重装到 share/<pkg>/models/, 各节点经 ament_index 解析默认路径。
 # 只装 .onnx 推理模型: .pt 是训练权重 (~200MB), 运行时无用, 不随包拷贝
 install(DIRECTORY models
@@ -98,7 +103,7 @@ install(DIRECTORY ${ORT_ROOT}/lib/
 
 install(TARGETS vision_common
   aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic
-  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node aruco_landing_node
+  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

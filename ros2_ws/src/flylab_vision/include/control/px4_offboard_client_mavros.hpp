@@ -115,6 +115,30 @@ public:
     setpoint_pub_->publish(sp);
   }
 
+  /// 机体系 FRD 速度 + 偏航角速率 (NED: 正=右转)。yaw 位置设定屏蔽,
+  /// 只下发 yaw_rate。注意 mavros 的 setpoint_raw 插件把输入当 ENU 语义,
+  /// ENU→NED 转换时 z 轴翻转会取反 yaw_rate (setpoint_raw.cpp local_cb),
+  /// 故这里发负值 → PX4 收到 NED 正=右转
+  void sendVelocityFRDYawRate(
+    double fwd, double right, double down, double yaw_rate) override
+  {
+    const double bx = fwd;
+    const double by = -right;
+    const double bz = -down;
+    const double yaw = currentYaw();
+    const double c = std::cos(yaw), s = std::sin(yaw);
+
+    mavros_msgs::msg::PositionTarget sp;
+    sp.header.stamp = node_.now();
+    sp.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+    sp.type_mask = kIgnorePosAcc | mavros_msgs::msg::PositionTarget::IGNORE_YAW;
+    sp.velocity.x = c * bx - s * by;
+    sp.velocity.y = s * bx + c * by;
+    sp.velocity.z = bz;
+    sp.yaw_rate = -yaw_rate;
+    setpoint_pub_->publish(sp);
+  }
+
   /// 原地悬停: 定点 (位置+yaw, 与 tracker_mavros 悬停保护一致); 无定位时零速度兜底
   void sendHover() override
   {

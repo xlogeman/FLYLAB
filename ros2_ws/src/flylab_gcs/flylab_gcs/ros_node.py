@@ -8,7 +8,7 @@ import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import Quaternion, Twist
 from rclpy.node import Node
 from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy)
 from sensor_msgs.msg import Image
@@ -20,8 +20,13 @@ from .overlay import parse_message
 
 class TeeLogger:
     """rclpy Logger 分流器: 终端日志照常输出, 同时把 (级别, 文本) 回调给
-    界面日志框。回调可能来自任意线程 (抓取线程等), 线程安全由回调方保证
-    (界面侧经 Qt 信号队列投递到 GUI 线程)。"""
+    界面日志框。回调可能来自任意线程 (抓取线程/飞控线程), 线程安全由回调
+    方保证 (界面侧经 Qt 信号队列投递到 GUI 线程)。
+
+    注意: rclpy 的 RcutilsLogger 按"调用点代码行"记忆 severity —— 同一行
+    代码先后发不同级别会抛 "Logger severity cannot be changed between
+    calls"。因此每个级别必须走独立调用点 (各占一行, 不用 getattr 转发)。
+    """
 
     def __init__(self, ros_logger):
         self._ros = ros_logger
@@ -31,18 +36,46 @@ class TeeLogger:
         self._sink = sink
 
     def _tee(self, level, msg, *args, **kwargs):
-        getattr(self._ros, level)(msg, *args, **kwargs)
         if self._sink is not None:
             try:
                 self._sink(level.upper(), str(msg))
             except Exception:
                 pass    # 界面日志框异常不拖累 ROS 日志与主流程
 
-    def debug(self, msg, *a, **kw): self._tee('debug', msg, *a, **kw)
-    def info(self, msg, *a, **kw): self._tee('info', msg, *a, **kw)
-    def warning(self, msg, *a, **kw): self._tee('warning', msg, *a, **kw)
-    def error(self, msg, *a, **kw): self._tee('error', msg, *a, **kw)
-    def fatal(self, msg, *a, **kw): self._tee('fatal', msg, *a, **kw)
+    def debug(self, msg, *a, **kw):
+        try:
+            return self._ros.debug(msg, *a, **kw)
+        except Exception:
+            pass    # 日志异常永不炸调用方线程 (飞控/抓取线程曾因此崩溃)
+        self._tee('DEBUG', msg)
+
+    def info(self, msg, *a, **kw):
+        try:
+            return self._ros.info(msg, *a, **kw)
+        except Exception:
+            pass
+        self._tee('INFO', msg)
+
+    def warning(self, msg, *a, **kw):
+        try:
+            return self._ros.warning(msg, *a, **kw)
+        except Exception:
+            pass
+        self._tee('WARNING', msg)
+
+    def error(self, msg, *a, **kw):
+        try:
+            return self._ros.error(msg, *a, **kw)
+        except Exception:
+            pass
+        self._tee('ERROR', msg)
+
+    def fatal(self, msg, *a, **kw):
+        try:
+            return self._ros.fatal(msg, *a, **kw)
+        except Exception:
+            pass
+        self._tee('FATAL', msg)
 
 
 class DisplayForwarder(threading.Thread):
@@ -167,6 +200,14 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
 
+        # 手动遥控: 归一化遥控量发布 (拨杆/摇杆, -1..1) + 遥控节点状态回传
+        self.teleop_cmd_pub = self.create_publisher(
+            Twist, config.TELEOP_CMD_TOPIC, 10)
+        self._teleop_status = ''
+        self._teleop_status_seq = 0
+        self.create_subscription(
+            String, config.TELEOP_STATUS_TOPIC, self._teleop_status_cb, 10)
+
     def get_logger(self):
         """覆盖 Node.get_logger: 返回分流日志器 (终端照常 + 界面日志框)。"""
         return self._tee_logger
@@ -179,6 +220,24 @@ class GroundStationNode(Node):
     def _landing_status_cb(self, msg):
         self._landing_status = msg.data.strip()
         self._landing_status_seq += 1
+
+    def _teleop_status_cb(self, msg):
+        self._teleop_status = msg.data.strip()
+        self._teleop_status_seq += 1
+
+    def publish_teleop_twist(self, fwd, right, up, yaw_left):
+        """发布归一化遥控量 (-1..1): fwd 前+ / right 右+ / up 升+ / yaw_left 左转+。
+        teleop_node 侧按各自速度上限换算成机体系速度 + 偏航角速率。"""
+        t = Twist()
+        t.linear.x = float(fwd)
+        t.linear.y = float(right)
+        t.linear.z = float(up)
+        t.angular.z = float(yaw_left)
+        self.teleop_cmd_pub.publish(t)
+
+    def get_teleop_status(self):
+        """返回 (最新遥控状态, 事件序号); 序号变化 = 有新状态事件。"""
+        return self._teleop_status, self._teleop_status_seq
 
     def _anno_cb(self, msg):
         parsed = parse_message(msg.data)

@@ -86,6 +86,16 @@ PX4_MODELS = [
     {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
 ]
 
+# ---------- 手动遥控 (拨杆/摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
+# 界面发归一化遥控量 (-1..1, geometry_msgs/Twist): linear.x=前后 linear.y=左右
+# linear.z=升降(升+) angular.z=偏航(左转+); teleop_node 按速度上限换算成
+# 机体系 FRD 速度 + NED 偏航角速率
+TELEOP_CMD_TOPIC = '/flylab/teleop_cmd'
+TELEOP_STATUS_TOPIC = '/flylab/teleop_status'
+TELEOP_START_CMD = 'teleop_start'
+TELEOP_STOP_CMD = 'teleop_stop'
+TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node']
+
 # ---------- 通信链路 (地面站一键拉起, 省开终端) ----------
 # uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888。供 tracker:=uxrce / aruco_landing
 # (link:=uxrce) 链路使用

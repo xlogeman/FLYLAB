@@ -195,6 +195,25 @@ public:
     trajectory_setpoint_pub_->publish(sp);
   }
 
+  /// 机体系 FRD 速度 + 偏航角速率 (NED: 正=右转)。yaw 位置置 NaN, 只用 yawspeed
+  void sendVelocityFRDYawRate(
+    double fwd, double right, double down, double yaw_rate) override
+  {
+    heartbeatVelocity();
+    const float heading = position_.heading_good_for_control ? position_.heading : 0.0f;
+    const float c = std::cos(heading), s = std::sin(heading);
+    px4_msgs::msg::TrajectorySetpoint sp;
+    sp.position = {NAN, NAN, NAN};
+    sp.velocity = {c * static_cast<float>(fwd) - s * static_cast<float>(right),
+      s * static_cast<float>(fwd) + c * static_cast<float>(right),
+      static_cast<float>(down)};
+    sp.acceleration = {NAN, NAN, NAN};
+    sp.yaw = NAN;
+    sp.yawspeed = static_cast<float>(yaw_rate);
+    sp.timestamp = timestamp_now();
+    trajectory_setpoint_pub_->publish(sp);
+  }
+
   /// 原地悬停 (零速度 setpoint)
   void sendHover() override {sendVelocityFRD(0.0, 0.0, 0.0);}
 

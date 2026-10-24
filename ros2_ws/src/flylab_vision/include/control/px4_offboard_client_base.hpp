@@ -65,6 +65,10 @@ public:
   /// 机体系 FRD 速度 setpoint (x前 y右 z下, "下"为正) 并同时发 offboard 心跳。
   /// offboard 模式下必须持续调用 (断流会触发 offboard failsafe)
   virtual void sendVelocityFRD(double fwd, double right, double down) = 0;
+  /// 同上, 附加偏航角速率 (NED 语义: 正=顺时针/右转, 负=左转)。
+  /// 实现需屏蔽 yaw 位置设定, 只用角速率 (手动遥控用)
+  virtual void sendVelocityFRDYawRate(
+    double fwd, double right, double down, double yaw_rate) = 0;
   /// 原地悬停
   virtual void sendHover() = 0;
   virtual void requestOffboard() = 0;

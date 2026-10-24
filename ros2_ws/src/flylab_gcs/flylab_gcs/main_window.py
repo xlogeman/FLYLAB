@@ -19,8 +19,8 @@ import os
 import time
 
 import rclpy
-from PyQt5.QtCore import QTimer, pyqtSignal
-from PyQt5.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QMainWindow,
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QMainWindow,
                            QMenu, QPushButton, QToolBar, QToolButton,
                            QVBoxLayout)
 
@@ -28,6 +28,7 @@ from . import config
 from .camera_widget import CameraViewWidget
 from .log_panel import LogPanel
 from .processes import ManagedProcess
+from .teleop_pad import VirtualJoystick
 from .vehicle_control import VehicleController
 
 
@@ -60,14 +61,18 @@ class MainWindow(QMainWindow):
         self.link_procs = {}       # key -> ManagedProcess (有存活进程 = 链路开启中)
         self.algo_proc = ManagedProcess(self.log, '算法节点')
         self.land_proc = ManagedProcess(self.log, '降落节点')
+        self.teleop_proc = ManagedProcess(self.log, '遥控节点')
 
         # 飞行控制: 独立 RPC 会话 (与相机抓取互不拖累)
         self.veh_ctrl = VehicleController(self.log, host, config.AIRSIM_RPC_PORT)
         self.veh_ctrl.start()
 
-        # 算法/降落 UI 状态
+        # 算法/降落/遥控 UI 状态
         self.running_algo = None
         self._last_landing_seq = 0     # 已处理的降落状态事件序号
+        self._last_teleop_seq = 0      # 已处理的遥控状态事件序号
+        # 归一化遥控量 (-1..1): x 前 y 右 z 升 w 左转, 组合成 Twist 下发
+        self._teleop_axes = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}
         # 显示帧转发统计 (运行中每 2 秒打一条日志; 计数在转发线程累计)
         self._fwd_last = time.monotonic()
         self._algo_started_at = 0.0    # 算法进程启动时刻 (发现窗口内不告警)
@@ -83,47 +88,16 @@ class MainWindow(QMainWindow):
         self.toolbar.addWidget(self.camera_tab.src_btn)
         self.toolbar.addWidget(self._build_px4_button())
         self.toolbar.addWidget(self._build_link_button())
+        self.toolbar.addWidget(self._build_algo_button())
+        self.toolbar.addWidget(self._build_landing_button())
         self.toolbar.addWidget(self._build_vehicle_button())
         self.addToolBar(self.toolbar)
 
-        # 算法选择: 下拉框 + 运行/取消按钮, 插到右栏。
-        # 同一时刻只跑一个算法; 运行中下拉框锁定, 取消后恢复。
-        # 配了 cmd 的算法点运行时自动拉起进程 (用户无需手动 ros2 run)
-        self.algo_panel = QGroupBox('算法')
-        algo_lay = QVBoxLayout(self.algo_panel)
-        algo_lay.setContentsMargins(6, 4, 6, 6)
-        self.algo_combo = QComboBox()
-        for algo in config.ALGORITHMS:
-            self.algo_combo.addItem(algo['name'])
-        self.algo_run_btn = QPushButton('运行算法')
-        self.algo_cancel_btn = QPushButton('取消')
-        self.algo_cancel_btn.setEnabled(False)
-        self.algo_run_btn.setStyleSheet(self._BTN_STYLE)
-        self.algo_cancel_btn.setStyleSheet(self._BTN_STYLE)
-        self.algo_run_btn.clicked.connect(self._on_run_algo)
-        self.algo_cancel_btn.clicked.connect(self._on_cancel_algo)
-        algo_lay.addWidget(self.algo_combo)
-        btn_row = QHBoxLayout()          # 运行/取消并排一行, 省纵向空间
-        btn_row.addWidget(self.algo_run_btn, stretch=1)
-        btn_row.addWidget(self.algo_cancel_btn)
-        algo_lay.addLayout(btn_row)
-        # ArUco 降落: 独立 toggle 按钮 (与算法下拉框互不影响, 检测可同时运行)。
-        # 按下: 拉起 aruco_landing_node (按所选通信链路传 link 参数) 并发
-        # landing_start 触发三态状态机; 抬起: 发 landing_stop 取消降落并交还控制权。
-        # 默认禁用, 门控见 _update_landing_btn: 需 ArUco检测运行中 且
-        # 云台俯仰转到垂直向下 且 已开启通信链路 (降落进行中保持可点, 随时取消)。
-        self.landing_btn = QPushButton('ArUco降落')
-        self.landing_btn.setCheckable(True)
-        self.landing_btn.setEnabled(False)
-        self.landing_btn.setToolTip(
-            '需先: 1) 运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)  '
-            '3) 工具栏开启通信链路 (uXRCE-DDS / MAVROS)')
-        self.landing_btn.setStyleSheet(self._LAND_BTN_STYLE)
-        self.landing_btn.clicked.connect(self._on_landing_toggle)
-        algo_lay.addWidget(self.landing_btn)
-        # 右栏分组框: 云台 (camera_widget) + 算法 (这里);
-        # 视频源 / PX4 SITL / 通信链路 / 飞行控制已上移到顶部工具栏
-        self.camera_tab.add_side_widget(self.algo_panel)
+        # 手动遥控: toggle 开关 + 双摇杆 (左=升降/偏航, 右=机体系平移)。
+        # 开启: 拉起 teleop_node (按所选通信链路传 link 参数) 并发 teleop_start
+        # 接管 offboard; 摇杆控速度、松开回中悬停; 关闭: 交还控制权。
+        # 与视觉反控 (ArUco降落) 互斥 (都走 offboard, 会争抢 setpoint)
+        self.camera_tab.add_side_widget(self._build_teleop_panel())
 
         self.setCentralWidget(self.camera_tab)
 
@@ -360,17 +334,45 @@ class MainWindow(QMainWindow):
             return
         self.veh_ctrl.request(key)
 
-    # ---------- 算法运行/取消 (进程生命周期见 processes.py) ----------
+    # ---------- 算法 (工具栏下拉按钮: 点选即推理+可视化, 再点/切换即取消) ----------
 
-    def _on_run_algo(self):
-        """运行选中的算法: 拉起进程 (若配了 cmd) 并发启动指令;
-        若已有别的算法在跑, 先停掉旧的再启动新的 (无缝切换);
-        重复点击同一算法忽略。未配 cmd 则假定节点已在外部运行, 只发指令。"""
-        algo = config.ALGORITHMS[self.algo_combo.currentIndex()]
+    def _build_algo_button(self):
+        self.algo_btn = QToolButton()
+        self.algo_btn.setText('算法')
+        self.algo_btn.setPopupMode(QToolButton.InstantPopup)
+        self.algo_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.algo_btn.setToolTip(
+            '选择算法即运行 (拉起进程 + 发启动指令, 检测结果叠加到画面); '
+            '再点运行中的算法即停止, 选其他算法停旧换新')
+        menu = QMenu(self.algo_btn)
+        self.algo_btn.setMenu(menu)
+        menu.aboutToShow.connect(self._rebuild_algo_menu)
+        menu.triggered.connect(self._on_algo_action)
+        return self.algo_btn
+
+    def _rebuild_algo_menu(self):
+        """重建算法菜单: ✓ = 正在运行; 再点运行中的算法即停止。"""
+        menu = self.algo_btn.menu()
+        menu.clear()
+        cur = self.running_algo['name'] if self.running_algo else None
+        for algo in config.ALGORITHMS:
+            act = menu.addAction(algo['name'])
+            act.setData(algo['name'])
+            act.setCheckable(True)
+            act.setChecked(algo['name'] == cur)
+
+    def _on_algo_action(self, act):
+        """菜单点击: 未运行 → 启动 (拉起进程 + 发 start 指令);
+        点运行中的算法 → 停止; 运行中选其他算法 → 停旧换新。"""
+        name = act.data()
+        algo = next((a for a in config.ALGORITHMS if a['name'] == name), None)
+        if algo is None:
+            return
         if self.running_algo is not None:
-            if self.running_algo is algo:
-                return                    # 已在运行, 忽略重复点击
+            was = self.running_algo        # 先记住 (stop 会清掉)
             self._stop_algo()
+            if was is algo:                # 刚才运行的就是它 → 纯停止
+                return
         self.running_algo = algo
         self._algo_started_at = time.monotonic()
         if algo.get('cmd'):
@@ -398,15 +400,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(
                 400, lambda: self._send_start(algo, retries_left - 1))
 
-    def _on_cancel_algo(self):
-        """取消当前正在运行的算法 (停止的是运行中的, 与下拉框当前选中无关)。"""
-        if self.running_algo is None:
-            return
-        self._stop_algo()
-        self._update_algo_state()
-
     def _stop_algo(self):
-        """停掉正在运行的算法: 发停止指令 + 界面立即清标注 + 回收进程。"""
+        """停掉正在运行的算法: 发停止指令 + 界面立即清标注 + 回收进程。
+        停 ArUco检测时视觉反控失去输入源, 自动一并退出。"""
         algo = self.running_algo
         if algo is None:
             return
@@ -414,6 +410,10 @@ class MainWindow(QMainWindow):
         self.node.clear_annotations()
         self.algo_proc.stop()
         self.running_algo = None
+        # ArUco检测停止时视觉反控 (降落) 失去输入源, 自动一并取消
+        if algo.get('enables_landing') and self.landing_btn.isChecked():
+            self.node.publish_cmd(config.LANDING_STOP_CMD)
+            self.landing_btn.setChecked(False)
 
     def _reset_algo(self):
         """算法异常退出时复位状态 (不重复发停止指令)。"""
@@ -430,30 +430,33 @@ class MainWindow(QMainWindow):
             self._reset_algo()
 
     def _update_algo_state(self):
-        """运行中: 下拉框锁定、运行按钮变状态提示、取消按钮可用; 空闲则相反。"""
-        running = self.running_algo is not None
-        self.algo_combo.setEnabled(not running)
-        self.algo_run_btn.setEnabled(not running)
-        self.algo_cancel_btn.setEnabled(running)
-        if running:
-            self.algo_run_btn.setText(f'运行中: {self.running_algo["name"]}')
-        else:
-            self.algo_run_btn.setText('运行算法')
+        """按钮文字跟随当前运行的算法, 无则回到"算法"。"""
+        running = self.running_algo['name'] if self.running_algo else None
+        self.algo_btn.setText(f'算法: {running}' if running else '算法')
 
-    # ---------- ArUco 降落 (独立 toggle 按钮) ----------
+    # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
     def _update_landing_btn(self):
-        """降落按钮门控 (33ms 轮询): 需同时满足
-        1) ArUco检测运行中
-        2) 云台俯仰到垂直向下限位 (绝对 -90°, 即相对俯仰到 GIMBAL_PITCH_MIN_DEG)
-        3) 已开启通信链路 (uXRCE-DDS / MAVROS 之一)
-        降落进行中不参与门控 —— 保持可点, 随时可取消交还控制权;
-        同时禁用链路下拉按钮 (换桥会断掉正在跑的降落控制)。"""
-        self.link_btn.setEnabled(not self.landing_btn.isChecked())
+        """门控 (33ms 轮询), 两个 offboard 功能互斥:
+        - 视觉反控 (降落): 需 ArUco检测运行中 + 云台俯仰到垂直向下限位 +
+          已开启链路; 进行中保持可点 (随时取消), 并锁定链路与遥控
+        - 遥控: 仅需已开启链路; 进行中锁定链路与视觉反控"""
+        # 进行中的按钮自身必须保持可点 (否则无法取消), 只锁定其余两项
+        if self.teleop_btn.isChecked():
+            self.link_btn.setEnabled(False)
+            self.landing_btn.setEnabled(False)
+            return
+        if self.landing_btn.isChecked():
+            self.link_btn.setEnabled(False)
+            self.teleop_btn.setEnabled(False)
+            return
+        self.link_btn.setEnabled(True)
+        link_ok = self._selected_link() is not None
+        if self.teleop_btn.isEnabled() != link_ok:
+            self.teleop_btn.setEnabled(link_ok)
         ok = False
         algo = self.running_algo
-        if (algo is not None and algo.get('enables_landing')
-                and self._selected_link() is not None):
+        if (algo is not None and algo.get('enables_landing') and link_ok):
             gim = self.camera_tab.grabber.get_gimbal()
             if gim is not None:
                 _, pitch = gim
@@ -472,16 +475,24 @@ class MainWindow(QMainWindow):
             # 故启动后重发多次: 节点对重复 start 幂等, 多发无副作用
             QTimer.singleShot(1000, lambda: self._send_landing_start(6))
         else:
+            self.landing_btn.setText('视觉反控')
             self._stop_landing()
 
     def _check_landing_status(self):
-        """降落节点状态事件处理: 成功(landed)/结束(idle) → 按钮弹起并给反馈。
+        """降落节点状态事件处理: 按钮文字/弹起随状态联动
+        (tracking=对准下降中, landing=已切 AUTO.LAND, landed=成功, idle=结束)。
         状态带事件序号, 只在有新事件时处理 (不漏瞬时的"成功")。"""
         status, seq = self.node.get_landing_status()
         if seq == self._last_landing_seq:
             return
         self._last_landing_seq = seq
         if not status:
+            return
+        if status == 'tracking':
+            self.landing_btn.setText('反控中: 对准下降')
+            return
+        if status == 'landing':
+            self.landing_btn.setText('反控中: 自动降落')
             return
         if status == 'landed':
             self.log.info('\033[32mArUco 视觉降落完成, 飞机已上锁\033[0m')
@@ -490,17 +501,18 @@ class MainWindow(QMainWindow):
             self.log.info('降落流程已结束 (取消/中止), 按钮已复位')
         else:
             return
-        # 按钮弹起 (checked = 降落进行中) + 回收降落节点进程
+        # 按钮弹起 (checked = 降落进行中) + 文字复位 + 回收降落节点进程
         self.landing_btn.setChecked(False)
+        self.landing_btn.setText('视觉反控')
         self.land_proc.stop()
 
     def _flash_landing_btn(self, color):
         """按钮背景色闪烁提示, 1.5s 后恢复原样式。"""
         self.landing_btn.setStyleSheet(
-            self._LAND_BTN_STYLE +
-            f'\nQPushButton {{ background-color: {color}; color: white; }}')
+            self._TOOL_BTN_STYLE +
+            f'\nQToolButton {{ background-color: {color}; color: white; }}')
         QTimer.singleShot(1500, lambda: self.landing_btn.setStyleSheet(
-            self._LAND_BTN_STYLE))
+            self._TOOL_BTN_STYLE))
 
     def _send_landing_start(self, retries_left):
         """触发降落并按 500ms 间隔重发; 按钮已抬起或节点进程已死则跳过。"""
@@ -513,6 +525,7 @@ class MainWindow(QMainWindow):
                 f'检查编译: colcon build --packages-select flylab_vision')
             self.land_proc.clear()
             self.landing_btn.setChecked(False)
+            self.landing_btn.setText('视觉反控')
             return
         self.node.publish_cmd(config.LANDING_START_CMD)
         if retries_left > 0:
@@ -523,6 +536,148 @@ class MainWindow(QMainWindow):
         稍后回收进程, 给节点留出发送停止指令与清屏的时间。"""
         self.node.publish_cmd(config.LANDING_STOP_CMD)
         QTimer.singleShot(500, self.land_proc.stop)
+
+    # ---------- 手动遥控 (toggle + 拨杆/摇杆, 执行节点 flylab_vision/teleop_node) ----------
+
+    def _build_teleop_panel(self):
+        box = QGroupBox('手动遥控')
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 4, 6, 6)
+        self.teleop_btn = QPushButton('开启遥控')
+        self.teleop_btn.setCheckable(True)
+        self.teleop_btn.setEnabled(False)
+        self.teleop_btn.setStyleSheet(self._LAND_BTN_STYLE)
+        self.teleop_btn.setToolTip(
+            '需先: 1) 工具栏开启通信链路  2) 飞行控制起飞升空。'
+            '开启后接管 offboard, 拨杆/摇杆控速度 (松开回中=悬停); 关闭交还控制权')
+        self.teleop_btn.toggled.connect(self._on_teleop_toggle)
+        lay.addWidget(self.teleop_btn)
+        # 双摇杆 (同真实遥控器): 左 = 升降/偏航, 右 = 平移 (力度=偏离圆心距离)
+        pads = QHBoxLayout()
+        self._teleop_widgets = []
+
+        def joy_group(title, cb):
+            g = QGroupBox(title)
+            g_lay = QVBoxLayout(g)
+            g_lay.setContentsMargins(4, 2, 4, 4)
+            joy = VirtualJoystick()
+            joy.changed.connect(cb)
+            g_lay.addWidget(joy, alignment=Qt.AlignHCenter)
+            self._teleop_widgets.append(joy)
+            return joy, g
+
+        self._teleop_joy_l, g_l = joy_group(
+            '高度 / 偏航',
+            # 左摇杆: x 右拖=右转(右+, w 轴左转+ 取反), y 上拖=升
+            lambda x, y: (self._teleop_axis('w', -x), self._teleop_axis('z', y)))
+        self._teleop_joy_r, g_r = joy_group(
+            '平移 (机头方向)',
+            # 右摇杆: x 右拖=右移, y 上拖=前进
+            lambda x, y: (self._teleop_axis('y', x), self._teleop_axis('x', y)))
+        pads.addWidget(g_l)
+        pads.addWidget(g_r)
+        lay.addLayout(pads)
+        for w in self._teleop_widgets:   # 默认置灰, 接管后解锁
+            w.setEnabled(False)
+        return box
+
+    def _teleop_axis(self, key, val):
+        """更新单轴归一化量并立即下发 (拨杆/摇杆拖动中实时跟手)。"""
+        if not self.teleop_btn.isChecked():
+            return
+        self._teleop_axes[key] = val
+        a = self._teleop_axes
+        self.node.publish_teleop_twist(a['x'], a['y'], a['z'], a['w'])
+
+    def _teleop_clear_axes(self):
+        """界面侧全部回中 (交还/复位时调用), 防止残留遥控量。
+        摇杆 reset 会经 changed 信号回写各轴, 最后统一发零。"""
+        self._teleop_joy_l.reset()
+        self._teleop_joy_r.reset()
+        for key in self._teleop_axes:
+            self._teleop_axes[key] = 0.0
+        self.node.publish_teleop_twist(0.0, 0.0, 0.0, 0.0)
+
+    def _on_teleop_toggle(self):
+        if self.teleop_btn.isChecked():
+            # 链路参数跟随工具栏所选链路 (mavros / uxrce)
+            link = self._selected_link() or 'mavros'
+            cmd = list(config.TELEOP_CMD) + ['--ros-args', '-p', f'link:={link}']
+            self.teleop_proc.start(cmd)
+            # 等节点完成 DDS 发现 + 收到飞控状态后再发接管指令 (重发多次, 节点幂等)
+            QTimer.singleShot(1000, lambda: self._send_teleop_start(6))
+        else:
+            self.node.publish_cmd(config.TELEOP_STOP_CMD)
+            self._teleop_clear_axes()
+            self._set_teleop_controls_enabled(False)
+            self.teleop_btn.setText('交还控制权 ...')
+            QTimer.singleShot(1500, self.teleop_proc.stop)   # 留时间走完交还流程
+
+    def _send_teleop_start(self, retries_left):
+        if not self.teleop_btn.isChecked():
+            return
+        rc = self.teleop_proc.exited()
+        if rc is not None:
+            self.log.error(f'遥控节点进程启动失败 (退出码 {rc}), '
+                           f'检查编译: colcon build --packages-select flylab_vision')
+            self.teleop_proc.clear()
+            self._teleop_reset()
+            return
+        self.node.publish_cmd(config.TELEOP_START_CMD)
+        if retries_left > 0:
+            QTimer.singleShot(500, lambda: self._send_teleop_start(retries_left - 1))
+
+    def _check_teleop_status(self):
+        """遥控节点状态事件: engaged=接管成功 (解锁拨杆/摇杆), idle/failed/error=
+        已结束 (按钮弹起 + 回收进程)。状态带序号, 只处理新事件。"""
+        status, seq = self.node.get_teleop_status()
+        if seq == self._last_teleop_seq:
+            return
+        self._last_teleop_seq = seq
+        if not status:
+            return
+        if status == 'engaged':
+            self.teleop_btn.setText('遥控中 (OFFBOARD)')
+            self._set_teleop_controls_enabled(True)
+        elif status == 'engaging':
+            self.teleop_btn.setText('接管中 ...')
+        elif status == 'releasing':
+            self.teleop_btn.setText('交还控制权 ...')
+        else:   # idle / failed / error:*
+            if status.startswith('error:') or status == 'failed':
+                self.log.error(f'手动遥控: {status}')
+            self.teleop_proc.stop()
+            self.teleop_proc.clear()
+            self._teleop_reset()
+
+    def _teleop_reset(self):
+        """按钮/拨杆摇杆复位为空闲态 (异常或流程结束调用)。"""
+        self._teleop_clear_axes()
+        self._set_teleop_controls_enabled(False)
+        self.teleop_btn.setChecked(False)
+        self.teleop_btn.setText('开启遥控')
+
+    def _set_teleop_controls_enabled(self, enabled):
+        for w in self._teleop_widgets:
+            w.setEnabled(enabled)
+
+    # ---------- 视觉反控 (工具栏 toggle = ArUco降落, 执行节点 aruco_landing_node) ----------
+
+    def _build_landing_button(self):
+        """视觉反控工具按钮 (ArUco 视觉降落): 点击拉起 aruco_landing_node
+        并接管 offboard, 按视觉输出对准码并调速下降, 满足条件切 AUTO.LAND;
+        再点取消降落交还控制权。仅 ArUco检测运行中可点 (视觉输入源)。"""
+        self.landing_btn = QToolButton()
+        self.landing_btn.setText('视觉反控')
+        self.landing_btn.setCheckable(True)
+        self.landing_btn.setEnabled(False)
+        self.landing_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.landing_btn.setToolTip(
+            '按视觉检测输出控制飞机 (对准码后自动降落)。需先: '
+            '1) 算法菜单运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)  '
+            '3) 工具栏开启通信链路。与手动遥控互斥')
+        self.landing_btn.toggled.connect(self._on_landing_toggle)
+        return self.landing_btn
 
     # ---------- 主轮询 (33ms, GUI 线程) ----------
 
@@ -555,7 +710,8 @@ class MainWindow(QMainWindow):
         if self.veh_btn.isEnabled() != veh_ok:
             self.veh_btn.setEnabled(veh_ok)
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 按钮弹起)
-        self._update_landing_btn()   # 降落按钮门控 (检测运行中 + 云台垂直向下 + 已选链路)
+        self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 按钮与摇杆联动)
+        self._update_landing_btn()   # 降落(视觉反控)/遥控互斥门控
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
@@ -603,6 +759,9 @@ class MainWindow(QMainWindow):
         if self.landing_btn.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
         self.land_proc.stop()
+        if self.teleop_btn.isChecked():
+            self.node.publish_cmd(config.TELEOP_STOP_CMD)   # 交还控制权再回收
+        self.teleop_proc.stop()
         self._stop_px4()             # PX4 SITL 随地面站退出一并回收
         for key in list(self.link_procs):
             self._stop_link(key)
