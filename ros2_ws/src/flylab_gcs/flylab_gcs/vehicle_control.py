@@ -42,6 +42,7 @@ class VehicleController(threading.Thread):
         self._lock = threading.Lock()
         self._cmd = None        # 待执行命令 key (界面 request 置入)
         self._connected = False
+        self._flying = False    # 已解锁且在空中 (视觉反控门控依据)
         self._client = None     # 持久 RPC 客户端 (ping 失败时重建)
         self.running = True
 
@@ -51,6 +52,11 @@ class VehicleController(threading.Thread):
         """RPC 是否连通 (界面按钮门控依据)。"""
         with self._lock:
             return self._connected
+
+    def is_flying(self):
+        """已解锁且在空中 (视觉反控门控依据); 未连通/查询失败为 False。"""
+        with self._lock:
+            return self._flying
 
     def request(self, key):
         """请求执行飞控命令, 置入队列立即返回 (执行在本线程)。"""
@@ -90,6 +96,24 @@ class VehicleController(threading.Thread):
             was, self._connected = self._connected, True
         if not was:
             self.log.info(f'飞行控制: 已连接 AirSim {self.host}:{self.port}')
+        self._poll_flying()
+
+    def _poll_flying(self):
+        """随心跳低频查询飞行状态 (离地), 供视觉反控门控。
+        注: 不用 st.rc.armed —— PX4 SITL 经 MAVLink 通道解锁时 RCData.armed
+        不可靠 (不走模拟遥控器通道, 恒为 False)。改用 LandedState 判离地:
+        Landed=在地面, Takeoff/Landing/Flying=离空。状态迁移打一条日志
+        (排查门控问题), 查询失败视为不在地面流程 (下次心跳恢复)。"""
+        try:
+            st = self._client.getMultirotorState()
+            flying = st.landed_state != airsim.LandedState.Landed
+        except Exception:
+            return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
+        with self._lock:
+            was, self._flying = self._flying, flying
+        if was != flying:
+            self.log.info(
+                f'飞行控制: 飞行状态 -> {"空中 (反控可用)" if flying else "地面"}')
 
     def _exec(self, key):
         """执行命令: 短超时客户端 + ping 不通快速失败, 绝不长阻塞。"""

@@ -156,6 +156,7 @@ class CameraViewWidget(QWidget):
         step = config.GIMBAL_STEP_DEG
         self._gimbal_btns = {}   # 方向键 -> 按钮 (到限位标红), 见 _update_gimbal_limit
         self._btn_styles = {}    # 按钮当前样式缓存, 避免每帧重复 setStyleSheet
+        self._gimbal_locked = False   # 视觉反控进行中锁定云台 (见 set_gimbal_locked)
 
         def dir_btn(key, text, tip, dyaw, dpitch):
             b = QPushButton(text)
@@ -191,14 +192,33 @@ class CameraViewWidget(QWidget):
         g.addWidget(dir_btn('pitch-', '↓', f'俯仰下 {step}°', 0, -step), 3, 1)
         g.addWidget(self.gimbal_angle, 4, 0, 1, 3)
 
-    def _update_gimbal_limit(self):
-        """到限位提示: 按键被限位拒绝 (再按不再动作) 的方向键标红, 该方向
-        恢复可动即清红 (不禁用按钮, 保持按住回转的手感)。拒绝状态由
-        grabber 在会话内判定, 打开地面站时一律不红, 不沿用上次会话停在哪;
-        样式只在变化时更新。"""
+    def set_gimbal_locked(self, locked):
+        """锁定/解锁云台面板 (视觉反控进行中锁定, 防止反控时转动视角)。
+        锁定立即生效; 解锁交给 _refresh 按可用性恢复。"""
+        if self._gimbal_locked == locked:
+            return
+        self._gimbal_locked = locked
+        if locked:
+            self.gimbal.setEnabled(False)
+
+    def _update_gimbal_limit(self, yaw=None, pitch=None):
+        """到限位提示: 方向键无法再动时标红, 恢复可动即清红 (不禁用按钮,
+        保持按住回转的手感)。两类来源: 1) 按键被限位拒绝 (grabber 会话内
+        判定, 打开地面站时一律不红); 2) 角度已在限位 (如反控自动摆位到
+        俯仰下限, 不经按键, 也要红)。样式只在变化时更新。"""
         blocked = self.grabber.get_gimbal_blocked()
+        at_limit = {}
+        if yaw is not None:
+            eps = 0.5
+            at_limit = {
+                'yaw+': yaw >= config.GIMBAL_YAW_LIMIT_DEG - eps,
+                'yaw-': yaw <= -config.GIMBAL_YAW_LIMIT_DEG + eps,
+                'pitch+': pitch >= config.GIMBAL_PITCH_MAX_DEG - eps,
+                'pitch-': pitch <= config.GIMBAL_PITCH_MIN_DEG + eps,
+            }
         for key, btn in self._gimbal_btns.items():
-            style = 'color: #d9534f; font-weight: bold;' if blocked[key] else ''
+            hit = blocked[key] or at_limit.get(key, False)
+            style = 'color: #d9534f; font-weight: bold;' if hit else ''
             if self._btn_styles.get(key) != style:
                 btn.setStyleSheet(style)
                 self._btn_styles[key] = style
@@ -298,13 +318,14 @@ class CameraViewWidget(QWidget):
     def _refresh(self):
         self._refresh_playback()
         gim = self.grabber.get_gimbal()
-        # 仅 AirSim 源且 RPC 已连通可用: 打开地面站/UE 未 play 时默认置灰
+        # 仅 AirSim 源且 RPC 已连通可用 (反控锁定期间强制置灰): 打开地面站/UE 未 play 时默认置灰
         self.gimbal.setEnabled(
-            gim is not None and self.grabber.airsim_connected())
+            not self._gimbal_locked
+            and gim is not None and self.grabber.airsim_connected())
         if gim is not None:
             yaw, pitch = gim
             self.gimbal_angle.setText(f'航向 {yaw:+.0f}° 俯仰 {pitch:+.0f}°')
-            self._update_gimbal_limit()
+            self._update_gimbal_limit(yaw, pitch)
         frame, src, fps = self.grabber.get()
         if frame is None:
             # 无信号提示直接写在画面中央 (带源名), 右栏状态条不再重复

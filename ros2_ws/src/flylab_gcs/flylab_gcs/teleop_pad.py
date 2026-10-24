@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""手动遥控拨杆控件 —— 虚拟摇杆 + 回弹拨杆。
+"""手动遥控虚拟摇杆控件。
 
 VirtualJoystick: 2D 摇杆 (圆盘内拖动, 松手回中)。信号 changed(x, y) 给出
 归一化偏移 (-1..1): x 右正, y 前正 (Qt 的 y 轴向下已在内部翻转)。
-SnapSlider: 回弹拨杆 (竖直 QSlider, 上=正), 拖动实时 valueChanged, 松手回中。
-
-均由 main_window 的手动遥控面板使用, 各轴组合成归一化 Twist 发给
-teleop_node (力度=偏离中位的距离)。
+由 main_window 的手动遥控面板使用 (左=升降/偏航, 右=平移), 各轴组合成
+归一化 Twist 发给 teleop_node (力度=偏离中位的距离)。
 """
 import math
 
 from PyQt5.QtCore import QPointF, pyqtSignal, Qt
 from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import QSlider, QWidget
+from PyQt5.QtWidgets import QWidget
 
 
 class VirtualJoystick(QWidget):
@@ -70,19 +68,3 @@ class VirtualJoystick(QWidget):
         p.setBrush(QColor('#2d8a3e') if engaged else QColor('#999'))
         p.setPen(Qt.NoPen)
         p.drawEllipse(center + self._knob, 15, 15)
-
-
-class SnapSlider(QSlider):
-    """回弹拨杆: 竖直, 上=正 下=负, 中位 0; 拖动实时发 valueChanged, 松手回中。"""
-
-    def __init__(self, parent=None):
-        super().__init__(Qt.Vertical, parent)
-        self.setRange(-100, 100)
-        self.setValue(0)
-        self.setTickPosition(QSlider.TicksBothSides)
-        self.setTickInterval(50)
-        self.setFixedHeight(110)
-
-    def mouseReleaseEvent(self, ev):
-        super().mouseReleaseEvent(ev)
-        self.setValue(0)     # 回中 (触发 valueChanged → 界面发零)

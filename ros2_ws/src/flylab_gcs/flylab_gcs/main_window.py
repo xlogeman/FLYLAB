@@ -11,9 +11,10 @@
   main_window.py      本文件: 工具栏/面板组装 + 33ms 轮询调度 + 按钮门控
 
 界面结构:
-  顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 通信链路 / 飞行控制, 全部下拉交互
+  顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 / 算法 /
+  视觉反控, 全部下拉或 toggle 交互
   左侧画面 + 底部日志框 (camera_widget 内部布局)
-  右栏: 云台 (camera_widget) + 算法选择 + ArUco降落
+  右栏: 云台 (camera_widget) + 手动遥控 (双摇杆)
 """
 import os
 import time
@@ -87,10 +88,10 @@ class MainWindow(QMainWindow):
         self.camera_tab.src_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.toolbar.addWidget(self.camera_tab.src_btn)
         self.toolbar.addWidget(self._build_px4_button())
+        self.toolbar.addWidget(self._build_vehicle_button())
         self.toolbar.addWidget(self._build_link_button())
         self.toolbar.addWidget(self._build_algo_button())
         self.toolbar.addWidget(self._build_landing_button())
-        self.toolbar.addWidget(self._build_vehicle_button())
         self.addToolBar(self.toolbar)
 
         # 手动遥控: toggle 开关 + 双摇杆 (左=升降/偏航, 右=机体系平移)。
@@ -437,35 +438,44 @@ class MainWindow(QMainWindow):
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
     def _update_landing_btn(self):
-        """门控 (33ms 轮询), 两个 offboard 功能互斥:
-        - 视觉反控 (降落): 需 ArUco检测运行中 + 云台俯仰到垂直向下限位 +
-          已开启链路; 进行中保持可点 (随时取消), 并锁定链路与遥控
+        """门控 (33ms 轮询), offboard 功能互斥 + 反控锁云台 + 遥控最高优先:
+        - 视觉反控 (降落): 需已解锁升空 + ArUco检测运行中 + AirSim 源 +
+          已开启链路 (点击时自动把云台俯仰转到垂直向下);
+          进行中保持可点 (随时取消),
+          锁定链路与云台面板; 允许开遥控 (遥控接管即自动取消反控, 防炸机)
         - 遥控: 仅需已开启链路; 进行中锁定链路与视觉反控"""
-        # 进行中的按钮自身必须保持可点 (否则无法取消), 只锁定其余两项
+        link_ok = self._selected_link() is not None
+        # 进行中的按钮自身必须保持可点 (否则无法取消), 只锁定其余项
         if self.teleop_btn.isChecked():
             self.link_btn.setEnabled(False)
             self.landing_btn.setEnabled(False)
+            self.camera_tab.set_gimbal_locked(False)
             return
         if self.landing_btn.isChecked():
             self.link_btn.setEnabled(False)
-            self.teleop_btn.setEnabled(False)
+            self.camera_tab.set_gimbal_locked(True)
+            # 反控中允许开遥控抢回控制权 (防炸机): 接管时自动取消反控
+            if self.teleop_btn.isEnabled() != link_ok:
+                self.teleop_btn.setEnabled(link_ok)
             return
+        self.camera_tab.set_gimbal_locked(False)
         self.link_btn.setEnabled(True)
-        link_ok = self._selected_link() is not None
         if self.teleop_btn.isEnabled() != link_ok:
             self.teleop_btn.setEnabled(link_ok)
         ok = False
         algo = self.running_algo
-        if (algo is not None and algo.get('enables_landing') and link_ok):
-            gim = self.camera_tab.grabber.get_gimbal()
-            if gim is not None:
-                _, pitch = gim
-                ok = pitch <= config.GIMBAL_PITCH_MIN_DEG + 1e-3
+        if algo is not None and algo.get('enables_landing') and link_ok:
+            # 需已解锁且在空中 (地面/未解锁点反控无意义); 俯仰由点击时
+            # 自动打到垂直向下, 只要求 AirSim 源 (有云台)
+            ok = (self.veh_ctrl.is_flying()
+                  and self.camera_tab.grabber.get_gimbal() is not None)
         if self.landing_btn.isEnabled() != ok:
             self.landing_btn.setEnabled(ok)
 
     def _on_landing_toggle(self):
         if self.landing_btn.isChecked():
+            # 反控前自动把云台俯仰打到垂直向下, 省去每次手动调整
+            self.camera_tab.grabber.gimbal_pitch_bottom()
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'
             cmd = list(config.LANDING_CMD) + ['--ros-args', '-p', f'link:={link}']
@@ -537,7 +547,7 @@ class MainWindow(QMainWindow):
         self.node.publish_cmd(config.LANDING_STOP_CMD)
         QTimer.singleShot(500, self.land_proc.stop)
 
-    # ---------- 手动遥控 (toggle + 拨杆/摇杆, 执行节点 flylab_vision/teleop_node) ----------
+    # ---------- 手动遥控 (toggle + 双摇杆, 执行节点 flylab_vision/teleop_node) ----------
 
     def _build_teleop_panel(self):
         box = QGroupBox('手动遥控')
@@ -549,7 +559,7 @@ class MainWindow(QMainWindow):
         self.teleop_btn.setStyleSheet(self._LAND_BTN_STYLE)
         self.teleop_btn.setToolTip(
             '需先: 1) 工具栏开启通信链路  2) 飞行控制起飞升空。'
-            '开启后接管 offboard, 拨杆/摇杆控速度 (松开回中=悬停); 关闭交还控制权')
+            '开启后接管 offboard, 摇杆控速度 (回中=悬停); 关闭交还控制权')
         self.teleop_btn.toggled.connect(self._on_teleop_toggle)
         lay.addWidget(self.teleop_btn)
         # 双摇杆 (同真实遥控器): 左 = 升降/偏航, 右 = 平移 (力度=偏离圆心距离)
@@ -582,7 +592,7 @@ class MainWindow(QMainWindow):
         return box
 
     def _teleop_axis(self, key, val):
-        """更新单轴归一化量并立即下发 (拨杆/摇杆拖动中实时跟手)。"""
+        """更新单轴归一化量并立即下发 (摇杆拖动中实时跟手)。"""
         if not self.teleop_btn.isChecked():
             return
         self._teleop_axes[key] = val
@@ -600,6 +610,10 @@ class MainWindow(QMainWindow):
 
     def _on_teleop_toggle(self):
         if self.teleop_btn.isChecked():
+            # 遥控接管优先 (防炸机出口): 反控进行中先取消降落, 降落节点
+            # 切回 LOITER 交还 offboard, 遥控 1s 后再接管不会打架
+            if self.landing_btn.isChecked():
+                self.landing_btn.setChecked(False)
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'
             cmd = list(config.TELEOP_CMD) + ['--ros-args', '-p', f'link:={link}']
@@ -628,7 +642,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, lambda: self._send_teleop_start(retries_left - 1))
 
     def _check_teleop_status(self):
-        """遥控节点状态事件: engaged=接管成功 (解锁拨杆/摇杆), idle/failed/error=
+        """遥控节点状态事件: engaged=接管成功 (解锁摇杆), idle/failed/error=
         已结束 (按钮弹起 + 回收进程)。状态带序号, 只处理新事件。"""
         status, seq = self.node.get_teleop_status()
         if seq == self._last_teleop_seq:
@@ -651,7 +665,7 @@ class MainWindow(QMainWindow):
             self._teleop_reset()
 
     def _teleop_reset(self):
-        """按钮/拨杆摇杆复位为空闲态 (异常或流程结束调用)。"""
+        """按钮/摇杆复位为空闲态 (异常或流程结束调用)。"""
         self._teleop_clear_axes()
         self._set_teleop_controls_enabled(False)
         self.teleop_btn.setChecked(False)
@@ -666,16 +680,15 @@ class MainWindow(QMainWindow):
     def _build_landing_button(self):
         """视觉反控工具按钮 (ArUco 视觉降落): 点击拉起 aruco_landing_node
         并接管 offboard, 按视觉输出对准码并调速下降, 满足条件切 AUTO.LAND;
-        再点取消降落交还控制权。仅 ArUco检测运行中可点 (视觉输入源)。"""
+        再点取消降落交还控制权。仅 ArUco检测运行中可点。"""
         self.landing_btn = QToolButton()
         self.landing_btn.setText('视觉反控')
         self.landing_btn.setCheckable(True)
         self.landing_btn.setEnabled(False)
         self.landing_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.landing_btn.setToolTip(
-            '按视觉检测输出控制飞机 (对准码后自动降落)。需先: '
-            '1) 算法菜单运行 ArUco检测  2) 云台俯仰调到垂直向下 (↓到限位)  '
-            '3) 工具栏开启通信链路。与手动遥控互斥')
+            '根据当前算法的视觉输出控制飞机; '
+            '开启手动遥控可随时抢回控制权')
         self.landing_btn.toggled.connect(self._on_landing_toggle)
         return self.landing_btn
 

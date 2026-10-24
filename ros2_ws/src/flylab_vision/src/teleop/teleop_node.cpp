@@ -1,11 +1,11 @@
 // Copyright 2026 flylab
-/// 手动遥控节点 —— 地面站方向键 → offboard 速度/偏航角速率
+/// 手动遥控节点 —— 地面站双摇杆 → offboard 速度/偏航角速率
 ///
 /// 状态机: IDLE(等 teleop_start) → ENGAGING(接管 offboard) →
-///         ENGAGED(按掩码下发速度+yaw速率, 无按键=悬停, 流不能断) →
+///         ENGAGED(按摇杆量下发速度+yaw速率, 回中=悬停, 流不能断) →
 ///         RELEASE(悬停+请求 LOITER, 确认退出 offboard 后回 IDLE)
 ///
-/// 遥控量输入 (geometry_msgs/Twist, 归一化 -1..1, 地面站拨杆/摇杆实时下发):
+/// 遥控量输入 (geometry_msgs/Twist, 归一化 -1..1, 地面站双摇杆实时下发):
 ///   linear.x 前+ linear.y 右+ linear.z 升+ angular.z 左转+
 /// 各分量按速度上限换算 (力度 = 拨杆/摇杆偏离中位的距离), 死区 0.06;
 /// 全部回中 = 零速度悬停 (流不能断)
@@ -13,7 +13,7 @@
 /// 安全防御: 上锁 / AUTO.LAND 接管 / 飞控数据断流 → 立即交还控制权。
 /// 使用前提: 已解锁升空 (地面 unarmed 状态 offboard 无法起飞)。
 /// 运行: ros2 run flylab_vision teleop_node --ros-args -p link:=mavros|uxrce
-///       -p v_xy:=5.0 -p v_z:=0.8 -p yaw_rate_deg:=30.0
+///       -p v_xy:=5.0 -p v_z:=2.0 -p yaw_rate_deg:=30.0
 
 #include <cmath>
 #include <stdexcept>
@@ -45,7 +45,7 @@ public:
   : Node("teleop_node")
   {
     const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/flylab/vision_cmd");
-    const auto mask_topic =
+    const auto twist_topic =
       declare_parameter<std::string>("teleop_cmd_topic", "/flylab/teleop_cmd");
     const auto status_topic =
       declare_parameter<std::string>("status_topic", "/flylab/teleop_status");
@@ -74,7 +74,7 @@ public:
         }
       });
     twist_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      mask_topic, 10,
+      twist_topic, 10,
       [this](const geometry_msgs::msg::Twist::SharedPtr msg) {twist_ = *msg;});
     status_pub_ = create_publisher<std_msgs::msg::String>(status_topic, 10);
 
@@ -150,7 +150,7 @@ private:
         const auto rc = client_->takeoverTick(now, kWarmupSec, kRetrySec);
         if (rc == Px4OffboardClientBase::Takeover::ENGAGED) {
           RCLCPP_INFO(
-            get_logger(), "\033[32m手动遥控接管成功, 方向键可用 (松开所有键 = 原地悬停)\033[0m");
+            get_logger(), "\033[32m手动遥控接管成功, 摇杆可用 (回中 = 原地悬停)\033[0m");
           state_ = State::ENGAGED;
           publishStatus("engaged");
         } else if (rc == Px4OffboardClientBase::Takeover::FAILED) {
@@ -179,7 +179,7 @@ private:
           beginRelease("link-lost");
           break;
         }
-        applyMask();
+        applyTwist();
         break;
       }
       case State::RELEASE: {
@@ -206,9 +206,9 @@ private:
   }
 
   /// 归一化遥控量 → 机体系 FRD 速度 + 偏航角速率 (全部回中 = 原地悬停)
-  void applyMask()
+  void applyTwist()
   {
-    // 死区: 拨杆/摇杆回中附近的抖动不产生指令
+    // 死区: 摇杆回中附近的抖动不产生指令
     auto dz = [](double v) {return std::abs(v) < kDeadzone ? 0.0 : v;};
     const double fwd = dz(twist_.linear.x) * v_xy_;
     const double right = dz(twist_.linear.y) * v_xy_;
@@ -231,7 +231,7 @@ private:
   std::string status_;
   geometry_msgs::msg::Twist twist_;
   double v_xy_ = 1.0;
-  double v_z_ = 0.8;
+  double v_z_ = 2.0;
   double yaw_rate_rad_ = 30.0 * M_PI / 180.0;
   double link_fresh_timeout_ = 1.0;
   rclcpp::Time release_deadline_{0, 0, RCL_ROS_TIME};

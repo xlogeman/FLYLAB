@@ -66,7 +66,8 @@ GIMBAL_PITCH_MAX_DEG = 126.87    # 俯仰上限 (绝对 +90°, 垂直向上)
 # 接管 offboard → 视觉对齐调速下降 → 满足条件切 PX4 AUTO.LAND),
 # 再次点击发 landing_stop 取消并交还控制权。
 # 与算法下拉框互不影响: ArUco检测可同时运行 (两路独立检测互不干扰)。
-# 使用前提: MicroXRCEAgent 在跑 + 飞机已解锁升空 + 画面为垂直向下视角看到码。
+# 使用前提: 通信链路在跑 + 飞机已解锁升空 + 运行 enables_landing 的算法
+# (点击按钮时自动把云台俯仰转到垂直向下)。
 LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node']
 LANDING_START_CMD = 'landing_start'
 LANDING_STOP_CMD = 'landing_stop'
@@ -86,7 +87,7 @@ PX4_MODELS = [
     {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
 ]
 
-# ---------- 手动遥控 (拨杆/摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
+# ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
 # 界面发归一化遥控量 (-1..1, geometry_msgs/Twist): linear.x=前后 linear.y=左右
 # linear.z=升降(升+) angular.z=偏航(左转+); teleop_node 按速度上限换算成
 # 机体系 FRD 速度 + NED 偏航角速率
@@ -106,7 +107,7 @@ MAVROS_CMD = ['ros2', 'run', 'mavros', 'mavros_node', '--ros-args',
               '-p', 'tgt_component:=1']
 
 # ---------- 飞行控制 (AirSim API 经 RPC 直发 PX4) ----------
-# 工具栏"飞行控制"按钮的菜单项, cmd 对应 camera_grabber._exec_vehicle_cmd
+# 工具栏"飞行控制"按钮的菜单项, cmd 对应 vehicle_control.VehicleController._exec
 # 的命令 key。命令经 AirSim 的 MAVLink 控制通道下发 PX4, 与 offboard
 # tracker (mavros/uxrce) 相互独立; 结果看 QGC / mavros state
 VEHICLE_CMDS = [

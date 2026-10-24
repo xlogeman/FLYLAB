@@ -333,6 +333,18 @@ class Grabber(threading.Thread):
             self._gimbal_anim = (0.0, 0.0)
             self._anim_t_prev = time.monotonic()
 
+    def gimbal_pitch_bottom(self):
+        """俯仰平滑转到垂直向下限位 (视觉反控前自动摆位, 航向保持不变):
+        复用回中动画机制, 以 GIMBAL_SLEW_RATE_DEG_S 匀速转动、画面连续
+        过渡 (每帧推进并置 dirty 连续下发); 本机/视频文件源为空操作。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return
+            yaw, _ = self._gimbal
+            self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
+            self._gimbal_anim = (yaw, config.GIMBAL_PITCH_MIN_DEG)
+            self._anim_t_prev = time.monotonic()
+
     def airsim_connected(self):
         """AirSim RPC 是否已连通 (断线/未 play 时为 False)。"""
         with self.lock:

@@ -200,7 +200,7 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
 
-        # 手动遥控: 归一化遥控量发布 (拨杆/摇杆, -1..1) + 遥控节点状态回传
+        # 手动遥控: 归一化遥控量发布 (双摇杆, -1..1) + 遥控节点状态回传
         self.teleop_cmd_pub = self.create_publisher(
             Twist, config.TELEOP_CMD_TOPIC, 10)
         self._teleop_status = ''
