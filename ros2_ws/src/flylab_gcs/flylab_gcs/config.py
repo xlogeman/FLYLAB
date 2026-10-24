@@ -95,6 +95,19 @@ MAVROS_CMD = ['ros2', 'run', 'mavros', 'mavros_node', '--ros-args',
               '-p', 'fcu_url:=udp://:14542@', '-p', 'tgt_system:=1',
               '-p', 'tgt_component:=1']
 
+# ---------- 飞行控制 (AirSim API 经 RPC 直发 PX4) ----------
+# 工具栏"飞行控制"按钮的菜单项, cmd 对应 camera_grabber._exec_vehicle_cmd
+# 的命令 key。命令经 AirSim 的 MAVLink 控制通道下发 PX4, 与 offboard
+# tracker (mavros/uxrce) 相互独立; 结果看 QGC / mavros state
+VEHICLE_CMDS = [
+    {'name': '解锁 (Arm)',     'cmd': 'arm'},
+    {'name': '起飞 (Takeoff)', 'cmd': 'takeoff'},
+    {'name': '降落 (Land)',    'cmd': 'land'},
+    {'name': '悬停 (Hover)',   'cmd': 'hover'},
+    {'name': '返航 (GoHome)',  'cmd': 'gohome'},
+    {'name': '上锁 (Disarm)',  'cmd': 'disarm'},
+]
+
 # ---------- 算法选择 (下拉框 + 运行/取消按钮) ----------
 # name=下拉框显示文字, start/stop=运行/取消时发布的指令。
 # cmd=算法节点启动命令 (可选): 填了则地面站点"运行"时自动拉起进程、点"取消"
