@@ -52,6 +52,8 @@ class VehicleController(threading.Thread):
         self._tele_t = 0.0        # 上次遥测采样时刻 (monotonic, 0=未采样)
         self._tele_prev = None    # 上次采样水平位置 (x, y)
         self._z_ground = 0.0      # 起飞点 z (NED), 高度基准
+        self._track = []          # 航迹 [(north, east), ...] 米, 飞行中每拍记录
+        self._home = None         # 起飞点水平位置 (north, east)
         self._client = None     # 持久 RPC 客户端 (ping 失败时重建)
         self.running = True
 
@@ -71,6 +73,11 @@ class VehicleController(threading.Thread):
         """最近一次采样遥测 (dict, 界面 33ms 轮询读, 采样随 0.5s 心跳)。"""
         with self._lock:
             return dict(self._tele)
+
+    def get_track(self):
+        """航迹 (地图控件用): (轨迹点列表拷贝, 起飞点 or None)。"""
+        with self._lock:
+            return list(self._track), self._home
 
     def request(self, key):
         """请求执行飞控命令, 置入队列立即返回 (执行在本线程)。"""
@@ -135,8 +142,10 @@ class VehicleController(threading.Thread):
         if was != flying:
             self.log.info(
                 f'飞行控制: 飞行状态 -> {"空中 (反控可用)" if flying else "地面"}')
-        if flying and not was:   # 起飞瞬间: 记高度基准, 行程/时长清零按次累计
+        if flying and not was:   # 起飞瞬间: 记高度/起飞点基准, 行程/时长/航迹清零
             self._z_ground = pos.z_val
+            self._home = (pos.x_val, pos.y_val)
+            self._track = []
             self._tele_t = now
             self._tele_prev = (pos.x_val, pos.y_val)
         tele = dict(self._tele)
@@ -153,6 +162,11 @@ class VehicleController(threading.Thread):
             tele['alt'] = max(0.0, self._z_ground - pos.z_val)   # NED z 下为正
             tele['hs'] = math.hypot(vel.x_val, vel.y_val)
             tele['vs'] = -vel.z_val                              # 上为正
+            # 航迹记录 (NED x=北 y=东), 供地图控件绘制航线
+            if not self._track or self._track[-1] != (pos.x_val, pos.y_val):
+                self._track.append((pos.x_val, pos.y_val))
+                if len(self._track) > 2000:
+                    del self._track[:500]   # 超上限丢最旧一批 (省得每拍裁剪)
         else:
             self._tele_prev = None
             self._tele_t = 0.0
@@ -181,7 +195,9 @@ class VehicleController(threading.Thread):
             elif key == 'hover':
                 mc.hoverAsync(VEHICLE)
             elif key == 'gohome':
-                mc.goHomeAsync(VEHICLE)
+                # 注: 签名是 goHomeAsync(timeout_sec, vehicle_name) —— 第一参
+                # 是超时秒数, 之前误传 vehicle_name 导致 RPC 失败无声无息
+                mc.goHomeAsync(60, VEHICLE)
             else:
                 self.log.error(f'飞行控制: 未知命令 {key}')
                 return

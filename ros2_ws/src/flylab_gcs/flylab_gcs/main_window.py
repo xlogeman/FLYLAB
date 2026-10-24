@@ -29,6 +29,7 @@ from . import config
 from .camera_widget import CameraViewWidget
 from .compass import Compass
 from .log_panel import LogPanel
+from .map_view import MapView
 from .telemetry_bar import TelemetryBar
 from .processes import ManagedProcess
 from .teleop_pad import VirtualJoystick
@@ -112,6 +113,9 @@ class MainWindow(QMainWindow):
         row_lay.addWidget(self.compass, stretch=1)
         self.camera_tab.add_side_widget(top_row)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
+        # 航线地图 (俯视轨迹, 数据同遥测: 飞控心跳采样)
+        self.map_view = MapView()
+        self.camera_tab.add_side_widget(self.map_view)
 
         self.setCentralWidget(self.camera_tab)
 
@@ -330,10 +334,14 @@ class MainWindow(QMainWindow):
         return self.veh_btn
 
     def _rebuild_vehicle_menu(self):
-        """重建飞控命令菜单: RPC 未连通时整组置灰。"""
+        """重建飞控命令菜单: RPC 未连通时整组置灰; 手动遥控/视觉反控
+        进行中同样置灰 (offboard 接管期间不被飞控命令打断, 想干预先
+        点"开启遥控"/取消反控抢回)。"""
         menu = self.veh_btn.menu()
         menu.clear()
-        ok = self.veh_ctrl.is_connected()
+        ok = (self.veh_ctrl.is_connected()
+              and not self.teleop_btn.isChecked()
+              and not self.landing_btn.isChecked())
         for item in config.VEHICLE_CMDS:
             if item['cmd'] == 'disarm':
                 menu.addSeparator()      # 上锁前分隔 (飞行中误点会掉桨)
@@ -714,10 +722,12 @@ class MainWindow(QMainWindow):
             rclpy.spin_once(self.node, timeout_sec=0)
         except Exception:
             pass
-        # 遥测六值条 + 罗盘刷新 (数据随 0.5s 飞控心跳采样)
+        # 遥测六值条 + 罗盘 + 航线地图刷新 (数据随 0.5s 飞控心跳采样)
         tele = self.veh_ctrl.get_telemetry()
         self.tele_bar.update_values(tele)
         self.compass.set_heading(tele.get('hdg', 0.0))
+        track, home = self.veh_ctrl.get_track()
+        self.map_view.update_state(track, home, tele.get('hdg', 0.0))
         # 标注上屏门控: 仅在"算法运行中或降落进行中"时显示。防止外部遗留的
         # 算法节点进程 (仍处于 start 状态) 在用户未运行任何算法时擅自叠加;
         # 此种场景直接清掉已有分组, 不让来路不明的过期标注上屏

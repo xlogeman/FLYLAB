@@ -113,11 +113,9 @@ private:
       publishStatus("error: 未解锁起飞");
       return;
     }
-    if (client_->isAutoLand()) {
-      RCLCPP_ERROR(get_logger(), "正在自动降落, 不接管");
-      publishStatus("error: 自动降落中");
-      return;
-    }
+    // 注: 不再拒绝 AUTO.LAND —— 飞行控制下发的自动降落可被开遥控打断
+    // 接管 (防炸机出口); offboard 接管即切走 AUTO.LAND。接管成功后若
+    // 又进入 AUTO.LAND (failsafe), ENGAGED 态的安全防御仍会退出遥控
     client_->takeoverReset(now());
     state_ = State::ENGAGING;
     publishStatus("engaging");
