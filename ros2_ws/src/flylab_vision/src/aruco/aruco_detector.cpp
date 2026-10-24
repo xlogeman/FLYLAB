@@ -220,10 +220,16 @@ std::string to_annotations_json(
       label += " z=" + num(d.tvec[2], 2) + "m";
     }
     float bx0 = std::numeric_limits<float>::max(), by0 = bx0;
+    float bx1 = -bx0, by1 = -bx0;
     for (const auto & p : d.corners) {
       bx0 = std::min(bx0, p.x);
       by0 = std::min(by0, p.y);
+      bx1 = std::max(bx1, p.x);
+      by1 = std::max(by1, p.y);
     }
+    // 字号与码框成比例: 文字像素高 = 外接框高 × 0.12, 夹取 [4, 20] 防退化
+    const float box_h = std::max(by1 - by0, 1.0f);
+    const float text_px = std::min(std::max(0.12f * box_h, 4.0f), 20.0f);
     if (i > 0) {
       os << ",";
     }
@@ -240,10 +246,10 @@ std::string to_annotations_json(
     // 中心点 (红)
     os << ",{\"type\":\"point\",\"point\":[" << num(d.center_px.x) << ","
        << num(d.center_px.y) << "],\"color\":[255,0,0]}";
-    // id 与距离 (黄, 挂在外接框左上角)
+    // id 与距离 (黄, 挂在外接框左上角); px = 文字像素高, 随码框大小等比缩放
     os << ",{\"type\":\"text\",\"pos\":[" << num(bx0) << ","
-       << num(by0 - 8.0f) << "],\"text\":\"" << label << "\","
-       << "\"color\":[0,255,255]}";
+       << num(by0 - 4.0f) << "],\"text\":\"" << label << "\","
+       << "\"px\":" << num(text_px) << ",\"color\":[0,255,255]}";
     // 位姿轴 (x红/y绿/z蓝, OpenCV BGR 顺序): 3 条从原点出发的线段
     if (d.has_pose && d.axis_pts.size() == 4) {
       const cv::Point2f & o = d.axis_pts[0];

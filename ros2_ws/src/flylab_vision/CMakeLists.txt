@@ -23,137 +23,68 @@ find_package(ament_index_cpp REQUIRED)
 # 系统 OpenCV 4.5.x DNN 解析不了 yolo26 的 attention Split 节点, 推理交给 ort;
 # dnn 组件仍保留 (只借用 cv::dnn::NMSBoxes 做 NMS)
 set(ORT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime)
+set(ORT_LIB ${ORT_ROOT}/lib/libonnxruntime.so)
+
+# ---------- 节点层公共工具 (to_bgr / 默认模型路径解析) ----------
+# 仅供 ROS 节点链接; 算法库保持无 ROS 依赖, 不链接本目标
+add_library(vision_common src/common/image_utils.cpp)
+target_include_directories(vision_common PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(vision_common ${OpenCV_LIBS})
+ament_target_dependencies(vision_common sensor_msgs ament_index_cpp)
+
+# ---------- 算法库模板: add_library + 头文件路径 + ort 头 + rpath ----------
+# 额外参数为需要链接的库 (ORT_LIB / 其他算法库); 算法库本身纯 OpenCV, 无 ROS 依赖
+function(flylab_algo target src)
+  add_library(${target} ${src})
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+  target_include_directories(${target} SYSTEM PRIVATE ${ORT_ROOT}/include)
+  target_link_libraries(${target} ${OpenCV_LIBS} ${ARGN})
+  set_target_properties(${target} PROPERTIES INSTALL_RPATH "$ORIGIN")
+endfunction()
+
+# ---------- ROS 展示节点模板: add_executable + 公共依赖 + rpath ----------
+# 额外参数为需要链接的算法库; 节点自动链接 vision_common (图像转换/模型路径),
+# 通信链路封装见 include/common/display_vision_node.hpp
+function(flylab_node target src)
+  add_executable(${target} ${src})
+  target_link_libraries(${target} vision_common ${ARGN})
+  ament_target_dependencies(${target} rclcpp sensor_msgs std_msgs ament_index_cpp)
+  set_target_properties(${target} PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
+endfunction()
 
 # ---------- 核心算法库 (无 ROS 依赖) ----------
-add_library(aruco_detector src/aruco/aruco_detector.cpp)
-target_include_directories(aruco_detector PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(aruco_detector ${OpenCV_LIBS})
+flylab_algo(aruco_detector src/aruco/aruco_detector.cpp)
 
-# ---------- 核心算法库: YOLO 目标检测 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_detector src/yolo/yolo_detector.cpp)
-target_include_directories(yolo_detector PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_detector ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
-
-# ---------- 核心算法库: YOLO 图像分类 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_classifier src/yolo/yolo_classifier.cpp)
-target_include_directories(yolo_classifier PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_classifier ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
-
-# ---------- 核心算法库: YOLO 单目深度估计 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_depth src/yolo/yolo_depth.cpp)
-target_include_directories(yolo_depth PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_depth ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
-
-# ---------- 核心算法库: YOLO OBB 旋转框检测 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_obb src/yolo/yolo_obb.cpp)
-target_include_directories(yolo_obb PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_obb ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
-
-# ---------- 核心算法库: YOLO 姿态估计 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_pose src/yolo/yolo_pose.cpp)
-target_include_directories(yolo_pose PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_pose ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
-
-# ---------- 核心算法库: YOLO 实例分割 (无 ROS 依赖, onnxruntime 推理) ----------
+# 各任务一个子目录: src/yolo/<task>/ (算法库 + 展示节点成对放置)
+flylab_algo(yolo_detector src/yolo/detector/yolo_detector.cpp ${ORT_LIB})
+flylab_algo(yolo_classifier src/yolo/classifier/yolo_classifier.cpp ${ORT_LIB})
+flylab_algo(yolo_depth src/yolo/depth/yolo_depth.cpp ${ORT_LIB})
+flylab_algo(yolo_obb src/yolo/obb/yolo_obb.cpp ${ORT_LIB})
+flylab_algo(yolo_pose src/yolo/pose/yolo_pose.cpp ${ORT_LIB})
 # 链接 yolo_detector 复用 coco_names() (分割同为 COCO 80 类)
-add_library(yolo_segment src/yolo/yolo_segment.cpp)
-target_include_directories(yolo_segment PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_segment yolo_detector ${OpenCV_LIBS})
+flylab_algo(yolo_segment src/yolo/segment/yolo_segment.cpp yolo_detector ${ORT_LIB})
+flylab_algo(yolo_semantic src/yolo/semantic/yolo_semantic.cpp ${ORT_LIB})
 
-# ---------- 核心算法库: YOLO 语义分割 (无 ROS 依赖, onnxruntime 推理) ----------
-add_library(yolo_semantic src/yolo/yolo_semantic.cpp)
-target_include_directories(yolo_semantic PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  ${ORT_ROOT}/include
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(yolo_semantic ${OpenCV_LIBS} ${ORT_ROOT}/lib/libonnxruntime.so)
+# ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
+flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
+flylab_node(yolo_detector_node src/yolo/detector/yolo_detector_node.cpp yolo_detector)
+flylab_node(yolo_cls_node src/yolo/classifier/yolo_cls_node.cpp yolo_classifier)
+flylab_node(yolo_depth_node src/yolo/depth/yolo_depth_node.cpp yolo_depth)
+flylab_node(yolo_obb_node src/yolo/obb/yolo_obb_node.cpp yolo_obb)
+flylab_node(yolo_pose_node src/yolo/pose/yolo_pose_node.cpp yolo_pose)
+flylab_node(yolo_segment_node src/yolo/segment/yolo_segment_node.cpp yolo_segment)
+flylab_node(yolo_semantic_node src/yolo/semantic/yolo_semantic_node.cpp yolo_semantic)
 
-# ---------- ROS2 节点: YOLO 目标检测 (默认模型 share/<pkg>/models/detect/) ----------
-add_executable(yolo_detect_node src/yolo/yolo_node.cpp)
-target_link_libraries(yolo_detect_node yolo_detector)
-ament_target_dependencies(
-  yolo_detect_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO 图像分类 (默认模型 share/<pkg>/models/classify/) ----------
-add_executable(yolo_cls_node src/yolo/yolo_cls_node.cpp)
-target_link_libraries(yolo_cls_node yolo_classifier)
-ament_target_dependencies(
-  yolo_cls_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO 单目深度估计 (默认模型 share/<pkg>/models/depth/) ----------
-add_executable(yolo_depth_node src/yolo/yolo_depth_node.cpp)
-target_link_libraries(yolo_depth_node yolo_depth)
-ament_target_dependencies(
-  yolo_depth_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO OBB 旋转框检测 (默认模型 share/<pkg>/models/obb/) ----------
-add_executable(yolo_obb_node src/yolo/yolo_obb_node.cpp)
-target_link_libraries(yolo_obb_node yolo_obb)
-ament_target_dependencies(
-  yolo_obb_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO 姿态估计 (默认模型 share/<pkg>/models/pose/) ----------
-add_executable(yolo_pose_node src/yolo/yolo_pose_node.cpp)
-target_link_libraries(yolo_pose_node yolo_pose)
-ament_target_dependencies(
-  yolo_pose_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO 实例分割 (默认模型 share/<pkg>/models/segment/) ----------
-add_executable(yolo_segment_node src/yolo/yolo_segment_node.cpp)
-target_link_libraries(yolo_segment_node yolo_segment)
-ament_target_dependencies(
-  yolo_segment_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-
-# ---------- ROS2 节点: YOLO 语义分割 (默认模型 share/<pkg>/models/semantic/) ----------
-add_executable(yolo_semantic_node src/yolo/yolo_semantic_node.cpp)
-target_link_libraries(yolo_semantic_node yolo_semantic)
-ament_target_dependencies(
-  yolo_semantic_node rclcpp sensor_msgs std_msgs ament_index_cpp)
-# 安装后 libonnxruntime 在 lib/ 根目录, 各目标按相对位置解析
-set_target_properties(yolo_detector PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_classifier PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_depth PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_obb PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_pose PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_segment PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_semantic PROPERTIES INSTALL_RPATH "$ORIGIN")
-set_target_properties(yolo_detect_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_cls_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_depth_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_obb_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_pose_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_segment_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-set_target_properties(yolo_semantic_node PROPERTIES INSTALL_RPATH "$ORIGIN/../;$ORIGIN")
-
-# ---------- ROS2 节点: 地面站视觉工具链路 ----------
-add_executable(aruco_node src/aruco/aruco_node.cpp)
-target_link_libraries(aruco_node aruco_detector)
-ament_target_dependencies(aruco_node rclcpp sensor_msgs std_msgs)
-
-# ---------- ROS2 节点: 飞行控制 (ArUco 视觉降落 / 后续目标追踪控制等, 执行层见 include/control/) ----------
+# ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
+# 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
 add_executable(aruco_landing_node src/aruco/aruco_landing_node.cpp)
-target_link_libraries(aruco_landing_node aruco_detector)
-ament_target_dependencies(aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
+target_link_libraries(aruco_landing_node aruco_detector vision_common)
+ament_target_dependencies(
+  aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 
 # 模型权重装到 share/<pkg>/models/, 各节点经 ament_index 解析默认路径。
 # 只装 .onnx 推理模型: .pt 是训练权重 (~200MB), 运行时无用, 不随包拷贝
@@ -165,8 +96,9 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib
   FILES_MATCHING PATTERN "libonnxruntime*")
 
-install(TARGETS aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic
-  aruco_node yolo_detect_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node aruco_landing_node
+install(TARGETS vision_common
+  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic
+  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node aruco_landing_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

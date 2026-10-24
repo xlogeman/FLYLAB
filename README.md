@@ -134,43 +134,62 @@ ros2 run flylab_tools ground_station   # 地面站总界面
 
 ### 4.2. flylab_vision 算法包
 
-ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解耦：核心库纯 OpenCV 不依赖 ROS，节点只是薄壳。
+ament_cmake 包（`ros2_ws/src/flylab_vision`），算法与地面站彻底解耦：核心库纯 OpenCV 不依赖 ROS，节点继承 `DisplayVisionNode` 基类只填算法差异（`process()`/`clear_json()`），通信/启停/标注/诊断链路全部下沉到公共层。
 
 ```
 flylab_vision/
-├── include/aruco/aruco_detector.hpp        # 核心检测库接口 (无 ROS 依赖)
-├── include/yolo/yolo_detector.hpp          # YOLO 目标检测库接口 (pimpl 隔离 onnxruntime)
-├── include/yolo/yolo_classifier.hpp        # YOLO 图像分类库接口 (同上)
-├── include/yolo/yolo_depth.hpp             # YOLO 单目深度估计库接口 (同上)
-├── include/yolo/yolo_obb.hpp               # YOLO OBB 旋转框检测库接口 (同上)
-├── include/yolo/yolo_pose.hpp              # YOLO 姿态估计库接口 (同上)
-├── include/control/                        # PX4 执行层 (可复用组件, 业务无关)
-│   ├── px4_offboard_client.hpp             #   总入口 (使用文档 + 兼容别名)
-│   ├── px4_offboard_client_base.hpp        #   公共接口 (基类 + 坐标约定: FRD 速度 / NED 位置)
-│   ├── px4_offboard_client_mavros.hpp      #   MAVROS 链路实现 (与 tracker_mavros 同一套话题/服务)
-│   └── px4_offboard_client_uxrce.hpp       #   uXRCE-DDS 直连实现 (与 tracker_uxrce 同一套 /fmu 话题)
+├── include/common/                          # ★ 节点公共层
+│   ├── image_utils.hpp                      #   to_bgr / 默认模型路径解析 (vision_common 库)
+│   └── display_vision_node.hpp              #   展示型节点基类: 地面站链路 (订阅/启停/标注/诊断) 全封装
+├── include/aruco/aruco_detector.hpp         # 核心检测库接口 (无 ROS 依赖)
+├── include/yolo/yolo_detector.hpp           # YOLO 目标检测库接口 (pimpl 隔离 onnxruntime)
+├── include/yolo/yolo_classifier.hpp         # YOLO 图像分类库接口 (同上)
+├── include/yolo/yolo_depth.hpp              # YOLO 单目深度估计库接口 (同上)
+├── include/yolo/yolo_obb.hpp                # YOLO OBB 旋转框检测库接口 (同上)
+├── include/yolo/yolo_pose.hpp               # YOLO 姿态估计库接口 (同上)
+├── include/yolo/yolo_segment.hpp            # YOLO 实例分割库接口 (同上)
+├── include/yolo/yolo_semantic.hpp           # YOLO 语义分割库接口 (同上)
+├── include/control/                         # PX4 执行层 (可复用组件, 业务无关)
+│   ├── px4_offboard_client.hpp              #   总入口 (使用文档 + 兼容别名)
+│   ├── px4_offboard_client_base.hpp         #   公共接口 (基类 + 坐标约定: FRD 速度 / NED 位置)
+│   ├── px4_offboard_client_mavros.hpp       #   MAVROS 链路实现 (与 tracker_mavros 同一套话题/服务)
+│   └── px4_offboard_client_uxrce.hpp        #   uXRCE-DDS 直连实现 (与 tracker_uxrce 同一套 /fmu 话题)
+├── src/common/image_utils.cpp               # 公共工具实现 (仅节点链接, 算法库不依赖)
 ├── src/aruco/
-│   ├── aruco_detector.cpp                  # 检测 / IPPE_SQUARE 位姿
-│   ├── aruco_node.cpp                      # 检测展示节点
-│   └── aruco_landing_node.cpp              # 降落业务节点 (三态状态机)
-├── src/yolo/
-│   ├── yolo_detector.cpp                   # onnxruntime 推理 (letterbox/解码/NMS)
-│   ├── yolo_node.cpp                       # 检测展示节点 (yolo_detect_node)
-│   ├── yolo_classifier.cpp                 # 分类 onnxruntime 推理 + top-k
-│   ├── yolo_cls_node.cpp                   # 分类展示节点 (yolo_cls_node)
-│   ├── yolo_depth.cpp                      # 深度 onnxruntime 推理 + 伪彩 JPEG 编码
-│   ├── yolo_depth_node.cpp                 # 深度展示节点 (yolo_depth_node, image 图元)
-│   ├── yolo_obb.cpp                        # OBB 旋转框检测: onnxruntime 推理 + 旋转框 NMS (rotatedRectangleIntersection)
-│   └── yolo_obb_node.cpp                   # OBB 展示节点 (yolo_obb_node, 4 角点闭合多边形 + 文字标注)
-│   ├── yolo_pose.cpp                       # 姿态估计: onnxruntime 推理 + 17 关键点解码 + 水平框 NMS
-│   ├── yolo_pose_node.cpp                  # 姿态展示节点 (yolo_pose_node, 骨架连线 + 可见关键点)
-├── thirdparty/onnxruntime/                 # 预编译推理库 (系统 OpenCV 4.5.x DNN 不支持 yolo26)
-├── models/<task>/                          # 预训练权重按任务分类
+│   ├── aruco_detector.cpp                   # 检测 / IPPE_SQUARE 位姿
+│   ├── aruco_node.cpp                       # 检测展示节点
+│   └── aruco_landing_node.cpp               # 降落业务节点 (三态状态机)
+├── src/yolo/                               # 每任务一个子目录 (算法库 + 展示节点成对放置)
+│   ├── detector/
+│   │   ├── yolo_detector.cpp               # onnxruntime 推理 (letterbox/解码/NMS)
+│   │   └── yolo_detector_node.cpp          # 检测展示节点 (yolo_detector_node)
+│   ├── classifier/
+│   │   ├── yolo_classifier.cpp             # 分类 onnxruntime 推理 + top-k
+│   │   └── yolo_cls_node.cpp               # 分类展示节点 (yolo_cls_node)
+│   ├── depth/
+│   │   ├── yolo_depth.cpp                  # 深度 onnxruntime 推理 + 伪彩 JPEG 编码
+│   │   └── yolo_depth_node.cpp             # 深度展示节点 (yolo_depth_node, image 图元)
+│   ├── obb/
+│   │   ├── yolo_obb.cpp                    # OBB 旋转框检测: onnxruntime 推理 + 旋转框 NMS (rotatedRectangleIntersection)
+│   │   └── yolo_obb_node.cpp               # OBB 展示节点 (yolo_obb_node, 4 角点闭合多边形 + 文字标注)
+│   ├── pose/
+│   │   ├── yolo_pose.cpp                   # 姿态估计: onnxruntime 推理 + 17 关键点解码 + 水平框 NMS
+│   │   └── yolo_pose_node.cpp              # 姿态展示节点 (yolo_pose_node, 骨架连线 + 可见关键点)
+│   ├── segment/
+│   │   ├── yolo_segment.cpp                # 实例分割: onnxruntime 推理 + 掩码轮廓提取
+│   │   └── yolo_segment_node.cpp           # 实例分割展示节点 (yolo_segment_node, 掩码多边形 + 检测框)
+│   └── semantic/
+│       ├── yolo_semantic.cpp               # 语义分割: onnxruntime 推理 + cityscapes 配色 + 中值滤波
+│       └── yolo_semantic_node.cpp          # 语义分割展示节点 (yolo_semantic_node, 配色画中画 + 图例)
+├── thirdparty/onnxruntime/                  # 预编译推理库 (系统 OpenCV 4.5.x DNN 不支持 yolo26)
+├── models/<task>/                           # 预训练权重按任务分类
 └── CMakeLists.txt / package.xml
 ```
 
 | 目标 | 说明 |
 |---|---|
+| `libvision_common` | 节点层公共工具（`to_bgr` 图像转换 / 默认模型路径解析）；仅供节点链接，算法库保持无 ROS 依赖 |
+| `DisplayVisionNode`（基类） | 展示型节点公共链路：订阅地面站显示帧、`start/stop` 启停与清屏、标注发布（base64 大图自动限深 QoS）、2s 无帧自检告警、首帧/首帧推理日志；子类只填指令词/分组/文案 + 实现 `process()`/`clear_json()` |
 | `libaruco_detector` | 纯算法库：检测 + 位姿解算（等价 legacy `estimatePoseSingleMarkers`）+ 分组标注 JSON；兼容 OpenCV 4.5（Humble 系统源）与 4.7+ 双 API |
 | `aruco_node` | 订阅显示帧话题 + 启停指令，检测结果转 JSON 标注回传；每 2s 自检——收不到帧主动告警（地面站未运行/画面源无图/话题不一致） |
 | `aruco_landing_node` | 视觉降落节点（见 4.3）；执行层经 `px4_offboard_client` 双链路组件，`link` 参数选 MAVROS / uXRCE |
@@ -184,7 +203,14 @@ ros2 run flylab_vision aruco_node --ros-args \
 ```
 
 节点可视化输出（每个码 7 个图元）：绿色四边形轮廓（贴码真实形状）+ 红/蓝/绿三条位姿轴 + 红中心点 + 红首角点 + 黄色 `id=z距离` 文字，全部经统一标注接口叠加到地面站画面。
-**新增算法**：并列建 `include/<算法>/` + `src/<算法>/`，CMake 加对应库/可执行目标，`config.ALGORITHMS` 注册即可——复用标注接口与地面站交互，体验与 ArUco 完全一致。
+
+**新增算法**（展示型，接入地面站）：
+1. 并列建 `include/<算法>/` + `src/<算法>/`——算法库纯 OpenCV 不碰 ROS，标注序列化函数放库里
+2. 节点继承 `DisplayVisionNode`，构造函数声明参数并加载算法后调 `log_ready()`，实现 `process()`（逐帧推理 → 标注 JSON）与 `clear_json()`（停止清屏）即可，通信代码零编写
+3. CMakeLists 两行模板：`flylab_algo(<库名> src/<算法>/<库>.cpp ${ORT_LIB})` + `flylab_node(<节点名> src/<算法>/<节点>.cpp <库名>)`
+4. `config.ALGORITHMS` 注册即出现在地面站下拉框，体验与 ArUco 完全一致
+
+参考实现：`yolo_obb_node.cpp`（最简展示节点，~110 行）。
 
 **独立调试 CLI**：根目录 `python3 aruco_detector.py --image/--video/--camera/--gen`（图像/视频/摄像头检测与测试图生成），功能与包内节点共用同一套检测参数约定。
 

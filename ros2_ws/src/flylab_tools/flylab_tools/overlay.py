@@ -20,7 +20,10 @@ std_msgs/String。坐标一律为原图像素坐标。
       可选 "fill": true 将闭合多边形填充为半透明色块 (实例分割掩码用),
       配套 "fill_alpha" 控制填充不透明度 0~1 (省略 = 0.45), 轮廓线仍正常描边
   {"type": "text",     "pos": [x, y],         "text": "fps 30", "color": ...}
-      自由文字 (可选 "align": "right" 表示 pos.x 为文字右边缘, 用于右上角)
+      自由文字 (可选 "align": "right" 表示 pos.x 为文字右边缘, 用于右上角;
+      可选 "size": 字号偏移 int, 相对基准字号, 缺省 +1 即加粗放大一号;
+      可选 "px": 文字像素高 float (原图像素), 指定后随显示缩放等比渲染,
+      优先于 size —— 用于字号跟检测目标尺寸成比例的场景, 如 ArUco 码标签)
   {"type": "image",    "pos": [x, y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}
       位图叠加 (深度图等稠密图像类算法输出): pos 为原图坐标左上角,
       w 为绘制宽度 (原图像素, 高按图像纵横比), 省略则按图像原生尺寸;
@@ -110,9 +113,19 @@ def normalize(anno):
         align = anno.get('align', 'left')
         if align not in ('left', 'right'):
             align = 'left'
+        try:
+            size = int(anno.get('size', 1))
+        except (TypeError, ValueError):
+            size = 1
+        try:
+            px = float(anno.get('px', 0))
+        except (TypeError, ValueError):
+            px = 0.0
         return {'type': 'text', 'pos': [float(v) for v in pos],
                 'text': str(anno.get('text', '')),
                 'align': align,
+                'size': size,
+                'px': px,
                 'color': _color(anno.get('color'))}
     return None
 

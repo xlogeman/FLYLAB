@@ -35,6 +35,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "aruco/aruco_detector.hpp"
+#include "common/image_utils.hpp"
 #include "control/px4_offboard_client.hpp"
 
 namespace flylab_vision
@@ -51,37 +52,6 @@ constexpr const char kStatusLanding[] = "landing";       // 已切 AUTO.LAND
 constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机上锁)
 constexpr const char kStatusIdle[] = "idle";             // 流程结束/取消/中止
 constexpr double kStartPendingTimeout = 15.0;  // 挂起的 landing_start 等待飞控状态的最长时间 (s)
-
-/// sensor_msgs/Image -> BGR cv::Mat (与 aruco_node 相同的手动转换, 不依赖 cv_bridge)
-cv::Mat to_bgr(const sensor_msgs::msg::Image & msg)
-{
-  int ch = 0;
-  int code = 0;
-  if (msg.encoding == "bgr8") {
-    ch = 3;
-  } else if (msg.encoding == "rgb8") {
-    ch = 3;
-    code = cv::COLOR_RGB2BGR;
-  } else if (msg.encoding == "mono8") {
-    ch = 1;
-    code = cv::COLOR_GRAY2BGR;
-  } else {
-    return {};
-  }
-  const size_t expect = static_cast<size_t>(msg.height) * msg.width * ch;
-  if (msg.height == 0 || msg.width == 0 || msg.data.size() < expect) {
-    return {};
-  }
-  const int type = ch == 3 ? CV_8UC3 : CV_8UC1;
-  cv::Mat m(
-    msg.height, msg.width, type,
-    const_cast<uint8_t *>(msg.data.data()), msg.step);
-  cv::Mat out = m.clone();
-  if (code) {
-    cv::cvtColor(out, out, code);
-  }
-  return out;
-}
 
 double clampd(double v, double lim)
 {

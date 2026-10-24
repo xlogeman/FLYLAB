@@ -308,10 +308,15 @@ class VideoLabel(QLabel):
                 if not text:
                     continue
                 painter.save()
-                # 加粗放大一号, 空拍画面里也醒目
                 f = painter.font()
                 f.setBold(True)
-                f.setPointSize(f.pointSize() + 1)
+                if a.get('px'):
+                    # 标注指定文字像素高 (原图像素): 乘显示缩放后 setPixelSize,
+                    # 字号与码框在屏幕上等比 (窗口缩放不失比例)
+                    f.setPixelSize(max(4, int(a['px'] * scale)))
+                else:
+                    # 缺省: 基准字号 + 偏移 (a['size'], 缺省 +1), 空拍画面里醒目
+                    f.setPointSize(f.pointSize() + a.get('size', 1))
                 painter.setFont(f)
                 fm = painter.fontMetrics()
                 tw = fm.horizontalAdvance(text)
