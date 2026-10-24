@@ -8,21 +8,88 @@
 算法进程生命周期也由这里管理: 配了 cmd 的算法, 点运行自动拉起进程,
 点取消自动回收 (未配 cmd 则假定节点已在外部运行, 只发启停指令)。
 """
+import html
 import os
+import re
 import signal
 import subprocess
+import threading
 import time
 
 import rclpy
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QMainWindow,
-                           QPushButton, QVBoxLayout, QWidget)
+                           QMenu, QPlainTextEdit, QPushButton, QToolBar,
+                           QToolButton, QVBoxLayout, QWidget)
 
 from . import config
 from .camera_widget import CameraViewWidget
 
 
+class LogPanel(QPlainTextEdit):
+    """画面下方日志框 (只读, 与画面同宽): 分流终端日志到界面, 免切终端。
+
+    抗日志风暴设计 (实测 PX4 控制台循环刷屏时, 逐行 appendHtml+滚底
+    会把 GUI 事件队列灌满 —— 日志疯狂上滚、菜单失灵、点击无响应):
+    行先入内存缓冲 (O(1), 不触发渲染), 定时器批量上屏并限速;
+    缓冲满丢最旧并计数, 恢复后补一条折叠提示。渲染节奏恒定,
+    无论上游刷多快, GUI 线程都不被拖垮。
+    maximumBlockCount 限行数, 旧行自动丢弃防内存膨胀。"""
+
+    _COLORS = {'WARNING': '#b8860b', 'ERROR': '#b03030', 'FATAL': '#b03030',
+               'PX4': '#4a6a8a'}
+    _FLUSH_MS = 200        # 批量上屏周期
+    _MAX_PENDING = 400     # 缓冲上限 (超出丢最旧, 计数待折叠提示)
+    _MAX_PER_FLUSH = 80    # 每次刷新最多上屏行数 (渲染限速)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setMaximumBlockCount(800)
+        self.setMinimumHeight(100)
+        self.setStyleSheet(
+            'QPlainTextEdit { font-family: monospace; font-size: 12px; '
+            'background: #fafafa; border: 1px solid #ccc; }')
+        self._buf = []      # 待上屏行 (level, text)
+        self._dropped = 0   # 风暴期间被丢弃的行数
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._flush)
+        self._timer.start(self._FLUSH_MS)
+
+    def append_line(self, level, text):
+        """入缓冲 (槽, 经信号队列调用恒在 GUI 线程; O(1) 不触发渲染)。"""
+        if len(self._buf) >= self._MAX_PENDING:
+            self._dropped += 1
+            return
+        self._buf.append((level, text))
+
+    def _flush(self):
+        """批量上屏: 每周期最多 _MAX_PER_FLUSH 行, 一次 appendHtml 一行,
+        滚动条只在批次末尾归位一次 (风暴时渲染量恒定, 不随上游速率变化)。"""
+        if not self._buf:
+            return
+        if self._dropped:
+            self._render('INFO', f'… (日志过密, 已折叠 {self._dropped} 条)')
+            self._dropped = 0
+        for level, text in self._buf[:self._MAX_PER_FLUSH]:
+            self._render(level, text)
+        del self._buf[:self._MAX_PER_FLUSH]
+
+    def _render(self, level, text):
+        color = self._COLORS.get(level, '#333')
+        ts = time.strftime('%H:%M:%S')
+        self.appendHtml(
+            f'<span style="color:#999">{ts}</span> '
+            f'<b style="color:{color}">{html.escape(level)}</b> '
+            f'{html.escape(text)}')
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+
 class MainWindow(QMainWindow):
+    # 日志行 (level, text) —— 任意线程可 emit, 经队列投递到 GUI 线程上屏
+    log_line = pyqtSignal(str, str)
+
     def __init__(self, node):
         super().__init__()
         self.setWindowTitle('FLYLAB 地面站')
@@ -34,23 +101,46 @@ class MainWindow(QMainWindow):
             self.node.get_logger().info, host, config.AIRSIM_RPC_PORT,
             side_panel=True)
 
-        # 算法选择: 下拉框选算法 + 运行/取消按钮, 插到右栏输入源下方。
-        # 同一时刻只跑一个算法; 运行中下拉框锁定, 取消后恢复。
-        # 配了 cmd 的算法点运行时自动拉起进程 (用户无需手动 ros2 run)
+        # 画面下方日志框: rclpy 日志经 TeeLogger 分流到界面 (先挂 sink 再继续,
+        # 抓取线程等后续日志都能上屏); 跨线程经 log_line 信号队列投递
+        self.log_panel = LogPanel()
+        self.log_line.connect(self.log_panel.append_line)
+        self.camera_tab.add_bottom_widget(self.log_panel)
+        self.node.set_log_sink(
+            lambda level, text: self.log_line.emit(level, text))
+
+        # 进程/状态句柄 (工具栏按钮的构建依赖这些, 必须先于按钮创建)
         self.running_algo = None
         self.proc = None       # 本地面站拉起的算法进程 (Popen), 无则 None
         self.land_proc = None  # ArUco 降落节点进程 (独立于算法进程)
         self._last_landing_seq = 0  # 已处理的降落状态事件序号
         # 通信链路进程 (地面站一键拉起, 省开终端): uXRCE-DDS Agent / MAVROS
-        self.link_procs = {}   # key -> Popen
-        self.link_btns = {}    # key -> QPushButton
-        self.link_titles = {}  # key -> 按钮标题 (日志用)
+        self.link_procs = {}   # key -> Popen (有存活进程 = 链路开启中)
+        # PX4 SITL 进程 (工具栏菜单选机型, 选中即启动)
+        self.px4_proc = None
+        self.px4_title = ''
+        self.px4_model = None  # 当前选中/运行中的机型 (config.PX4_MODELS 项)
         # 显示帧转发统计 (运行中每 2 秒打一条日志; 计数在转发线程累计)
         self._fwd_last = time.monotonic()
         self._algo_started_at = 0.0   # 算法进程启动时刻 (发现窗口内不告警)
         self._last_src = ''
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
+
+        # 顶部工具栏 (VS Code 风格): 工具按钮横排, 后续新功能往右加。
+        # 第一项: 视频源选择 (QToolButton, 点击弹出菜单, 见 camera_widget)
+        self.toolbar = QToolBar()
+        self.toolbar.setMovable(False)
+        self.toolbar.setStyleSheet('QToolBar { spacing: 6px; padding: 2px 6px; }')
+        self.camera_tab.src_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.toolbar.addWidget(self.camera_tab.src_btn)
+        self.toolbar.addWidget(self._build_px4_button())
+        self.toolbar.addWidget(self._build_link_button())
+        self.addToolBar(self.toolbar)
+
+        # 算法选择: 下拉框选算法 + 运行/取消按钮, 插到右栏输入源下方。
+        # 同一时刻只跑一个算法; 运行中下拉框锁定, 取消后恢复。
+        # 配了 cmd 的算法点运行时自动拉起进程 (用户无需手动 ros2 run)
         self.algo_panel = QGroupBox('算法')
         algo_lay = QVBoxLayout(self.algo_panel)
         algo_lay.setContentsMargins(6, 4, 6, 6)
@@ -84,9 +174,9 @@ class MainWindow(QMainWindow):
         self.landing_btn.setStyleSheet(self._LAND_BTN_STYLE)
         self.landing_btn.clicked.connect(self._on_landing_toggle)
         algo_lay.addWidget(self.landing_btn)
-        # 右栏三个分组框: 输入源 / 云台 (camera_widget) + 算法 / 通信链路 (这里)
+        # 右栏分组框: 云台 (camera_widget) + 算法 (这里);
+        # 输入源 / PX4 SITL / 通信链路已上移到顶部工具栏
         self.camera_tab.add_side_widget(self.algo_panel)
-        self.camera_tab.add_side_widget(self._build_link_panel())
 
         self.setCentralWidget(self.camera_tab)
 
@@ -100,40 +190,62 @@ class MainWindow(QMainWindow):
         QPushButton:checked { background-color: #2d8a3e; color: white; }
     """
 
-    # ---------- 通信链路面板 (uXRCE-DDS / MAVROS 一键起停) ----------
+    # 工具栏按钮统一样式 (QToolButton: 视频源 / PX4 SITL / 通信链路)
+    _TOOL_BTN_STYLE = """
+        QToolButton { min-height: 24px; padding: 2px 10px; border: 1px solid #bbb;
+                      border-radius: 4px; background: #f6f6f6; }
+        QToolButton:hover { background: #e8e8e8; }
+        QToolButton:checked { background-color: #2d8a3e; color: white;
+                              border-color: #2d8a3e; }
+    """
 
-    def _build_link_panel(self):
-        """通信链路分组: 两个 toggle 按钮并排一行, 互斥 (一次只开一条链路)"""
-        box = QGroupBox('通信链路')
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(6, 4, 6, 6)
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        for key, text, cmd in (
-                ('uxrce', 'uXRCE-DDS', config.UXRCE_CMD),
-                ('mavros', 'MAVROS', config.MAVROS_CMD)):
-            btn = QPushButton(text)
-            btn.setCheckable(True)
-            btn.setStyleSheet(self._BTN_STYLE)
-            btn.setToolTip(' '.join(cmd))
-            # toggled (而非 clicked): 状态变化即处理, 便于互斥时联动另一条链路
-            btn.toggled.connect(
-                lambda checked, k=key, c=cmd, t=text: self._on_link_toggled(k, checked, c, t))
-            row.addWidget(btn, stretch=1)
-            self.link_btns[key] = btn
-            self.link_titles[key] = text
-        lay.addLayout(row)
-        return box
+    # ---------- 通信链路 (工具栏下拉按钮: 菜单勾选起停) ----------
 
-    def _on_link_toggled(self, key, checked, cmd, title):
-        """链路按钮 toggle: 起/停对应桥进程; 两条链路互斥, 开启一条先停另一条。"""
-        if not checked:
+    _LINKS = (  # (key, 菜单显示名, 启动命令)
+        ('uxrce', 'uXRCE-DDS', config.UXRCE_CMD),
+        ('mavros', 'MAVROS', config.MAVROS_CMD),
+    )
+
+    def _build_link_button(self):
+        """通信链路工具按钮: 点击弹出链路菜单 (✓=开启中), 点已勾选项即停,
+        点其他项先停旧的再开 (互斥)。按钮文字跟随当前链路。"""
+        self.link_btn = QToolButton()
+        self.link_btn.setText('通信链路')
+        self.link_btn.setPopupMode(QToolButton.InstantPopup)
+        self.link_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.link_btn.setToolTip(
+            '起/停通信链路 (互斥): uXRCE-DDS Agent / MAVROS 桥, '
+            '悬停菜单项可看启动命令')
+        menu = QMenu(self.link_btn)
+        self.link_btn.setMenu(menu)
+        menu.aboutToShow.connect(self._rebuild_link_menu)
+        menu.triggered.connect(self._on_link_action)
+        return self.link_btn
+
+    def _rebuild_link_menu(self):
+        """重建链路菜单: 每条链路一个勾选项 (✓=开启中)。"""
+        menu = self.link_btn.menu()
+        menu.clear()
+        running = self._selected_link()
+        for key, text, cmd in self._LINKS:
+            act = menu.addAction(text)
+            act.setData(key)
+            act.setCheckable(True)
+            act.setChecked(key == running)
+            act.setToolTip(' '.join(cmd))
+
+    def _on_link_action(self, act):
+        """菜单点击: 已开启的链路点击即停; 选其他链路先停旧的再开 (互斥)。"""
+        key = act.data()
+        entry = next((e for e in self._LINKS if e[0] == key), None)
+        if entry is None:
+            return
+        _, title, cmd = entry
+        if self._selected_link() == key:
             self._stop_link(key, title)
             return
-        # 互斥: 开启一条链路前, 把另一条停掉 (按钮一起弹起)
-        for other_key, other_btn in self.link_btns.items():
-            if other_key != key and other_btn.isChecked():
-                self._stop_link(other_key, self.link_titles.get(other_key))
+        for other in [k for k in self.link_procs if k != key]:
+            self._stop_link(other)
         self._start_link(key, cmd, title)
 
     def _start_link(self, key, cmd, title):
@@ -147,9 +259,10 @@ class MainWindow(QMainWindow):
         except (OSError, FileNotFoundError) as e:
             self.node.get_logger().error(
                 f'{title} 启动失败: {e} (可执行文件是否在 PATH?)')
-            self._set_link_btn(key, False)
+            self._update_link_btn_text()
             return
         self.link_procs[key] = proc
+        self._update_link_btn_text()
         # 0.5s 后自检: 立即退出说明命令有问题 (端口占用/二进制缺失)
         QTimer.singleShot(500, lambda: self._verify_link(key, title))
 
@@ -162,12 +275,12 @@ class MainWindow(QMainWindow):
             f'{title} 启动后立即退出 (退出码 {proc.returncode}), '
             f'请检查端口占用 / 二进制是否存在')
         self.link_procs.pop(key, None)
-        self._set_link_btn(key, False)
+        self._update_link_btn_text()
 
     def _stop_link(self, key, title=None):
         """停止桥进程: SIGTERM 整个进程组, 超时再 SIGKILL。"""
         proc = self.link_procs.pop(key, None)
-        self._set_link_btn(key, False)
+        self._update_link_btn_text()
         if proc is None or proc.poll() is not None:
             return
         try:
@@ -183,15 +296,6 @@ class MainWindow(QMainWindow):
                 proc.kill()
         self.node.get_logger().info(f'通信链路已停止: {title or key}')
 
-    def _set_link_btn(self, key, checked):
-        """同步按钮状态 (blockSignals 避免触发 toggle 回调重启进程)。"""
-        btn = self.link_btns.get(key)
-        if btn is None:
-            return
-        btn.blockSignals(True)
-        btn.setChecked(checked)
-        btn.blockSignals(False)
-
     def _check_link_alive(self):
         """轮询: 桥进程异常退出则复位按钮 (用户可重新点起)。"""
         for key, proc in list(self.link_procs.items()):
@@ -199,12 +303,160 @@ class MainWindow(QMainWindow):
                 self.node.get_logger().error(
                     f'通信链路进程退出 (退出码 {proc.returncode}), 请重新点击启动')
                 self.link_procs.pop(key, None)
-                self._set_link_btn(key, False)
+                self._update_link_btn_text()
+
+    def _update_link_btn_text(self):
+        """按钮文字跟随当前开启的链路, 无则回到"通信链路"。"""
+        running = self._selected_link()
+        title = next((t for k, t, _ in self._LINKS if k == running), None)
+        self.link_btn.setText(f'通信链路: {title}' if title else '通信链路')
 
     _LAND_BTN_STYLE = """
         QPushButton { min-height: 32px; }
         QPushButton:checked { background-color: #b03030; color: white; }
     """
+
+    # ---------- PX4 SITL (工具栏按钮: 菜单选机型, 选中即启动) ----------
+
+    def _build_px4_button(self):
+        """PX4 SITL 工具按钮: 点击弹出机型菜单, 点机型即启动 (运行中选
+        其他机型 = 停旧换新); 菜单末尾"停止 PX4"仅运行中可点。"""
+        self.px4_btn = QToolButton()
+        self.px4_btn.setText('PX4 SITL')
+        self.px4_btn.setPopupMode(QToolButton.InstantPopup)
+        self.px4_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.px4_btn.setToolTip(
+            '启动 PX4 SITL: 选机型即启动 (经 scripts/run-px4.sh, 需先开 '
+            'Windows 端 UE/AirSim); 再点运行中的机型即停止, 选其他机型停旧换新')
+        menu = QMenu(self.px4_btn)
+        self.px4_btn.setMenu(menu)
+        menu.aboutToShow.connect(self._rebuild_px4_menu)
+        menu.triggered.connect(self._on_px4_action)
+        return self.px4_btn
+
+    def _rebuild_px4_menu(self):
+        """重建机型菜单: ✓ = 正在运行; 再点运行中的机型即停止
+        (与通信链路菜单同款交互, 不设独立"停止"项)。"""
+        menu = self.px4_btn.menu()
+        menu.clear()
+        cur = self.px4_model['name'] if self.px4_model else None
+        for model in config.PX4_MODELS:
+            act = menu.addAction(model['name'])
+            act.setData(model['target'])
+            act.setCheckable(True)
+            act.setChecked(model['name'] == cur)
+
+    def _on_px4_action(self, act):
+        """菜单点击: 未运行 → 直接启动; 点运行中的机型 → 停止;
+        运行中点其他机型 → 停旧换新。"""
+        target = act.data()
+        if target is None:
+            return
+        model = next((m for m in config.PX4_MODELS
+                      if m['target'] == target), None)
+        if model is None:
+            return
+        running = self.px4_proc is not None and self.px4_proc.poll() is None
+        if running:
+            was = self.px4_model            # 先记住 (stop 会清掉)
+            self._stop_px4()
+            if was is model:                # 刚才运行的就是它 → 纯停止
+                return
+        self.px4_model = model
+        self._start_px4()
+
+    def _start_px4(self):
+        """拉起 PX4 SITL (独立进程组, 停止时整组回收)。
+        run-px4.sh 内部 make 已编译时秒级启动, 未编译则需等编译完成。"""
+        if self.px4_proc is not None and self.px4_proc.poll() is None:
+            return
+        model = self.px4_model
+        if model is None:
+            return
+        cmd = ['bash', config.PX4_SCRIPT, model['target']]
+        self.px4_title = model['name']
+        self.node.get_logger().info(f'启动 PX4 SITL [{self.px4_title}]: '
+                                    f'{" ".join(cmd)}')
+        try:
+            # start_new_session=True: 子进程独立进程组, 停止时 killpg 整组回收
+            # (make → px4 整棵进程树, 避免残留 px4 占住 /tmp/px4_lock-N)。
+            # 输出接管进界面日志框, 不再依赖终端
+            self.px4_proc = subprocess.Popen(
+                cmd, start_new_session=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, errors='replace')
+        except (OSError, FileNotFoundError) as e:
+            self.node.get_logger().error(f'PX4 SITL 启动失败: {e} '
+                                         f'(检查 {config.PX4_SCRIPT} 是否存在)')
+            self.px4_proc = None
+            self._reset_px4_btn()
+            return
+        threading.Thread(target=self._px4_output_reader,
+                         args=(self.px4_proc,), daemon=True).start()
+        self.px4_btn.setText(f'PX4: {self.px4_title}')
+        # 2s 后自检: 立即退出说明脚本/机型名有问题 (首次 make 编译耗时长,
+        # 进程存活属正常, 不会被误判)
+        QTimer.singleShot(2000, self._verify_px4)
+
+    def _verify_px4(self):
+        """启动后自检: 进程已退出则报错并复位按钮。"""
+        proc = self.px4_proc
+        if proc is None or proc.poll() is None:
+            return
+        self.node.get_logger().error(
+            f'PX4 SITL [{self.px4_title}] 启动后立即退出 (退出码 '
+            f'{proc.returncode}), 检查机型名与 PX4 编译状态')
+        self.px4_proc = None
+        self._reset_px4_btn()
+
+    def _stop_px4(self):
+        """停止 PX4 SITL: SIGTERM 整个进程组, 超时再 SIGKILL。"""
+        proc = self.px4_proc
+        title = self.px4_title
+        self.px4_proc = None
+        self._reset_px4_btn()
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+        self.node.get_logger().info(f'PX4 SITL 已停止: {title}')
+
+    def _reset_px4_btn(self):
+        """按钮复位为空闲态: 文案回 "PX4 SITL", 清除运行中机型 ——
+        菜单的 ✓ 语义是"正在运行", 停止/崩溃/启动失败后不再勾选。"""
+        self.px4_title = ''
+        self.px4_model = None
+        self.px4_btn.setText('PX4 SITL')
+
+    def _check_px4_alive(self):
+        """轮询: PX4 进程异常退出 (崩溃/自爆) 则复位按钮, 用户可重新点起。"""
+        if (self.px4_proc is not None and self.px4_proc.poll() is not None):
+            self.node.get_logger().error(
+                f'PX4 SITL 进程退出 (退出码 {self.px4_proc.returncode}), '
+                f'请重新点击启动')
+            self.px4_proc = None
+            self._reset_px4_btn()
+
+    # PX4/make 输出里的 ANSI 转义序列 (颜色/光标控制), 上屏前剥掉
+    _ANSI_RE = re.compile(r'\x1b\[[0-9;?]*[0-9A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
+
+    def _px4_output_reader(self, proc):
+        """后台线程逐行读 PX4 进程输出 → 界面日志框 (经信号队列进 GUI 线程)。
+        进程被杀/正常退出时管道关闭, 循环自然结束。"""
+        for line in proc.stdout:
+            text = self._ANSI_RE.sub('', line.rstrip())
+            if text:
+                self.log_line.emit('PX4', text)
+
 
     # ---------- 算法运行/取消 (含进程生命周期管理) ----------
 
@@ -259,25 +511,20 @@ class MainWindow(QMainWindow):
     # ---------- ArUco 降落 (独立 toggle 按钮) ----------
 
     def _selected_link(self):
-        """当前选中的通信链路 (uXRCE-DDS / MAVROS), 未选返回 None。"""
-        for key, btn in self.link_btns.items():
-            if btn.isChecked():
-                return key
+        """当前开启的通信链路 (uXRCE-DDS / MAVROS), 未选返回 None。
+        以存活进程为准 (link_procs 只在有进程时持有 key)。"""
+        for key in self.link_procs:
+            return key
         return None
 
     def _update_landing_btn(self):
         """降落按钮门控 (33ms 轮询): 需同时满足
         1) ArUco检测运行中
         2) 云台俯仰到垂直向下限位 (绝对 -90°, 即相对俯仰到 GIMBAL_PITCH_MIN_DEG)
-        3) 下方已选择通信链路 (uXRCE-DDS / MAVROS 之一已开启)
+        3) 已开启通信链路 (uXRCE-DDS / MAVROS 之一)
         降落进行中不参与门控 —— 保持可点, 随时可取消交还控制权;
-        同时禁用链路切换按钮 (换桥会断掉正在跑的降落控制)。"""
-        if self.landing_btn.isChecked():
-            for btn in self.link_btns.values():
-                btn.setEnabled(False)
-            return
-        for btn in self.link_btns.values():
-            btn.setEnabled(True)
+        同时禁用链路下拉按钮 (换桥会断掉正在跑的降落控制)。"""
+        self.link_btn.setEnabled(not self.landing_btn.isChecked())
         ok = False
         algo = self.running_algo
         if (algo is not None and algo.get('enables_landing')
@@ -423,6 +670,7 @@ class MainWindow(QMainWindow):
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
         self._check_algo_alive()
+        self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 按钮弹起)
         self._update_landing_btn()   # 降落按钮门控 (检测运行中 + 云台垂直向下 + 已选链路)
@@ -475,6 +723,7 @@ class MainWindow(QMainWindow):
                 self.node.publish_cmd(config.LANDING_STOP_CMD)
                 self.land_proc.terminate()
             self.land_proc = None
+        self._stop_px4()             # PX4 SITL 随地面站退出一并回收
         for key in list(self.link_procs):
             self._stop_link(key)
         self.camera_tab.shutdown()

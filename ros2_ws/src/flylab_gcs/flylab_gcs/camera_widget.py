@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""输入源视图控件 —— 三类输入源统一到一个下拉框：
+"""输入源视图控件 —— 三类输入源统一到一个工具按钮：
 
   - UE 相机: AirSim RPC (left_cam / front_cam / depth_cam ...)
   - 本机摄像头: local:/dev/videoX
-  - 视频文件: 下拉选"打开视频文件..."弹出文件对话框 (mp4 等, 循环播放)
+  - 视频文件: 菜单选"打开视频文件..."弹出文件对话框 (mp4 等, 循环播放)
+
+源选择是 QToolButton (弹出菜单), 由主窗口放进顶部 QToolBar:
+地面站把它当工具栏第一项, 独立调试窗口仍在画面上方横排。
+后续新工具按钮直接往 QToolBar 右侧加即可。
 
 布局两种模式：
 默认上下排列 (camera_view 独立窗口用)
-side_panel=True 左右排列: 画面在左, 输入源/状态在右, 外部可用
+side_panel=True 左右排列: 画面在左, 云台/状态在右, 外部可用
 add_side_widget() 往右栏插工具按钮 (ground_station 用)
 
 云台面板: AirSim 相机源可用, 方向键步进旋转视角 (按住连发) + 回中,
@@ -17,9 +21,10 @@ import os
 import threading
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout,
-                           QGroupBox, QHBoxLayout, QLabel, QPushButton,
-                           QSlider, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QFileDialog, QFrame, QGridLayout,
+                           QGroupBox, QHBoxLayout, QLabel, QMenu,
+                           QPushButton, QSlider, QToolButton, QVBoxLayout,
+                           QWidget)
 
 from . import config
 from .camera_grabber import (DEFAULT_CAMERAS, FILE_PREFIX, LOCAL_PREFIX,
@@ -30,34 +35,31 @@ FILE_OPEN_ITEM = '打开视频文件...'
 VIDEO_FILTER = '视频 (*.mp4 *.avi *.mkv *.mov *.webm);;所有文件 (*)'
 
 
-class _SourceCombo(QComboBox):
-    """输入源下拉框: 展开时触发重扫本机摄像头 (运行中热插拔即时可见)。"""
-    popup_shown = pyqtSignal()
-    cams_found = pyqtSignal(list)
-
-    def showPopup(self):
-        self.popup_shown.emit()
-        super().showPopup()
-
-
 class CameraViewWidget(QWidget):
+    # 本机摄像头扫描完成 (菜单在展开状态下也能即时补上新设备)
+    cams_found = pyqtSignal()
+
     def __init__(self, log, host, port, side_panel=False, parent=None):
         super().__init__(parent)
         self.log = log
         self.grabber = Grabber(log, host, port)
         self.grabber.start()
-        self._file_map = {}    # 下拉框显示名 -> 视频文件完整路径
-
-        # 输入源下拉框 (展开时重扫本机摄像头, 支持启动后插入设备)
+        self._file_map = {}    # 显示名 -> 视频文件完整路径
         self._scanning = False
-        self.combo = _SourceCombo()          # 只读下拉框, 不允许键盘输入
-        self.combo.addItems(
-            list(DEFAULT_CAMERAS)
-            + [f'{LOCAL_PREFIX}{d}' for d in list_local_cameras()]
-            + [FILE_OPEN_ITEM])
-        self.combo.popup_shown.connect(self._refresh_local_cameras)
-        self.combo.cams_found.connect(self._add_local_cameras)
-        self.combo.activated.connect(self._on_source_changed)
+
+        # 输入源工具按钮 (VS Code 风格工具栏第一项): 点击弹出源菜单,
+        # 按钮文字跟随当前源。菜单展开时后台重扫本机摄像头 (热插拔可见)
+        self._local_cams = list_local_cameras()
+        self.src_btn = QToolButton()
+        self.src_btn.setText(f'视频源: {DEFAULT_CAMERAS[0]}')
+        self.src_btn.setPopupMode(QToolButton.InstantPopup)
+        self.src_btn.setToolTip(
+            '选择视频输入源: UE 相机 / 本机摄像头 / 视频文件')
+        src_menu = QMenu(self.src_btn)
+        self.src_btn.setMenu(src_menu)
+        src_menu.aboutToShow.connect(self._rebuild_src_menu)
+        src_menu.triggered.connect(self._on_src_action)
+        self.cams_found.connect(self._rebuild_src_menu)
 
         self.video = VideoLabel()
         self.status = QLabel('未连接')
@@ -98,8 +100,10 @@ class CameraViewWidget(QWidget):
 
         src_label = QLabel('输入源:')
         if side_panel:                       # 左画面+控制条 / 右栏 (地面站)
+            # 源选择按钮由主窗口放进顶部工具栏, 这里只排画面/右栏
             outer = QHBoxLayout(self)
             left = QVBoxLayout()
+            self._left_layout = left   # 供 add_bottom_widget 往画面下方插控件
             left.addWidget(self.video, stretch=1)
             left.addWidget(self.file_ctrl)
             outer.addLayout(left, stretch=1)
@@ -109,27 +113,21 @@ class CameraViewWidget(QWidget):
             outer.addWidget(line)
             panel = QVBoxLayout()
             outer.addLayout(panel)
-            # 输入源 / 云台 各自成框 (分组标题已说明用途, 框内不再重复标题)
-            src_box = QGroupBox('输入源')
-            src_lay = QVBoxLayout(src_box)
-            src_lay.setContentsMargins(6, 4, 6, 6)
-            src_lay.addWidget(self.combo)
-            panel.addWidget(src_box)
-            self._panel = panel
-            self._panel_stretch_index = panel.count()
             gimbal_box = QGroupBox('云台')
             gim_lay = QVBoxLayout(gimbal_box)
             gim_lay.setContentsMargins(6, 4, 6, 6)
             gim_lay.addWidget(self.gimbal)
             panel.addWidget(gimbal_box)
-            self._panel_stretch_index += 1
+            self._panel = panel
+            self._panel_stretch_index = panel.count()
             panel.addStretch(1)
             panel.addWidget(self.status)
         else:                                # 上下排列 (独立调试窗口)
             layout = QVBoxLayout(self)
             row = QHBoxLayout()
             row.addWidget(src_label)
-            row.addWidget(self.combo, stretch=1)
+            row.addWidget(self.src_btn)
+            row.addStretch(1)
             layout.addLayout(row)
             layout.addWidget(self.video)
             layout.addWidget(self.file_ctrl)
@@ -145,6 +143,11 @@ class CameraViewWidget(QWidget):
         if hasattr(self, '_panel'):
             self._panel.insertWidget(self._panel_stretch_index, w)
             self._panel_stretch_index += 1
+
+    def add_bottom_widget(self, w):
+        """往画面下方插一个控件 (与画面同宽)。仅 side_panel 模式有效。"""
+        if hasattr(self, '_left_layout'):
+            self._left_layout.addWidget(w)
 
     def _build_gimbal(self, in_group=False):
         """云台控制面板: 方向键步进 + 回中 + 角度读数。
@@ -200,8 +203,40 @@ class CameraViewWidget(QWidget):
                 btn.setStyleSheet(style)
                 self._btn_styles[key] = style
 
-    def _refresh_local_cameras(self):
-        """下拉展开时后台重扫 /dev/video*，新插入的摄像头即时出现在列表里。
+    @staticmethod
+    def _src_display(raw):
+        """源原始名 -> 短显示名 (去 local:/file: 前缀与文件路径)。"""
+        if raw.startswith(LOCAL_PREFIX):
+            return raw[len(LOCAL_PREFIX):]
+        if raw.startswith(FILE_PREFIX):
+            return os.path.basename(raw[len(FILE_PREFIX):])
+        return raw
+
+    def _rebuild_src_menu(self):
+        """重建源菜单: UE 相机 + 本机摄像头 + 已打开的文件 + 打开文件对话框。
+        本机摄像头展开时后台重扫, 扫完经 cams_found 信号刷新 —— 菜单开着
+        也能看到新设备 (热插拔即时可见)。勾选标记跟随当前源。"""
+        menu = self.src_btn.menu()
+        menu.clear()
+        cur = self.grabber.camera
+        groups = (
+            list(DEFAULT_CAMERAS),
+            [f'{LOCAL_PREFIX}{d}' for d in self._local_cams],
+            [f'{FILE_PREFIX}{p}' for p in self._file_map.values()],
+        )
+        for group in groups:
+            for raw in group:
+                act = menu.addAction(self._src_display(raw))
+                act.setData(raw)
+                act.setCheckable(True)
+                act.setChecked(raw == cur)
+            if group:
+                menu.addSeparator()
+        menu.addAction(FILE_OPEN_ITEM)
+        self._scan_local_cams()
+
+    def _scan_local_cams(self):
+        """后台重扫 /dev/video*，新插入的摄像头即时出现在菜单里。
         本地探测不经 AirSim，没开 UE 也能选；WSL2 下摄像头需先 usbipd attach。"""
         if self._scanning:
             return
@@ -210,17 +245,28 @@ class CameraViewWidget(QWidget):
         def scan():
             cams = list_local_cameras()
             self._scanning = False
-            if cams:
-                self.combo.cams_found.emit(cams)
+            if cams != self._local_cams:
+                self._local_cams = cams
+                self.cams_found.emit()   # GUI 线程触发菜单刷新
 
         threading.Thread(target=scan, daemon=True).start()
 
-    def _add_local_cameras(self, devs):
-        """把新发现的设备加进下拉框 (信号在 GUI 线程触发, 线程安全)。"""
-        for dev in devs:
-            item = f'{LOCAL_PREFIX}{dev}'
-            if self.combo.findText(item) < 0:
-                self.combo.addItem(item)
+    def _on_src_action(self, act):
+        """菜单点击: 切到所选源; "打开视频文件..." 先弹对话框登记再切。"""
+        text = act.text()
+        if text == FILE_OPEN_ITEM:
+            path, _ = QFileDialog.getOpenFileName(
+                self, '选择视频文件', os.path.expanduser('~'), VIDEO_FILTER)
+            if not path:
+                return
+            self._file_map[f'{FILE_PREFIX}{os.path.basename(path)}'] = path
+            raw = f'{FILE_PREFIX}{path}'
+        else:
+            raw = act.data()
+            if raw is None:
+                return
+        self._switch_source(raw)
+        self.src_btn.setText(f'视频源: {self._src_display(raw)}')
 
     def _switch_source(self, name):
         """切换抓取源并立即清屏: 新源暂时无帧 (设备不存在/UE 相机未配置/
@@ -228,29 +274,6 @@ class CameraViewWidget(QWidget):
         定格画面 (看起来像图传卡死)。"""
         self.video.clear_frame()
         self.grabber.set_camera(name)
-
-    def _on_source_changed(self):
-        text = self.combo.currentText().strip()
-        if not text:
-            return
-        if text == FILE_OPEN_ITEM:           # 弹出文件选择对话框
-            path, _ = QFileDialog.getOpenFileName(
-                self, '选择视频文件', os.path.expanduser('~'), VIDEO_FILTER)
-            if not path:
-                self.combo.setCurrentIndex(0)    # 取消则回到第一个源
-                return
-            label = f'{FILE_PREFIX}{os.path.basename(path)}'
-            self._file_map[label] = path
-            if self.combo.findText(label) < 0:
-                self.combo.addItem(label)
-            self.combo.setCurrentText(label)
-            self._switch_source(f'{FILE_PREFIX}{path}')
-            return
-        if text.startswith(FILE_PREFIX):     # 之前加过的视频文件条目
-            path = self._file_map.get(text, text[len(FILE_PREFIX):])
-            self._switch_source(f'{FILE_PREFIX}{path}')
-            return
-        self._switch_source(text)            # AirSim 相机 / 本机摄像头
 
     def _on_play_clicked(self):
         paused = not self.grabber.file_paused

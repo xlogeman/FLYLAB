@@ -18,6 +18,33 @@ from . import config
 from .overlay import parse_message
 
 
+class TeeLogger:
+    """rclpy Logger 分流器: 终端日志照常输出, 同时把 (级别, 文本) 回调给
+    界面日志框。回调可能来自任意线程 (抓取线程等), 线程安全由回调方保证
+    (界面侧经 Qt 信号队列投递到 GUI 线程)。"""
+
+    def __init__(self, ros_logger):
+        self._ros = ros_logger
+        self._sink = None
+
+    def set_sink(self, sink):
+        self._sink = sink
+
+    def _tee(self, level, msg, *args, **kwargs):
+        getattr(self._ros, level)(msg, *args, **kwargs)
+        if self._sink is not None:
+            try:
+                self._sink(level.upper(), str(msg))
+            except Exception:
+                pass    # 界面日志框异常不拖累 ROS 日志与主流程
+
+    def debug(self, msg, *a, **kw): self._tee('debug', msg, *a, **kw)
+    def info(self, msg, *a, **kw): self._tee('info', msg, *a, **kw)
+    def warning(self, msg, *a, **kw): self._tee('warning', msg, *a, **kw)
+    def error(self, msg, *a, **kw): self._tee('error', msg, *a, **kw)
+    def fatal(self, msg, *a, **kw): self._tee('fatal', msg, *a, **kw)
+
+
 class DisplayForwarder(threading.Thread):
     """显示帧转发线程 —— 大图序列化/publish 从 GUI 线程整体挪出。
 
@@ -103,6 +130,9 @@ class GroundStationNode(Node):
     def __init__(self):
         super().__init__('ground_station')
 
+        # 日志分流: get_logger() 返回包装器, 终端照常 + 可挂界面日志框
+        self._tee_logger = TeeLogger(super().get_logger())
+
         # 算法启停指令 (工具按钮按下/抬起时发)
         self.cmd_pub = self.create_publisher(String, config.CMD_TOPIC, 10)
 
@@ -136,6 +166,15 @@ class GroundStationNode(Node):
         self._landing_status_seq = 0
         self.create_subscription(
             String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
+
+    def get_logger(self):
+        """覆盖 Node.get_logger: 返回分流日志器 (终端照常 + 界面日志框)。"""
+        return self._tee_logger
+
+    def set_log_sink(self, sink):
+        """界面注册日志回调: 每条日志额外回调 sink(level, text)。
+        可能从任意线程触发 (如抓取线程), 界面侧须投递到 GUI 线程。"""
+        self._tee_logger.set_sink(sink)
 
     def _landing_status_cb(self, msg):
         self._landing_status = msg.data.strip()

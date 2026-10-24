@@ -3,7 +3,8 @@
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例 (画面随窗口等比缩放;
-# 窗口无固定尺寸, 启动后可直接拖拽边缘调整, 此处只影响初始大小)
+# 窗口无固定尺寸, 启动后可直接拖拽边缘调整, 此处只影响初始大小)。
+# 高度取大些: 画面下方留出日志框 (免切终端看日志)
 WINDOW_SIZE_RATIO = (0.4, 0.4)   # (宽, 高) 相对屏幕可用区域的比例
 
 # ---------- AirSim RPC (相机视图) ----------
@@ -72,6 +73,18 @@ LANDING_STOP_CMD = 'landing_stop'
 # 降落节点的状态回传话题 (tracking/landing/landed/idle),
 # 地面站据此复位按钮并给成功/中止反馈
 LANDING_STATUS_TOPIC = '/flylab/landing_status'
+
+# ---------- PX4 SITL (地面站一键启停, 省开终端) ----------
+# 经 scripts/run-px4.sh 启动 (自动补 git 元数据/清残留锁/设 PX4_SIM_HOST_ADDR),
+# target 是 make px4_sitl_default 的机型目标名, 与 PX4_SYS_AUTOSTART 严格
+# 对应 (见 README §6 机型库)。新增机型: 先按 README §6 加好 PX4 侧文件,
+# 再在这里加一项即可出现在下拉框。
+PX4_SCRIPT = '/root/flylab/scripts/run-px4.sh'
+PX4_MODELS = [
+    {'name': '10016_none_iris',       'target': 'none_iris'},
+    {'name': '70003_fucker_3120g_tw23', 'target': 'none_fucker_3120g_tw23'},
+    {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
+]
 
 # ---------- 通信链路 (地面站一键拉起, 省开终端) ----------
 # uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888。供 tracker:=uxrce / aruco_landing
