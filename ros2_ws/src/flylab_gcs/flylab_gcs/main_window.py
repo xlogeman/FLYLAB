@@ -14,7 +14,7 @@
   顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 / 算法 /
   视觉反控, 全部下拉或 toggle 交互
   左侧画面 + 底部日志框 (camera_widget 内部布局)
-  右栏: 云台 (camera_widget) + 手动遥控 (双摇杆)
+  右栏: 航线地图 + 云台/罗盘 + 手动遥控 (双摇杆)
 """
 import os
 import time
@@ -103,9 +103,11 @@ class MainWindow(QMainWindow):
         # 开启: 拉起 teleop_node (按所选通信链路传 link 参数) 并发 teleop_start
         # 接管 offboard; 摇杆控速度、松开回中悬停; 关闭: 交还控制权。
         # 与视觉反控 (ArUco降落) 互斥 (都走 offboard, 会争抢 setpoint)
-        # 右栏布局: 第一行 = 云台 (左) + 罗盘 (右, 撑满等高) 并排,
-        # 手动遥控独占下一行
+        # 右栏布局 (自上而下): 航线地图 → 云台 (左) + 罗盘 (右, 撑满等高)
+        # 并排 → 手动遥控
         self.compass = Compass()
+        self.map_view = MapView()   # 俯视轨迹, 数据同遥测: 飞控心跳采样
+        self.camera_tab.add_side_widget(self.map_view)
         top_row = QWidget()
         row_lay = QHBoxLayout(top_row)
         row_lay.setContentsMargins(0, 0, 0, 0)
@@ -113,9 +115,6 @@ class MainWindow(QMainWindow):
         row_lay.addWidget(self.compass, stretch=1)
         self.camera_tab.add_side_widget(top_row)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
-        # 航线地图 (俯视轨迹, 数据同遥测: 飞控心跳采样)
-        self.map_view = MapView()
-        self.camera_tab.add_side_widget(self.map_view)
 
         self.setCentralWidget(self.camera_tab)
 
@@ -129,13 +128,26 @@ class MainWindow(QMainWindow):
         QPushButton:checked { background-color: #2d8a3e; color: white; }
     """
 
+    @staticmethod
+    def _set_btn_on(btn, on):
+        """工具按钮状态灯: on 动态属性切换点亮/熄灭 (样式见 _TOOL_BTN_STYLE)。
+        状态不变不重刷 (轮询里每拍调用不产生样式抖动)。"""
+        if bool(btn.property('on') or False) == bool(on):
+            return
+        btn.setProperty('on', bool(on))
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+
     # 工具栏按钮统一样式 (QToolButton: 视频源 / PX4 SITL / 通信链路 / 飞行控制)
+    # 点亮态: 动态属性 on=true (状态灯: PX4 运行中 / 链路开启 / 飞控控制中)
     _TOOL_BTN_STYLE = """
         QToolButton { min-height: 24px; padding: 2px 10px; border: 1px solid #bbb;
                       border-radius: 4px; background: #f6f6f6; }
         QToolButton:hover { background: #e8e8e8; }
         QToolButton:checked { background-color: #2d8a3e; color: white;
                               border-color: #2d8a3e; }
+        QToolButton[on="true"] { background-color: #2d8a3e; color: white;
+                                 border-color: #2d8a3e; }
     """
 
     _LAND_BTN_STYLE = """
@@ -204,6 +216,7 @@ class MainWindow(QMainWindow):
             self._reset_px4_btn()           # 启动失败 (脚本缺失等)
             return
         self.px4_btn.setText(f'PX4: {model["name"]}')
+        self._set_btn_on(self.px4_btn, True)   # 机型运行中 → 按钮点亮
 
     def _stop_px4(self):
         """停止 PX4 SITL: SIGTERM 整个进程组 (make → px4 整棵树), 超时 SIGKILL。"""
@@ -218,6 +231,7 @@ class MainWindow(QMainWindow):
         菜单的 ✓ 语义是"正在运行", 停止/崩溃/启动失败后不再勾选。"""
         self.px4_model = None
         self.px4_btn.setText('PX4 SITL')
+        self._set_btn_on(self.px4_btn, False)   # 停止/崩溃/失败 → 熄灭
 
     def _check_px4_alive(self):
         """轮询: PX4 进程异常退出 (崩溃/自爆) 则复位按钮, 用户可重新点起。"""
@@ -310,10 +324,12 @@ class MainWindow(QMainWindow):
         return None
 
     def _update_link_btn_text(self):
-        """按钮文字跟随当前开启的链路, 无则回到"通信链路"。"""
+        """按钮文字跟随当前开启的链路, 无则回到"通信链路"; 链路开启中
+        按钮点亮 (存活进程 = 链路通, 见 _selected_link)。"""
         running = self._selected_link()
         title = next((t for k, t, _ in self._LINKS if k == running), None)
         self.link_btn.setText(f'通信链路: {title}' if title else '通信链路')
+        self._set_btn_on(self.link_btn, running is not None)
 
     # ---------- 飞行控制 (AirSim API: 解锁/起飞/降落/悬停/返航/上锁) ----------
 
@@ -326,7 +342,7 @@ class MainWindow(QMainWindow):
         self.veh_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.veh_btn.setToolTip(
             'AirSim 飞控命令: 解锁/起飞/降落/悬停/返航/上锁 '
-            '(需 UE 端 AirSim 已连通; 异步下发, 结果看 QGC / mavros state)')
+            '(需先启动 PX4 SITL 且 UE 端 AirSim 已连通; 异步下发, 结果看 QGC / mavros state)')
         menu = QMenu(self.veh_btn)
         self.veh_btn.setMenu(menu)
         menu.aboutToShow.connect(self._rebuild_vehicle_menu)
@@ -432,6 +448,7 @@ class MainWindow(QMainWindow):
         self.node.clear_annotations()
         self.algo_proc.stop()
         self.running_algo = None
+        self._update_algo_state()   # 文字复位 + 熄灭状态灯
         # ArUco检测停止时视觉反控 (降落) 失去输入源, 自动一并取消
         if algo.get('enables_landing') and self.landing_btn.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
@@ -452,9 +469,10 @@ class MainWindow(QMainWindow):
             self._reset_algo()
 
     def _update_algo_state(self):
-        """按钮文字跟随当前运行的算法, 无则回到"算法"。"""
+        """按钮文字跟随当前运行的算法, 无则回到"算法"; 运行中点亮状态灯。"""
         running = self.running_algo['name'] if self.running_algo else None
         self.algo_btn.setText(f'算法: {running}' if running else '算法')
+        self._set_btn_on(self.algo_btn, running is not None)
 
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
@@ -745,10 +763,19 @@ class MainWindow(QMainWindow):
         self._check_algo_alive()
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
-        # 飞行控制按钮: 仅飞控 RPC 会话已连通可点 (UE 未 play / 断线置灰)
-        veh_ok = self.veh_ctrl.is_connected()
+        # 飞行控制按钮: 需 PX4 SITL 已启动 + 飞控 RPC 已连通才可点
+        # (PX4 没起时 AirSim 对该机型报默认状态且命令必失败, 直接置灰);
+        # 手动遥控/视觉反控接管中同样置灰 (offboard 期间飞控命令会打断
+        # 接管, 想干预先关对应功能交还控制权); 控制权在本按钮时点亮 ——
+        # 飞机在空中且未被遥控/视觉反控接管, 落地或接管结束后恢复常态
+        veh_ok = (self.px4.is_running() and self.veh_ctrl.is_connected()
+                  and not self.teleop_btn.isChecked()
+                  and not self.landing_btn.isChecked())
         if self.veh_btn.isEnabled() != veh_ok:
             self.veh_btn.setEnabled(veh_ok)
+        self._set_btn_on(self.veh_btn, veh_ok and self.veh_ctrl.is_flying()
+                         and not self.teleop_btn.isChecked()
+                         and not self.landing_btn.isChecked())
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 按钮弹起)
         self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 按钮与摇杆联动)
         self._update_landing_btn()   # 降落(视觉反控)/遥控互斥门控

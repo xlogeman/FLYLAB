@@ -44,6 +44,7 @@ class VehicleController(threading.Thread):
         self._cmd = None        # 待执行命令 key (界面 request 置入)
         self._connected = False
         self._flying = False    # 已解锁且在空中 (视觉反控门控依据)
+        self._fly_streak = 0    # 连续报"空中"的拍数 (过滤上电瞬态误报)
         # QGC 式遥测 (0.5s 心跳顺带采样 kinematics, 飞行中积分行程/时长):
         # alt=相对起飞点高度 hs=水平速度 vs=垂直速度 hdg=航向 dist=累计行程
         # ftime=飞行时间(秒) flying=是否在空中
@@ -131,9 +132,18 @@ class VehicleController(threading.Thread):
         高度/速度落地后显示 0, 航向始终跟随。"""
         try:
             st = self._client.getMultirotorState()
-            flying = st.landed_state != airsim.LandedState.Landed
+            raw_flying = st.landed_state != airsim.LandedState.Landed
         except Exception:
             return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
+        # PX4 上电瞬态: landed 默认 false, AirSim 在收到首条 EXTENDED_SYS_STATE
+        # 前把地面飞机误报为 Flying (~1~2s) —— 报"空中"需连续两拍确认才采信,
+        # 报"地面"立即采信 (落地宁早勿晚), 瞬态单拍即被吞掉
+        if raw_flying:
+            self._fly_streak += 1
+            flying = self.is_flying() or self._fly_streak >= 2
+        else:
+            self._fly_streak = 0
+            flying = False
         kin = st.kinematics_estimated
         pos, vel, q = kin.position, kin.linear_velocity, kin.orientation
         now = time.monotonic()
