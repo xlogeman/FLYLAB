@@ -6,7 +6,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 | 目录 | 说明 |
 |---|---|
-| `ros2_ws/` | ROS2 工作空间，核心是 `src/flylab` 包（飞行链路）与 `src/flylab_vision` 包（视觉算法），其余为各算法移植包  |
+| `ros2_ws/` | ROS2 工作空间，核心是 `src/flylab_flight` 包（飞行链路）与 `src/flylab_vision` 包（视觉算法），其余为各算法移植包  |
 | `Cosys-AirSim/` | UE 端仿真器 |
 | `px4.1.15.2/` | PX4 SITL v1.15.2 源码（默认机型 `none_iris`，自定义机型见下方"机型库与 PX4 机型文件"） |
 | `ORB_SLAM3_FIXED/` | ORB-SLAM3 运行时库 |
@@ -15,19 +15,19 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble 仿真环境，围绕 PX4 + Cosys-AirSim 做�
 
 ---
 
-## 2. flylab 核心包
+## 2. flylab_flight 核心包
 
 ### 2.1. 功能链路一览
 
 | 链路 | 一键启动 | 场景配置 | 说明 |
 |---|---|---|---|
-| 感知建图 | `ros2 launch flylab depth_mapping.launch.py` | octomap 参数内联于 launch | 深度图 → 点云 → 占据地图 |
-| EGO 避障飞行 | `ros2 launch flylab fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|uxrce` 选择跟踪链路 |
-| OpenVINS MSCKF | `ros2 launch flylab openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
-| VINS 单目/双目 | `ros2 launch flylab vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
-| ORB-SLAM3 | `ros2 launch flylab orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
-| FAST-LIO 建图 | `ros2 launch flylab fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计 |
-| SUPER 避障飞行 | `ros2 launch flylab fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划 → 桥接 → PX4 跟踪；`tracker:=mavros\|uxrce` 选择跟踪链路 |
+| 感知建图 | `ros2 launch flylab_flight depth_mapping.launch.py` | octomap 参数内联于 launch | 深度图 → 点云 → 占据地图 |
+| EGO 避障飞行 | `ros2 launch flylab_flight fly_ego.launch.py` | `configs/ego_planner/` | RViz 点目标点 → EGO 规划 → PX4 跟踪，到达后自动交还 QGC；`tracker:=mavros\|uxrce` 选择跟踪链路 |
+| OpenVINS MSCKF | `ros2 launch flylab_flight openvins_msckf.launch.py` | `configs/openvins/` + `settings.json` | 双目 VIO，断桨联动启停 |
+| VINS 单目/双目 | `ros2 launch flylab_flight vins_mono.launch.py` / `vins_stereo.launch.py` | `configs/vins_*/` | VINS-Fusion 航迹 |
+| ORB-SLAM3 | `ros2 launch flylab_flight orb_slam3.launch.py` | `configs/orb_slam3/` | 双目+IMU SLAM |
+| FAST-LIO 建图 | `ros2 launch flylab_flight fast_lio.launch.py` | `configs/fast_lio/` | LiDAR-惯性里程计 |
+| SUPER 避障飞行 | `ros2 launch flylab_flight fly_super.launch.py` | `configs/super_planner/` | RViz 点目标点 → SUPER 规划 → 桥接 → PX4 跟踪；`tracker:=mavros\|uxrce` 选择跟踪链路 |
 
 ### 2.2. 节点一览
 
@@ -77,9 +77,9 @@ MicroXRCEAgent udp4 -p 8888
 ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14542@ -p tgt_system:=1 -p tgt_component:=1
 
 # 3. 启动链路（跨主机连接 AirSim 需先 export PX4_SIM_HOST_ADDR=<AirSim IP>）
-ros2 launch flylab fly_ego.launch.py                 # EGO 避障 (默认 MAVROS 跟踪, 专属端口 14542)
-ros2 launch flylab fly_ego.launch.py tracker:=uxrce  # EGO 避障 (uXRCE-DDS 跟踪)
-ros2 launch flylab fly_super.launch.py               # SUPER 避障 (GPULidar)
+ros2 launch flylab_flight fly_ego.launch.py                 # EGO 避障 (默认 MAVROS 跟踪, 专属端口 14542)
+ros2 launch flylab_flight fly_ego.launch.py tracker:=uxrce  # EGO 避障 (uXRCE-DDS 跟踪)
+ros2 launch flylab_flight fly_super.launch.py               # SUPER 避障 (GPULidar)
 
 # 4. 地面站
 ros2 run flylab_tools ground_station          # 地面站总界面 (算法启停 / ArUco降落按钮)
@@ -258,7 +258,7 @@ ros2 run flylab_vision aruco_node --ros-args \
 
 ## 6. 机型库与 PX4 机型文件
 
-自研机型的完整参数档案存放在 `ros2_ws/src/flylab/configs/vehicles/`，每个 json 一架飞机，含 `PhysicsParams`、PX4 侧配套参数和推导公式：
+自研机型的完整参数档案存放在 `ros2_ws/src/flylab_flight/configs/vehicles/`，每个 json 一架飞机，含 `PhysicsParams`、PX4 侧配套参数和推导公式：
 
 | 配置文件 | 构型 | 推重比 | 悬停油门 | PX4 机型 |
 |---|---|---|---|---|

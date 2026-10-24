@@ -19,8 +19,8 @@ if [ -z "$IP" ]; then
 fi
 echo "[sync-airsim-ip] 当前 WSL IP: $IP"
 
-for f in /root/flylab/ros2_ws/src/flylab/configs/settings.json \
-         /root/flylab/ros2_ws/src/flylab/configs/*/settings.json; do
+for f in /root/flylab/ros2_ws/src/flylab_flight/configs/settings.json \
+         /root/flylab/ros2_ws/src/flylab_flight/configs/*/settings.json; do
     [ -f "$f" ] || continue
     if grep -q '"ControlIp"' "$f"; then
         sed -i "s/\"ControlIp\": \"[^\"]*\"/\"ControlIp\": \"$IP\"/" "$f"
