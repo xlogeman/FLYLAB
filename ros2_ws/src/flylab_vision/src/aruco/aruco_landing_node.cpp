@@ -305,6 +305,8 @@ private:
       return;
     }
     image_area_ = static_cast<double>(bgr.cols) * bgr.rows;
+    img_w_ = bgr.cols;
+    img_h_ = bgr.rows;
     detections_ = detector_->detect(bgr);
     // 检测结果叠加到地面站画面 (与 aruco_node 同一标注接口, 独立分组)
     if (!detections_.empty()) {
@@ -673,6 +675,9 @@ private:
     const rclcpp::Time & now_t, double area, double align_err,
     double v_fwd, double v_right, double v_down)
   {
+    if (img_h_ <= 0) {
+      return;   // 尚未收到图像帧, 尺寸未知 (不占用 0.2s 节流窗口)
+    }
     if ((now_t - last_status_anno_).seconds() < 0.2) {  // 5Hz 足够阅读
       return;
     }
@@ -689,8 +694,12 @@ private:
       oss << " 触发计数 " << landing_count_ << "/" << min_landing_frames_;
     }
     std::ostringstream json;
+    // 字号用 px (原图像素高, 约 3% 画高) 随显示缩放等比渲染 —— 窗口
+    // 大小变化时文字与画面比例恒定, 不会忽大忽小; 位置固定画面左下角
     json << "{\"algo\":\"" << kAnnoState << "\",\"items\":["
-         << "{\"type\":\"text\",\"pos\":[12,60],\"text\":\"" << oss.str() << "\","
+         << "{\"type\":\"text\",\"pos\":[12," << (img_h_ - 12) << "],"
+         << "\"px\":" << (img_h_ * 0.03) << ","
+         << "\"text\":\"" << oss.str() << "\","
          << "\"color\":[0,200,255]}]}";
     std_msgs::msg::String out;
     out.data = json.str();
@@ -771,6 +780,8 @@ private:
   rclcpp::Time last_mode_cmd_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_tick_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_status_anno_{0, 0, RCL_ROS_TIME};
+  int img_w_ = 0;   // 最近一帧图像尺寸 (状态文字按比例定位/定字号用)
+  int img_h_ = 0;
 };
 
 }  // namespace flylab_vision

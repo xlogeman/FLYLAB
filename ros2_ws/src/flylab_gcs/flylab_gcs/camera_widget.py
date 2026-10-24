@@ -27,8 +27,9 @@ from PyQt5.QtWidgets import (QFileDialog, QFrame, QGridLayout,
                            QWidget)
 
 from . import config
-from .camera_grabber import (DEFAULT_CAMERAS, FILE_PREFIX, LOCAL_PREFIX,
-                           Grabber, colorize_depth, list_local_cameras)
+from .camera_grabber import (DEFAULT_CAMERA, DEFAULT_CAMERAS, FILE_PREFIX,
+                           LOCAL_PREFIX, Grabber, colorize_depth,
+                           list_local_cameras)
 from .teleop_pad import VirtualJoystick
 from .video_label import VideoLabel
 
@@ -52,7 +53,7 @@ class CameraViewWidget(QWidget):
         # 按钮文字跟随当前源。菜单展开时后台重扫本机摄像头 (热插拔可见)
         self._local_cams = list_local_cameras()
         self.src_btn = QToolButton()
-        self.src_btn.setText(f'视频源: {DEFAULT_CAMERAS[0]}')
+        self.src_btn.setText(f'视频源: {DEFAULT_CAMERA}')
         self.src_btn.setPopupMode(QToolButton.InstantPopup)
         self.src_btn.setToolTip(
             '选择视频输入源: UE 相机 / 本机摄像头 / 视频文件')

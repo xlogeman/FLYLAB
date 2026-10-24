@@ -29,7 +29,7 @@ class LogPanel(QPlainTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setMaximumBlockCount(800)
-        self.setMinimumHeight(100)
+        self.setMinimumHeight(150)
         self.setStyleSheet(
             'QPlainTextEdit { font-family: monospace; font-size: 12px; '
             'background: #fafafa; border: 1px solid #ccc; }')

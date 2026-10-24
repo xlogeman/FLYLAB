@@ -41,6 +41,7 @@ LOCAL_HZ = 30       # 本机摄像头拉取频率上限
 DEPTH_MIN_M, DEPTH_MAX_M = 0.2, 20.0
 
 DEFAULT_CAMERAS = ['left_cam', 'front_cam', 'right_cam', 'depth_cam']
+DEFAULT_CAMERA = 'front_cam'   # 启动默认源 (AirSim)
 LOCAL_PREFIX = 'local:'   # 本机摄像头在下拉框里的条目前缀, 如 local:/dev/video0
 FILE_PREFIX = 'file:'     # 视频文件源前缀, 如 file:/path/to/demo.mp4 (循环播放)
 
@@ -216,7 +217,7 @@ class Grabber(threading.Thread):
         self.log = log
         self.host, self.port = host, int(port)
         self.lock = threading.Lock()
-        self.camera = DEFAULT_CAMERAS[0]
+        self.camera = DEFAULT_CAMERA
         self.frame = None      # (np.ndarray, is_depth)
         self._gen = 0          # 切源代数: 阻塞读取期间切源, 旧源的帧作废
         self.fps = 0.0
