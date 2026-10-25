@@ -251,6 +251,13 @@ class Grabber(threading.Thread):
         self._gimbal_stab = True
         # 上次持久化时的云台角 (稳定模式连续下发期间省去每秒几十次写盘)
         self._gimbal_saved = None
+        # 上次成功下发时的 (机体姿态, 云台角) 指纹: 未变化则视角必与上次
+        # 一致, 跳过下发 RPC (云台与拉图共用一条 RPC 连接, 省下的是串行
+        # 等待, 直接转化为图传帧率)
+        self._gimbal_apply_key = None
+        # Scene 帧走 PNG 压缩传输 (线上体积约为原始 BGR 的 1/3~1/4);
+        # 服务端不支持/返回异常时自动回退原始传输 (会话内一次性)
+        self._scene_compress = config.DISPLAY_SCENE_COMPRESS and cv2 is not None
         # 会话内限位拒绝标记 (方向 -> bool): 仅当按键被限位卡住时标红,
         # 该方向恢复可动即清; 不持久化, 地面站重启后一律不红
         self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
@@ -539,6 +546,12 @@ class Grabber(threading.Thread):
         云台偏航的参考是当前机头朝向, 回中恢复安装方向的水平重建。"""
         try:
             q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
+            # 机体姿态与云台角均未变 => 目标视角与上次下发完全一致, 整批
+            # RPC 直接跳过 (地面静止/稳定悬停时 30Hz 跟随几乎全部命中,
+            # RPC 连接让给拉图; 剧烈机动时姿态指纹变化照常下发补偿)
+            key = (q_b.x_val, q_b.y_val, q_b.z_val, q_b.w_val, yaw_deg, pitch_deg)
+            if key == self._gimbal_apply_key:
+                return
             applied = {}
             for cam in DEFAULT_CAMERAS:
                 if cam not in self._gimbal_mount:
@@ -567,6 +580,7 @@ class Grabber(threading.Thread):
                 except Exception as e:
                     self.log(f'云台: {cam} 下发失败: {e}')
             if applied:
+                self._gimbal_apply_key = key   # 指纹仅在成功下发后更新
                 # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对); 持久化
                 # 仅在云台角变化时进行 —— 稳定模式 30Hz 连续下发, 角度不变
                 # 的周期若也写盘就是每秒几十次文件 IO
@@ -756,8 +770,11 @@ class Grabber(threading.Thread):
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.DepthPlanar, True, False)
                 else:
+                    # Scene 走 PNG 压缩传输 (线上体积约原始 BGR 的 1/3):
+                    # UE 端编码 + 本端 imdecode 都是 C 实现, 用少量 CPU 换
+                    # 3~4 倍传输量缩减, RPC 往返变短直接转化为帧率
                     req = airsim.ImageRequest(
-                        cam, airsim.ImageType.Scene, False, False)
+                        cam, airsim.ImageType.Scene, False, self._scene_compress)
                 resp = client.simGetImages([req], VEHICLE)
 
                 if resp and resp[0].width > 0:
@@ -765,12 +782,26 @@ class Grabber(threading.Thread):
                     if is_depth:   # DepthPlanar, 单位米
                         arr = _to_np(
                             r.image_data_float, np.float32).reshape(r.height, r.width)
-                    else:          # BGR
-                        arr = np.ascontiguousarray(_to_np(
-                            r.image_data_uint8, np.uint8).reshape(r.height, r.width, 3))
-                    self._commit(arr, is_depth, gen)
-                else:
-                    time.sleep(0.05)
+                    else:          # BGR (compress=False) 或 PNG (compress=True)
+                        data = _to_np(r.image_data_uint8, np.uint8)
+                        arr = None
+                        if self._scene_compress:
+                            arr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                            if arr is None:
+                                # 服务端没按 PNG 返回 (版本差异/异常数据):
+                                # 本会话回退原始传输, 下一拍走原始解码路径
+                                self._scene_compress = False
+                                self.log('图传: 服务端未按 PNG 返回, 回退原始传输')
+                        if arr is None and not self._scene_compress:
+                            # 服务端原始字节是 RGB 序 (RenderRequest 逐字节
+                            # R,G,B 写出, 见 Cosys RenderRequest.cpp), 显示
+                            # 约定 BGR —— 翻转通道, 与 PNG 路径色彩一致
+                            arr = np.ascontiguousarray(
+                                data.reshape(r.height, r.width, 3)[..., ::-1])
+                    if arr is not None:
+                        self._commit(arr, is_depth, gen)
+                    else:
+                        time.sleep(0.05)
                 # 自适应节流: 扣除 RPC 往返耗时后再补足剩余间隔。
                 # 往返超过 1/GRAB_HZ 时不再额外睡眠, 帧率由网络/渲染延迟决定
                 time.sleep(max(0.0, 1.0 / GRAB_HZ - (time.monotonic() - t_start)))

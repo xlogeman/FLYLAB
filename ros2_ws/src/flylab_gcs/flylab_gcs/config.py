@@ -22,6 +22,9 @@ DISPLAY_IMAGE_HZ = 30
 # 分片下可能丢帧)。转发已在独立线程, RELIABLE 阻塞不再拖累界面; 若实测
 # 转发端稳定低于源帧率 (ros2 topic hz /flylab/display/image_raw), 改 False
 DISPLAY_IMAGE_RELIABLE = False
+# Scene 图传走 PNG 压缩传输 (线上体积约原始 BGR 的 1/3, UE 编码 + 本端
+# 解码均为 C 实现, 净赚帧率); 服务端不支持会自动回退原始传输。False = 始终原始
+DISPLAY_SCENE_COMPRESS = True
 
 # 算法启停指令话题：按钮按下/抬起时发布 std_msgs/String，算法节点自行订阅执行
 CMD_TOPIC = '/flylab/vision_cmd'
