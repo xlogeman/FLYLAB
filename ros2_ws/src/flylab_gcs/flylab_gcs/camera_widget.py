@@ -170,6 +170,18 @@ class CameraViewWidget(QWidget):
         btn_center.setToolTip('云台回中 (平滑转动到挂载原始姿态, 摇杆可打断)')
         btn_center.clicked.connect(self.grabber.gimbal_reset)
 
+        btn_stab = QPushButton('稳定')
+        btn_stab.setFixedWidth(40)
+        btn_stab.setCheckable(True)
+        btn_stab.setChecked(self.grabber.get_gimbal_stab())
+        btn_stab.setStyleSheet(
+            'QPushButton:checked { background-color: #2d8a3e; color: white; }')
+        btn_stab.setToolTip(
+            '云台稳定 (follow 模式): 开启后持续按世界系重下发视角, '
+            '俯仰/横滚不随机体晃动, 偏航跟随机头; 关闭则相机刚性随机体 '
+            '(FPV 手感)')
+        btn_stab.toggled.connect(self.grabber.set_gimbal_stab)
+
         self.gimbal = QWidget()
         g = QGridLayout(self.gimbal)
         g.setContentsMargins(0, 0, 0, 0)
@@ -189,6 +201,7 @@ class CameraViewWidget(QWidget):
         g.addWidget(self._joy, 1, 0, alignment=Qt.AlignHCenter)
         side = QVBoxLayout()
         side.addWidget(btn_center)
+        side.addWidget(btn_stab)
         side.addStretch(1)
         g.addLayout(side, 1, 1)
         angles = QHBoxLayout()

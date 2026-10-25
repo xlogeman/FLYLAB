@@ -45,21 +45,25 @@ GIMBAL_JOY_RATE_DEG_S = 60.0   # 云台摇杆满偏时的转动角速度 (°/s),
 # 飞行中姿态跟随频率 (Hz)。相机是刚性挂载, 云台角只在下发瞬间按当时机体
 # 姿态换算; 飞行中机体姿态一变, 记忆的云台角就与实际视角脱钩, 下次按键会
 # 把积累的姿态差一次性归零 —— 表现为方向键不再纯上下/左右。除按键立即下发
-# 外, 以该频率按当前机体姿态重下发保持基准新鲜; 0 = 关闭 (仅地面静态调试)
-GIMBAL_HOLD_HZ = 10.0
+# 外, 以该频率按当前机体姿态重下发保持基准新鲜; 0 = 关闭 (仅地面静态调试)。
+# 该频率同时是云台稳定 (follow) 模式的重下发频率: 越高抗机体晃动越好,
+# 但每拍有 1+相机数 次 RPC (kinematics + 每相机 simSetCameraPose),
+# 30Hz ≈ 150 RPC/s, 再高会挤占抓图线程
+GIMBAL_HOLD_HZ = 30.0
 
 # 回中动画角速度 (度/秒): 回中不再是瞬跳, 而是以该速度平滑转回机头正前方,
 # 按方向键可随时打断。越小越柔, 90 ≈ 实机云台回中的手感
 GIMBAL_SLEW_RATE_DEG_S = 90.0
 
 # 云台限位 (度), 模拟真实二轴云台的机械限位。
-# 俯仰是相对 settings.json 安装角的: front/left/right_cam 自带 -36.87° 下俯
-# 安装角, 绝对俯仰 = 相对俯仰 + 安装角。min/max 取 -53.13/+126.87 使绝对
-# 俯仰恰好限定在 垂直向下(-90°) ~ 垂直向上(+90°), 到垂直即停。
-# 注意 depth_cam 无安装角, 同一限位下可越过垂直各多转 36.87°
+# 俯仰是相对 settings.json 安装角的: 各相机安装 Pitch 已改 0 (水平),
+# 相对俯仰 = 绝对俯仰, min/max 取 -90/+90 使绝对俯仰恰好限定在
+# 垂直向下(-90°) ~ 垂直向上(+90°), 到垂直即停。
+# (安装角运行时由 simGetCameraInfo 实测, 以后再改 settings.json 安装角,
+# 只需同步调整这里的限位, 云台/反控摆位/降落方向映射均自动适配)
 GIMBAL_YAW_LIMIT_DEG = 45.0      # 偏航限位 ±45°
-GIMBAL_PITCH_MIN_DEG = -53.13    # 俯仰下限 (绝对 -90°, 垂直向下)
-GIMBAL_PITCH_MAX_DEG = 126.87    # 俯仰上限 (绝对 +90°, 垂直向上)
+GIMBAL_PITCH_MIN_DEG = -90.0     # 俯仰下限 (垂直向下)
+GIMBAL_PITCH_MAX_DEG = 90.0      # 俯仰上限 (垂直向上)
 
 # ---------- ArUco 降落 (主窗口独立按钮) ----------
 # 完整降落链路: 点击按钮拉起 aruco_landing_node (三态状态机:
@@ -78,8 +82,7 @@ LANDING_STATUS_TOPIC = '/flylab/landing_status'
 # ---------- PX4 SITL (地面站一键启停, 省开终端) ----------
 # 经 scripts/run-px4.sh 启动 (自动补 git 元数据/清残留锁/设 PX4_SIM_HOST_ADDR),
 # target 是 make px4_sitl_default 的机型目标名, 与 PX4_SYS_AUTOSTART 严格
-# 对应 (见 README §6 机型库)。新增机型: 先按 README §6 加好 PX4 侧文件,
-# 再在这里加一项即可出现在下拉框。
+# 对应 (见 README §6 机型库)。新增机型: 先按 README §6 加好 PX4 侧文件
 PX4_SCRIPT = '/root/flylab/scripts/run-px4.sh'
 PX4_MODELS = [
     {'name': '10016_none_iris',       'target': 'none_iris'},
@@ -123,8 +126,7 @@ VEHICLE_CMDS = [
 # name=下拉框显示文字, start/stop=运行/取消时发布的指令。
 # cmd=算法节点启动命令 (可选): 填了则地面站点"运行"时自动拉起进程、点"取消"
 # 时自动回收; 不填则假定节点已在外部运行, 只发启停指令。
-# enables_landing=True 的算法是 ArUco 降落的前置条件 (该算法运行中且云台
-# 转到垂直向下, 主窗口的 "ArUco降落" 按钮才可点)。
+# enables_landing=True 的算法是 ArUco 降落的前置条件
 # 界面交互对所有算法统一: 新算法只要遵循"收到 start 指令开始、收到 stop
 # 指令停止"的约定, 在这里加一项即可出现在下拉框里。
 ALGORITHMS = [
@@ -134,31 +136,31 @@ ALGORITHMS = [
      'enables_landing': True},
     {'name': '目标检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detector_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'detect_start', 'stop': 'detect_stop'},
     {'name': '图像分类',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_cls_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'cls_start', 'stop': 'cls_stop'},
     {'name': '深度估计',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_depth_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'depth_start', 'stop': 'depth_stop'},
     {'name': '旋转框检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_obb_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'obb_start', 'stop': 'obb_stop'},
     {'name': '实例分割',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_segment_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'seg_start', 'stop': 'seg_stop'},
     {'name': '语义分割',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_semantic_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'semantic_start', 'stop': 'semantic_stop'},
     {'name': '姿态估计',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
-             '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
+             '--ros-args', '-p', 'device:=cuda'],
      'start': 'pose_start', 'stop': 'pose_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
 ]

@@ -243,6 +243,14 @@ class Grabber(threading.Thread):
         self._gimbal_rate = (0.0, 0.0)
         self._rate_t_prev = None
         self._gimbal_dirty = False
+        # 云台稳定 (follow 模式): 开启后任何云台角 (含居中) 都按
+        # GIMBAL_HOLD_HZ 持续世界系重下发 —— 俯仰/横滚钉在世界系不随机体
+        # 晃动, 偏航跟随机头 (真实云台手感); 关闭为刚性挂载 (FPV 手感)。
+        # 注: UE 端原生 Gimbal.Stabilization 是"拉回出生安装姿态", 与
+        # simSetCameraPose 控制互斥, 故稳定在地面站侧实现
+        self._gimbal_stab = True
+        # 上次持久化时的云台角 (稳定模式连续下发期间省去每秒几十次写盘)
+        self._gimbal_saved = None
         # 会话内限位拒绝标记 (方向 -> bool): 仅当按键被限位卡住时标红,
         # 该方向恢复可动即清; 不持久化, 地面站重启后一律不红
         self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
@@ -387,6 +395,20 @@ class Grabber(threading.Thread):
         非 AirSim 源恒为全 False。"""
         with self.lock:
             return dict(self._gimbal_blocked)
+
+    def get_gimbal_stab(self):
+        """云台稳定 (follow 模式) 是否开启 (界面开关初始态)。"""
+        with self.lock:
+            return self._gimbal_stab
+
+    def set_gimbal_stab(self, on):
+        """开关云台稳定: 开启立即补一拍下发 (视角马上稳定);
+        关闭即停在当前姿态转为刚性跟随。"""
+        with self.lock:
+            if self._gimbal_stab == on:
+                return
+            self._gimbal_stab = on
+            self._gimbal_dirty = True
 
     def get_cam_orientation(self):
         """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
@@ -545,10 +567,17 @@ class Grabber(threading.Thread):
                 except Exception as e:
                     self.log(f'云台: {cam} 下发失败: {e}')
             if applied:
-                # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对) 并持久化
+                # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对); 持久化
+                # 仅在云台角变化时进行 —— 稳定模式 30Hz 连续下发, 角度不变
+                # 的周期若也写盘就是每秒几十次文件 IO
                 with self.lock:
                     self._gimbal_last = applied
-                _save_gimbal_state(self._gimbal, self._gimbal_mount, applied)
+                    changed = (yaw_deg, pitch_deg) != self._gimbal_saved
+                    if changed:
+                        self._gimbal_saved = (yaw_deg, pitch_deg)
+                if changed:
+                    _save_gimbal_state(self._gimbal, self._gimbal_mount,
+                                       applied)
         except Exception as e:
             # 失败不置回 dirty: 避免每帧重试刷屏; 重连或下次按键会重新下发
             self.log(f'云台控制失败: {e}')
@@ -702,15 +731,20 @@ class Grabber(threading.Thread):
                     self._rate_tick()    # 摇杆连续转动: 每帧按角速度推进
                     self._anim_tick()    # 回中动画: 每帧推进并置 dirty
                     gim_dirty, gim = self._gimbal_dirty, self._gimbal
+                    stab = self._gimbal_stab
                 # 云台角只在按键瞬间按当时机体姿态换算一次, 相机随后刚性跟
                 # 随机体; 飞行中机体姿态一变 (前飞俯身/转向偏航), 记忆的
                 # (yaw,pitch) 就与实际视角脱钩, 下次按键会把积累的姿态差一
                 # 次性归零 —— 方向键不再纯上下/左右。因此除 dirty 立即下发
                 # 外, 还周期性按当前机体姿态重下发保持基准新鲜 (回中动画
                 # 每帧置 dirty 本就连续下发, 方向键路径在此补齐)。
+                # 稳定模式 (follow) 下居中角 (0,0) 也持续重下发: 俯仰/横滚
+                # 被钉在世界系, 机体剧烈晃动时视角保持水平不跟着抖; 非稳定
+                # 模式维持原语义, 居中=刚性挂载 (省 RPC, FPV 手感)。
                 now = time.monotonic()
                 if gim_dirty or (
-                        config.GIMBAL_HOLD_HZ > 0 and gim != (0.0, 0.0)
+                        config.GIMBAL_HOLD_HZ > 0
+                        and (stab or gim != (0.0, 0.0))
                         and now - self._gimbal_apply_t
                         >= 1.0 / config.GIMBAL_HOLD_HZ):
                     self._apply_gimbal(client, *gim)

@@ -132,7 +132,11 @@ class VehicleController(threading.Thread):
         高度/速度落地后显示 0, 航向始终跟随。"""
         try:
             st = self._client.getMultirotorState()
-            raw_flying = st.landed_state != airsim.LandedState.Landed
+            # ready 标识 PX4 固件链路已建立 (is_ready_ 连接成功才置位)。
+            # PX4 没跑/启动中时 landed_state 是默认值 (landed=false → 误报
+            # Flying 且永远不会有 EXTENDED_SYS_STATE 纠正), 必须 False 才可信
+            raw_flying = (st.landed_state != airsim.LandedState.Landed
+                          and bool(st.ready))
         except Exception:
             return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
         # PX4 上电瞬态: landed 默认 false, AirSim 在收到首条 EXTENDED_SYS_STATE
