@@ -23,8 +23,9 @@ DISPLAY_IMAGE_HZ = 30
 # 转发端稳定低于源帧率 (ros2 topic hz /flylab/display/image_raw), 改 False
 DISPLAY_IMAGE_RELIABLE = False
 # Scene 图传走 PNG 压缩传输 (线上体积约原始 BGR 的 1/3, UE 编码 + 本端
-# 解码均为 C 实现, 净赚帧率); 服务端不支持会自动回退原始传输。False = 始终原始
-DISPLAY_SCENE_COMPRESS = True
+# 解码均为 C 实现, 净赚帧率)。注意 PNG 无损不糊; True 时若原始回退路径
+# 触发, 会自动做 RGB→BGR 通道翻转保持色彩一致。False = 始终原始传输
+DISPLAY_SCENE_COMPRESS = False
 
 # 算法启停指令话题：按钮按下/抬起时发布 std_msgs/String，算法节点自行订阅执行
 CMD_TOPIC = '/flylab/vision_cmd'
@@ -50,9 +51,10 @@ GIMBAL_JOY_RATE_DEG_S = 60.0   # 云台摇杆满偏时的转动角速度 (°/s),
 # 把积累的姿态差一次性归零 —— 表现为方向键不再纯上下/左右。除按键立即下发
 # 外, 以该频率按当前机体姿态重下发保持基准新鲜; 0 = 关闭 (仅地面静态调试)。
 # 该频率同时是云台稳定 (follow) 模式的重下发频率: 越高抗机体晃动越好,
-# 但每拍有 1+相机数 次 RPC (kinematics + 每相机 simSetCameraPose),
-# 30Hz ≈ 150 RPC/s, 再高会挤占抓图线程
-GIMBAL_HOLD_HZ = 30.0
+# 但每拍有 2 次 RPC (kinematics + 当前相机 simSetCameraPose, 首次同步/
+# 切换相机时再多几拍), 且 UE 端搬相机 actor 挤占渲染线程拖慢图传。
+# 15Hz 补偿延迟 ~66ms, 人眼无感; 再高收益递减、图传帧率代价明显
+GIMBAL_HOLD_HZ = 15.0
 
 # 回中动画角速度 (度/秒): 回中不再是瞬跳, 而是以该速度平滑转回机头正前方,
 # 按方向键可随时打断。越小越柔, 90 ≈ 实机云台回中的手感

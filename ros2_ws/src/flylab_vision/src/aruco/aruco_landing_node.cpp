@@ -324,25 +324,43 @@ private:
   ///                   或只认指定 ID (target_fallback=false, 原严格模式)
   /// 回退目标软锁定: 仍在画面就继续跟, 防多个大码间逐帧跳变; 指定 ID 重新
   /// 出现则立即切回 (两码同心布置时中心重合, 切换无水平跳变, 无需确认帧)
+  /// 同 ID 多码 (用户布置了两个相同码): 一律取画面面积最大者, 不随检出
+  /// 顺序跳变 (检出列表顺序帧间不稳定)
   const Detection * pickTarget(double dt)
   {
     if (detections_.empty()) {
       noteTargetMissed(dt);
       return nullptr;
     }
+    // 同 ID 多码取画面面积最大者: 检出列表顺序帧间不稳定, 取"第一个"
+    // 会让目标在两码间逐帧跳变; 面积最大 (通常离得最近) 且逐帧一致
+    auto largestOf = [&](int id) -> const Detection * {
+      const Detection * best = nullptr;
+      double best_area = -1.0;
+      for (const auto & d : detections_) {
+        if (d.id != id) {
+          continue;
+        }
+        const double a = d.bbox_wh.x * d.bbox_wh.y;
+        if (a > best_area) {
+          best_area = a;
+          best = &d;
+        }
+      }
+      return best;
+    };
     // 指定 ID 优先: 出现即切换对齐目标
     if (target_id_ >= 0) {
-      for (const auto & d : detections_) {
-        if (d.id == target_id_) {
-          if (tracked_id_ != target_id_) {
-            RCLCPP_INFO(
-              get_logger(), "\033[32m对齐目标切换: id=%d (指定目标出现%s)\033[0m",
-              target_id_, tracked_id_ >= 0 ? ", 从回退码接管" : "");
-          }
-          tracked_id_ = target_id_;
-          lost_id_time_ = 0.0;
-          return &d;
+      const Detection * m = largestOf(target_id_);
+      if (m != nullptr) {
+        if (tracked_id_ != target_id_) {
+          RCLCPP_INFO(
+            get_logger(), "\033[32m对齐目标切换: id=%d (指定目标出现%s)\033[0m",
+            target_id_, tracked_id_ >= 0 ? ", 从回退码接管" : "");
         }
+        tracked_id_ = target_id_;
+        lost_id_time_ = 0.0;
+        return m;
       }
       if (!target_fallback_) {
         noteTargetMissed(dt);
@@ -352,11 +370,10 @@ private:
     }
     // 锁定目标仍在画面: 直接跟它 (指定模式下 tracked_id_ 已是回退码)
     if (tracked_id_ >= 0 && tracked_id_ != target_id_) {
-      for (const auto & d : detections_) {
-        if (d.id == tracked_id_) {
-          lost_id_time_ = 0.0;
-          return &d;
-        }
+      const Detection * m = largestOf(tracked_id_);
+      if (m != nullptr) {
+        lost_id_time_ = 0.0;
+        return m;
       }
       // 锁定目标本帧缺失: 短暂丢失 (检测抖动/遮挡) 仍认锁定目标, 悬停等待
       noteTargetMissed(dt);

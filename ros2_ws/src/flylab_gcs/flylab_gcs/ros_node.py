@@ -152,6 +152,10 @@ class DisplayForwarder(threading.Thread):
                     try:
                         pub.publish(self._to_msg(frame))
                         self.fwd_count += 1
+                    except Exception:
+                        # 退出竞态: rclpy.shutdown() 作废上下文时线程正好
+                        # 在 publish (RCLError) —— 线程即将退出, 静默吞掉
+                        pass
                     finally:
                         self._publishing = False
                 time.sleep(max(0.0, period - (time.monotonic() - t0)))
@@ -303,5 +307,9 @@ class GroundStationNode(Node):
         return self.display_forwarder.take_fwd_count()
 
     def shutdown(self):
-        """停止转发线程 (程序退出时调用, 先于 rclpy.shutdown())。"""
-        self.display_forwarder.stop()
+        """停止转发线程 (程序退出时调用, 先于 rclpy.shutdown())。
+        必须等线程真正退出再返回: 否则 rclpy.shutdown() 作废上下文时
+        线程可能还在 publish, 抛 RCLError (退出栈里打印异常)。"""
+        forwarder = self.display_forwarder
+        forwarder.stop()
+        forwarder.join(timeout=1.0)

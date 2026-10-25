@@ -62,6 +62,12 @@ _GIMBAL_STATE_FILE = os.path.join(os.path.expanduser('~'), '.flylab_gimbal.json'
 # 判定 UE 重新 play 的阈值 (度): 相机实际姿态与上次下发值相差超过该值
 _GIMBAL_REPLAY_THRESHOLD_DEG = 2.0
 
+# 云台稳定重下发的姿态容差 (度): 机体姿态与上次下发时相对转角在该阈值内
+# 视为"没变" 跳过整批下发; 0.25° 视角偏移肉眼不可见, 却能滤掉大半悬停
+# 抖动 (真实机动远超阈值照常下发补偿)。若飞行中发现视角有可见的缓慢
+# 漂移再调回 0.1
+_GIMBAL_APPLY_TOL_DEG = 0.25
+
 
 def _load_gimbal_state():
     """读取持久化的云台角度/安装位姿/上次下发姿态; 没有或损坏时返回空。"""
@@ -251,9 +257,10 @@ class Grabber(threading.Thread):
         self._gimbal_stab = True
         # 上次持久化时的云台角 (稳定模式连续下发期间省去每秒几十次写盘)
         self._gimbal_saved = None
-        # 上次成功下发时的 (机体姿态, 云台角) 指纹: 未变化则视角必与上次
-        # 一致, 跳过下发 RPC (云台与拉图共用一条 RPC 连接, 省下的是串行
-        # 等待, 直接转化为图传帧率)
+        # 上次成功下发时的 (机体姿态, 云台角, 相机) 指纹: 机体姿态与上次
+        # 相对转角在容差内 (悬停抖动) 则视角与上次几乎一致, 跳过下发 RPC
+        # (云台与拉图共用一条 RPC 连接, 省下的是串行等待, 直接转化为图传
+        # 帧率); 姿态真正变化 (机动/转弯) 时失配照常下发
         self._gimbal_apply_key = None
         # Scene 帧走 PNG 压缩传输 (线上体积约为原始 BGR 的 1/3~1/4);
         # 服务端不支持/返回异常时自动回退原始传输 (会话内一次性)
@@ -266,12 +273,18 @@ class Grabber(threading.Thread):
         self.running = True
         self._airsim_ok = False     # AirSim RPC 是否已连通 (云台可用性依据)
         self._conn_last_log = 0.0   # AirSim 未连接时的日志节流 (每 10 秒一条)
+        # 云台专用 RPC 连接 (惰性创建): 与拉图连接分离, 云台下发不阻塞拉图
+        # 往返; 断开/超时置 None, 下一拍惰性重建
+        self._gimbal_client = None
 
     def set_camera(self, name):
         with self.lock:
             self.camera = name
             self._gen += 1      # 旧源正在读取中的帧提交时会被本代数拒绝
             self.frame = None   # 丢弃旧相机画面，避免切换时闪现错图
+            # 切源后立即按新相机重下发视角: 非当前相机不跟随机体姿态, 视角
+            # 已过时, dirty 让下一拍抓图前先补下发 (不等云台节拍), 避免闪帧
+            self._gimbal_dirty = True
 
     def stop(self):
         self.running = False
@@ -528,8 +541,15 @@ class Grabber(threading.Thread):
         except Exception as e:
             self.log(f'云台状态检查失败, 保持当前状态: {e}')
 
-    def _apply_gimbal(self, client, yaw_deg, pitch_deg):
-        """把云台角度经 simSetCameraPose 同步写到所有 AirSim 相机。
+    def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur):
+        """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。
+
+        只持续下发当前显示的相机 cam_cur; 其余相机仅在首次同步时下发一次
+        (进入 _gimbal_last 供 UE 重玩检测用), 之后不跟随机体姿态 —— 非当前
+        相机的视角过时没关系, 切到它时指纹含相机名必失配, 下一拍立即补发
+        到位         (set_camera 置 dirty 保证当拍生效)。这样飞行中每拍只有
+        1 次 kinematics + 1 次 simSetCameraPose, 而不是 1+N 次; 且本方法
+        走云台专用 RPC 连接 (_gimbal_client), 下发不阻塞拉图连接的往返。
 
         simSetCameraPose 按"机体相对位姿"解释输入, 而机体在悬停/飞行中带着
         姿态倾斜: 若把云台角直接叠加在机体系安装姿态上, 偏航绕的是机体 z 轴
@@ -546,14 +566,23 @@ class Grabber(threading.Thread):
         云台偏航的参考是当前机头朝向, 回中恢复安装方向的水平重建。"""
         try:
             q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
-            # 机体姿态与云台角均未变 => 目标视角与上次下发完全一致, 整批
-            # RPC 直接跳过 (地面静止/稳定悬停时 30Hz 跟随几乎全部命中,
-            # RPC 连接让给拉图; 剧烈机动时姿态指纹变化照常下发补偿)
-            key = (q_b.x_val, q_b.y_val, q_b.z_val, q_b.w_val, yaw_deg, pitch_deg)
-            if key == self._gimbal_apply_key:
-                return
+            # 指纹 = (机体姿态, 云台角, 当前相机), 姿态按四元数夹角容差判定
+            # (|dot| = cos(θ/2), q 与 -q 同旋转): 悬停抖动在容差内时 30Hz
+            # 跟随几乎全部命中跳过, RPC 连接让给拉图; 真实机动或切换相机
+            # (云台角/相机名严格比对) 时失配照常下发补偿
+            last = self._gimbal_apply_key
+            if last is not None:
+                lq, lyaw, lpitch, lcam = last
+                dot = abs(q_b.x_val * lq.x_val + q_b.y_val * lq.y_val
+                          + q_b.z_val * lq.z_val + q_b.w_val * lq.w_val)
+                if (lcam == cam_cur and lyaw == yaw_deg and lpitch == pitch_deg
+                        and dot >= math.cos(
+                            math.radians(_GIMBAL_APPLY_TOL_DEG) / 2.0)):
+                    return
             applied = {}
             for cam in DEFAULT_CAMERAS:
+                if cam != cam_cur and cam in self._gimbal_last:
+                    continue   # 非当前相机且已同步过: 切到它时才会再下发
                 if cam not in self._gimbal_mount:
                     try:
                         self._gimbal_mount[cam] = self._capture_mount(client, cam)
@@ -580,7 +609,8 @@ class Grabber(threading.Thread):
                 except Exception as e:
                     self.log(f'云台: {cam} 下发失败: {e}')
             if applied:
-                self._gimbal_apply_key = key   # 指纹仅在成功下发后更新
+                # 指纹仅在成功下发后更新 (记录当时的机体姿态供容差比对)
+                self._gimbal_apply_key = (q_b, yaw_deg, pitch_deg, cam_cur)
                 # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对); 持久化
                 # 仅在云台角变化时进行 —— 稳定模式 30Hz 连续下发, 角度不变
                 # 的周期若也写盘就是每秒几十次文件 IO
@@ -593,8 +623,10 @@ class Grabber(threading.Thread):
                     _save_gimbal_state(self._gimbal, self._gimbal_mount,
                                        applied)
         except Exception as e:
-            # 失败不置回 dirty: 避免每帧重试刷屏; 重连或下次按键会重新下发
+            # 失败不置回 dirty: 避免每帧重试刷屏; 置空云台连接下拍惰性重建,
+            # 重连或下次按键会重新下发
             self.log(f'云台控制失败: {e}')
+            self._gimbal_client = None
         finally:
             self._gimbal_dirty = False
 
@@ -733,7 +765,13 @@ class Grabber(threading.Thread):
                             self._airsim_ok = False
                         time.sleep(1.0)
                         continue
-                    client = airsim.VehicleClient(ip=self.host, port=self.port)
+                    # 正式连接必须带短超时: VehicleClient 默认 RPC 超时
+                    # 3600s, UE 卡顿/网络抖动时 simGetImages 会把抓图线程
+                    # 冻结最长 1 小时 (图传假死); 3s 超时抛异常走下方重连
+                    client = airsim.VehicleClient(
+                        ip=self.host, port=self.port, timeout_value=3.0)
+                    self._gimbal_client = airsim.VehicleClient(
+                        ip=self.host, port=self.port, timeout_value=3.0)
                     with self.lock:
                         self._airsim_ok = True
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
@@ -756,12 +794,20 @@ class Grabber(threading.Thread):
                 # 被钉在世界系, 机体剧烈晃动时视角保持水平不跟着抖; 非稳定
                 # 模式维持原语义, 居中=刚性挂载 (省 RPC, FPV 手感)。
                 now = time.monotonic()
-                if gim_dirty or (
-                        config.GIMBAL_HOLD_HZ > 0
-                        and (stab or gim != (0.0, 0.0))
-                        and now - self._gimbal_apply_t
-                        >= 1.0 / config.GIMBAL_HOLD_HZ):
-                    self._apply_gimbal(client, *gim)
+                if self._gimbal_client is None:
+                    # 云台连接惰性重建: 构造失败 (UE 未 play 等) 不拖累拉图
+                    try:
+                        self._gimbal_client = airsim.VehicleClient(
+                            ip=self.host, port=self.port, timeout_value=3.0)
+                    except Exception:
+                        pass
+                if self._gimbal_client is not None and (
+                        gim_dirty or (
+                            config.GIMBAL_HOLD_HZ > 0
+                            and (stab or gim != (0.0, 0.0))
+                            and now - self._gimbal_apply_t
+                            >= 1.0 / config.GIMBAL_HOLD_HZ)):
+                    self._apply_gimbal(self._gimbal_client, *gim, cam)
                     self._gimbal_apply_t = now
                 # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
                 # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
@@ -808,4 +854,5 @@ class Grabber(threading.Thread):
             except Exception as e:
                 self.log(f'连接中断: {e}，1 秒后重连...')
                 client = None
+                self._gimbal_client = None
                 time.sleep(1.0)

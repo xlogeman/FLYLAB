@@ -165,7 +165,7 @@ class VideoLabel(QLabel):
         # 先缩放, 之后所有绘制都在缩放后 pixmap 的坐标系里进行:
         # pixmap 会按 AlignCenter 居中显示, 尺寸 = 原图 * scale (KeepAspectRatio)
         scaled = self._pixmap.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
+            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter = QPainter(scaled)
         if self._sel_start is not None and self._sel_cur is not None:
             # 选择框: widget 坐标 -> pixmap 坐标 (减去居中黑边偏移)
