@@ -119,7 +119,7 @@ VEHICLE_CMDS = [
     {'name': '上锁 (Disarm)',  'cmd': 'disarm'},
 ]
 
-# ---------- 算法选择 (下拉框 + 运行/取消按钮) ----------
+# ---------- 视觉算法选择 (下拉框 + 运行/取消按钮) ----------
 # name=下拉框显示文字, start/stop=运行/取消时发布的指令。
 # cmd=算法节点启动命令 (可选): 填了则地面站点"运行"时自动拉起进程、点"取消"
 # 时自动回收; 不填则假定节点已在外部运行, 只发启停指令。
@@ -161,4 +161,33 @@ ALGORITHMS = [
              '--ros-args', '-p', 'device:=cuda'],   # 无 CUDA 环境会自动回退 CPU
      'start': 'pose_start', 'stop': 'pose_stop'},
     {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
+]
+
+# ---------- 飞行链路选择 (flylab_flight 一键 launch, 下拉框 + 运行/取消) ----------
+# name=下拉框显示文字, cmd=ros2 launch 命令 (整链路: 传感器/桥接/算法/跟踪器)。
+# 交互与视觉算法按钮一致: 点选即启动, 再点运行中的即停止, 选其他停旧换新;
+# 运行中按钮点亮 + 文字跟随。链路输出直通终端 (含 RViz 等长驻进程, 输出量大)。
+# 注意: 避障/跟踪类链路依赖通信链路 (MAVROS/uXRCE) 在跑, 先在工具栏开启。
+FLIGHT_LINKS = [
+    {'name': '感知建图',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'depth_mapping.launch.py']},
+    {'name': 'EGO 避障',
+     # mavros:=false: 不随 launch 自启动 MAVROS 桥, 通信链路统一由
+     # 工具栏"通信链路"按钮管理 (避免双 MAVROS 抢 14542 / 状态脱节)
+     # need_link=True: 需先在工具栏开启通信链路, 菜单项才可点 (跟踪器依赖桥)
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'fly_ego.launch.py', 'mavros:=false'],
+     'need_link': True},
+    {'name': 'SUPER 避障',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'fly_super.launch.py', 'mavros:=false'],
+     'need_link': True},
+    {'name': 'OpenVINS',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'openvins_msckf.launch.py']},
+    {'name': 'VINS 单目',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'vins_mono.launch.py']},
+    {'name': 'VINS 双目',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'vins_stereo.launch.py']},
+    {'name': 'ORB-SLAM3',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'orb_slam3.launch.py']},
+    {'name': 'FAST-LIO',
+     'cmd': ['ros2', 'launch', 'flylab_flight', 'fast_lio.launch.py']},
 ]

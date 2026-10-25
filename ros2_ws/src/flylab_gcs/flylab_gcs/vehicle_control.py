@@ -146,6 +146,15 @@ class VehicleController(threading.Thread):
             flying = False
         kin = st.kinematics_estimated
         pos, vel, q = kin.position, kin.linear_velocity, kin.orientation
+        # 物理异常/仿真毛刺时 AirSim 可能回 NaN/Inf 坐标 —— 整拍丢弃:
+        # NaN 进航迹/遥测会沿 渲染→paintEvent 抛异常→PyQt abort 的链路
+        # 带崩整个界面 (曾致 GUI 静默退出、托管进程无人回收)
+        if not (math.isfinite(pos.x_val) and math.isfinite(pos.y_val)
+                and math.isfinite(pos.z_val)
+                and math.isfinite(vel.x_val) and math.isfinite(vel.y_val)
+                and math.isfinite(vel.z_val)):
+            self.log.warning('飞行控制: 丢弃一拍异常遥测 (坐标非有限值, 仿真物理异常?)')
+            return
         now = time.monotonic()
         with self._lock:
             was, self._flying = self._flying, flying

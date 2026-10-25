@@ -75,21 +75,28 @@ class ManagedProcess:
         self.proc = None
 
     def stop(self, timeout=2.0):
-        """SIGTERM 整个进程组, 超时再 SIGKILL。"""
+        """SIGTERM 整个进程组, 超时再 SIGKILL。
+        注意: 直接子进程 (如 ros2 launch) 可能先于孤儿孙进程退出 ——
+        此时 wait() 立刻返回, 若只在超时分支才 SIGKILL 就会漏杀整组
+        (表现为 RViz/Pangolin 窗口关不掉)。故 start_new_session 下
+        子进程即组长 (pgid == pid), 等待结束后无条件对组 SIGKILL 兜底:
+        组已空则 ProcessLookupError 自然跳过, 还有成员则确保全灭。"""
         proc, self.proc = self.proc, None
         if proc is None or proc.poll() is not None:
             return
+        pgid = proc.pid
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            os.killpg(pgid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError, OSError):
             proc.terminate()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                proc.kill()
+            pass
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
 
     def terminate(self):
         """轻量停止: 仅 SIGTERM 不等待 (需要延迟回收/异步回收的场景)。"""

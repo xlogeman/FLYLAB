@@ -11,13 +11,14 @@
   main_window.py      本文件: 工具栏/面板组装 + 33ms 轮询调度 + 按钮门控
 
 界面结构:
-  顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 / 算法 /
-  视觉反控, 全部下拉或 toggle 交互
+  顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 /
+  视觉算法 / 飞行链路 / 视觉反控, 全部下拉或 toggle 交互
   左侧画面 + 底部日志框 (camera_widget 内部布局)
   右栏: 航线地图 + 云台/罗盘 + 手动遥控 (双摇杆)
 """
 import os
 import time
+import traceback
 
 import rclpy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -65,7 +66,8 @@ class MainWindow(QMainWindow):
                                   on_line=lambda text: self.log_line.emit('PX4', text))
         self.px4_model = None      # 运行中的机型 (config.PX4_MODELS 项), None=未运行
         self.link_procs = {}       # key -> ManagedProcess (有存活进程 = 链路开启中)
-        self.algo_proc = ManagedProcess(self.log, '算法节点')
+        self.algo_proc = ManagedProcess(self.log, '视觉算法节点')
+        self.flight_proc = ManagedProcess(self.log, '飞行链路')   # ros2 launch 整链路
         self.land_proc = ManagedProcess(self.log, '降落节点')
         self.teleop_proc = ManagedProcess(self.log, '遥控节点')
 
@@ -73,8 +75,9 @@ class MainWindow(QMainWindow):
         self.veh_ctrl = VehicleController(self.log, host, config.AIRSIM_RPC_PORT)
         self.veh_ctrl.start()
 
-        # 算法/降落/遥控 UI 状态
+        # 视觉算法/飞行链路/降落/遥控 UI 状态
         self.running_algo = None
+        self.running_flight = None   # 运行中的飞行链路 (config.FLIGHT_LINKS 项)
         self._last_landing_seq = 0     # 已处理的降落状态事件序号
         self._last_teleop_seq = 0      # 已处理的遥控状态事件序号
         # 归一化遥控量 (-1..1): x 前 y 右 z 升 w 左转, 组合成 Twist 下发
@@ -83,6 +86,7 @@ class MainWindow(QMainWindow):
         self._fwd_last = time.monotonic()
         self._algo_started_at = 0.0    # 算法进程启动时刻 (发现窗口内不告警)
         self._last_src = ''
+        self._poll_err_last = 0.0   # 上次轮询异常上屏时刻 (限频用)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
 
@@ -96,6 +100,7 @@ class MainWindow(QMainWindow):
         self.toolbar.addWidget(self._build_vehicle_button())
         self.toolbar.addWidget(self._build_link_button())
         self.toolbar.addWidget(self._build_algo_button())
+        self.toolbar.addWidget(self._build_flight_button())
         self.toolbar.addWidget(self._build_landing_button())
         self.addToolBar(self.toolbar)
 
@@ -372,16 +377,16 @@ class MainWindow(QMainWindow):
             return
         self.veh_ctrl.request(key)
 
-    # ---------- 算法 (工具栏下拉按钮: 点选即推理+可视化, 再点/切换即取消) ----------
+    # ---------- 视觉算法 (工具栏下拉按钮: 点选即推理+可视化, 再点/切换即取消) ----------
 
     def _build_algo_button(self):
         self.algo_btn = QToolButton()
-        self.algo_btn.setText('算法')
+        self.algo_btn.setText('视觉算法')
         self.algo_btn.setPopupMode(QToolButton.InstantPopup)
         self.algo_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.algo_btn.setToolTip(
-            '选择算法即运行 (拉起进程 + 发启动指令, 检测结果叠加到画面); '
-            '再点运行中的算法即停止, 选其他算法停旧换新')
+            '视觉算法 (flylab_vision): 选择即运行 (拉起进程 + 发启动指令, '
+            '结果叠加到画面); 再点运行中的算法即停止, 选其他停旧换新')
         menu = QMenu(self.algo_btn)
         self.algo_btn.setMenu(menu)
         menu.aboutToShow.connect(self._rebuild_algo_menu)
@@ -471,8 +476,91 @@ class MainWindow(QMainWindow):
     def _update_algo_state(self):
         """按钮文字跟随当前运行的算法, 无则回到"算法"; 运行中点亮状态灯。"""
         running = self.running_algo['name'] if self.running_algo else None
-        self.algo_btn.setText(f'算法: {running}' if running else '算法')
+        self.algo_btn.setText(f'视觉算法: {running}' if running else '视觉算法')
         self._set_btn_on(self.algo_btn, running is not None)
+
+    # ---------- 飞行链路 (flylab_flight 一键 launch, 工具栏下拉) ----------
+
+    def _build_flight_button(self):
+        """飞行链路工具按钮: 下拉选链路即 ros2 launch 整链路 (传感器/
+        桥接/算法/跟踪器), 再点运行中的链路即停止, 选其他停旧换新。
+        互不携带启停指令 (launch 进程生命周期 = 链路开关)。"""
+        self.flight_btn = QToolButton()
+        self.flight_btn.setText('飞行链路')
+        self.flight_btn.setPopupMode(QToolButton.InstantPopup)
+        self.flight_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.flight_btn.setToolTip(
+            '飞行链路 (flylab_flight): 选择即运行感知建图/避障/VIO/SLAM '
+            '整链路; 再点运行中的链路即停止, 选其他停旧换新。'
+            '避障/跟踪类链路需先在工具栏开启通信链路')
+        menu = QMenu(self.flight_btn)
+        self.flight_btn.setMenu(menu)
+        menu.aboutToShow.connect(self._rebuild_flight_menu)
+        menu.triggered.connect(self._on_flight_action)
+        return self.flight_btn
+
+    def _rebuild_flight_menu(self):
+        """重建链路菜单: ✓ = 正在运行 (与机型/算法菜单同款交互);
+        need_link 的链路 (EGO/SUPER 避障) 在通信链路未开启或手动遥控
+        接管中时置灰 —— 跟踪器依赖通信桥, 且与遥控互斥 (都走 offboard)。
+        菜单每次展开时重建, 门控状态总是新鲜的。"""
+        menu = self.flight_btn.menu()
+        menu.clear()
+        cur = self.running_flight['name'] if self.running_flight else None
+        link_ok = (self._selected_link() is not None
+                   and not self.teleop_btn.isChecked())
+        for link in config.FLIGHT_LINKS:
+            act = menu.addAction(link['name'])
+            act.setData(link['name'])
+            act.setCheckable(True)
+            act.setChecked(link['name'] == cur)
+            act.setToolTip(' '.join(link['cmd']))
+            if link.get('need_link') and not link_ok:
+                act.setEnabled(False)
+                act.setToolTip('需先开启通信链路, 且手动遥控未接管')
+
+    def _on_flight_action(self, act):
+        """菜单点击: 未运行 → 启动; 点运行中的链路 → 停止;
+        运行中选其他链路 → 停旧换新。"""
+        name = act.data()
+        link = next((l for l in config.FLIGHT_LINKS if l['name'] == name), None)
+        if link is None:
+            return
+        if self.running_flight is not None:
+            was = self.running_flight        # 先记住 (stop 会清掉)
+            self._stop_flight()
+            if was is link:                  # 刚才运行的就是它 → 纯停止
+                return
+        self.running_flight = link
+        self.flight_proc.start(link['cmd'])
+        self._update_flight_state()
+
+    def _stop_flight(self):
+        """停止飞行链路: SIGTERM 整个进程组 (ros2 launch 及其全部子进程,
+        含 RViz/跟踪器), 超时 SIGKILL。"""
+        link = self.running_flight
+        if link is None:
+            return
+        self.flight_proc.stop()
+        self.running_flight = None
+        self._update_flight_state()
+        self.log.info(f'飞行链路已停止: {link["name"]}')
+
+    def _check_flight_alive(self):
+        """轮询: 链路进程异常退出 (launch 失败/崩溃) 则复位按钮并提示。"""
+        if self.running_flight is not None and self.flight_proc.exited() is not None:
+            rc = self.flight_proc.proc.returncode
+            self.log.error(f'飞行链路进程退出 (退出码 {rc}): '
+                           f'{self.running_flight["name"]}')
+            self.flight_proc.clear()
+            self.running_flight = None
+            self._update_flight_state()
+
+    def _update_flight_state(self):
+        """按钮文字跟随当前运行的链路, 无则回到"飞行链路"; 运行中点亮。"""
+        running = self.running_flight['name'] if self.running_flight else None
+        self.flight_btn.setText(f'飞行链路: {running}' if running else '飞行链路')
+        self._set_btn_on(self.flight_btn, running is not None)
 
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
@@ -653,6 +741,11 @@ class MainWindow(QMainWindow):
             # 切回 LOITER 交还 offboard, 遥控 1s 后再接管不会打架
             if self.landing_btn.isChecked():
                 self.landing_btn.setChecked(False)
+            # 避障链路 (EGO/SUPER) 与遥控互斥: 跟踪器同样走 offboard,
+            # 开遥控先整链路退出, offboard 交由遥控节点独占
+            if self.running_flight is not None and self.running_flight.get('need_link'):
+                self._stop_flight()
+                self.log.info('手动遥控接管, 已自动退出避障链路')
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'
             cmd = list(config.TELEOP_CMD) + ['--ros-args', '-p', f'link:={link}']
@@ -734,6 +827,24 @@ class MainWindow(QMainWindow):
     # ---------- 主轮询 (33ms, GUI 线程) ----------
 
     def _poll_annotations(self):
+        """轮询入口兜底: 本方法跑在 Qt 定时器槽里, PyQt5 对槽内未捕获的
+        Python 异常会直接 qFatal abort 整个进程 (界面"自己退出"的元凶,
+        进程树无人回收)。任何刷新环节抛异常只记日志跳过本拍, 不带崩界面。"""
+        try:
+            self._poll_once()
+        except Exception:
+            self._log_poll_error()
+
+    def _log_poll_error(self):
+        """轮询异常限频上屏 (同一异常风暴 5s 一条, 防刷屏)。"""
+        now = time.monotonic()
+        if now - self._poll_err_last < 5.0:
+            return
+        self._poll_err_last = now
+        self.log.error('轮询异常 (已跳过本拍, 界面继续运行):\n'
+                       + traceback.format_exc())
+
+    def _poll_once(self):
         # 驱动 ROS 收包 (节点没有独立 spin 线程, 由本定时器在 GUI 线程代转,
         # 回调天然在主线程执行, 无并发问题); 不 spin 则订阅永远收不到消息
         try:
@@ -761,6 +872,7 @@ class MainWindow(QMainWindow):
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
         self._check_algo_alive()
+        self._check_flight_alive()   # 链路进程异常退出则复位按钮
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
         # 飞行控制按钮: 需 PX4 SITL 已启动 + 飞控 RPC 已连通才可点
@@ -823,6 +935,8 @@ class MainWindow(QMainWindow):
         """退出: 回收全部托管进程, 停掉后台线程。"""
         if self.running_algo is not None:
             self._stop_algo()
+        if self.running_flight is not None:
+            self._stop_flight()          # 链路随地面站退出一并回收
         if self.landing_btn.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
         self.land_proc.stop()

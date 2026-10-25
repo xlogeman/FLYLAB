@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     # 启动 ORB SLAM3 双目+IMU
-    orb_vocab_path = "/root/flylab_flight/ros2_ws/src/orb_slam3/vocabulary/ORBvoc.txt"
+    orb_vocab_path = "/root/flylab/ros2_ws/src/orb_slam3/vocabulary/ORBvoc.txt"
     orb_config_path = os.path.join(pkg_share, 'configs/orb_slam3/stereo-inertial.yaml')
     orbslam3_node = launch_ros.actions.Node(
         package='orbslam3',
@@ -44,7 +44,7 @@ def generate_launch_description():
         arguments=[
             orb_vocab_path,
             orb_config_path,
-            'false'  # 不显示pangolin可视化窗口；AirSim 理想平行双目无需预校正 (do_rectify)
+            'false'  # do_rectify: AirSim 理想平行双目无需预校正 (Pangolin 开关在节点源码里, 已置 false)
         ],
         remappings=[
             ('/camera/left', '/airsim/cam/left_cam/image_raw'),

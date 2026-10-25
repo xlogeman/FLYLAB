@@ -54,8 +54,10 @@ def main(args=None):
     win.resize(int(screen.width() * ratio_w), int(screen.height() * ratio_h))
     win.show()
 
-    # Ctrl+C 修复: 主线程阻塞在 Qt 事件循环里, 改为收到 SIGINT 直接退出事件循环
+    # Ctrl+C / kill 修复: 主线程阻塞在 Qt 事件循环里, 收到 SIGINT/SIGTERM
+    # 统一优雅退出事件循环 → finally 回收全部托管进程 (不留孤儿链路)
     signal.signal(signal.SIGINT, lambda *_: QApplication.instance().quit())
+    signal.signal(signal.SIGTERM, lambda *_: QApplication.instance().quit())
 
     try:
         ret = app.exec_()
