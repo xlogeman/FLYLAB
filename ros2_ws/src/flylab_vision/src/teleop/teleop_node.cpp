@@ -36,6 +36,7 @@ constexpr double kDeadzone = 0.06;     // 归一化量死区 (拨杆/摇杆回�
 constexpr double kWarmupSec = 1.0;     // 接管: setpoint 预热时长
 constexpr double kRetrySec = 5.0;      // 接管重试窗口 (超时判 FAILED)
 constexpr double kReleaseSec = 2.0;    // 交还: 等 LOITER 确认的上限
+constexpr double kPendingSec = 10.0;   // start 早到: 等飞控状态就绪的上限
 }  // namespace
 
 class TeleopNode : public rclcpp::Node
@@ -104,8 +105,18 @@ private:
       return;
     }
     if (!client_->gotStatus()) {
-      RCLCPP_ERROR(get_logger(), "未收到飞控状态, 无法接管 (通信链路是否已开启?)");
-      publishStatus("error: 通信链路未通");
+      // mavros/uXRCE 刚启动时状态话题要几秒才通, 而地面站按 500ms 重发
+      // start —— 早到的 start 不再报致命错误 (进程会被界面回收, 用户要点
+      // 好几次才撞上一次成功), 改为置 pending 等状态一到自动接管 (限时),
+      // 见 tick() 的 IDLE 分支
+      if (!start_pending_) {
+        start_pending_ = true;
+        pending_deadline_ = now() + rclcpp::Duration::from_seconds(kPendingSec);
+        RCLCPP_WARN(
+          get_logger(), "飞控状态未到, 等待通信链路就绪后自动接管 (最多 %.0fs)",
+          kPendingSec);
+        publishStatus("engaging");
+      }
       return;
     }
     if (!client_->armed()) {
@@ -123,6 +134,7 @@ private:
 
   void requestStop()
   {
+    start_pending_ = false;   // 取消等待中的接管 (不能 pending 挂着日后自动接管)
     if (state_ != State::IDLE) {
       beginRelease("stop");
     }
@@ -143,6 +155,16 @@ private:
     const auto now = this->now();
     switch (state_) {
       case State::IDLE:
+        if (start_pending_) {
+          if (client_->gotStatus()) {
+            start_pending_ = false;
+            requestStart();   // 飞控状态已到, 回正常接管校验 (解锁检查等)
+          } else if (now > pending_deadline_) {
+            start_pending_ = false;
+            RCLCPP_ERROR(get_logger(), "等待飞控状态超时 (通信链路是否已开启?)");
+            publishStatus("error: 通信链路未通");
+          }
+        }
         break;
       case State::ENGAGING: {
         const auto rc = client_->takeoverTick(now, kWarmupSec, kRetrySec);
@@ -220,6 +242,8 @@ private:
   }
 
   State state_ = State::IDLE;
+  bool start_pending_ = false;   // start 早到: 等飞控状态就绪后自动接管
+  rclcpp::Time pending_deadline_{0, 0, RCL_ROS_TIME};
   std::unique_ptr<Px4OffboardClientBase> client_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub_;

@@ -185,15 +185,16 @@ class VehicleController(threading.Thread):
             tele['alt'] = max(0.0, self._z_ground - pos.z_val)   # NED z 下为正
             tele['hs'] = math.hypot(vel.x_val, vel.y_val)
             tele['vs'] = -vel.z_val                              # 上为正
-            # 航迹记录 (NED x=北 y=东), 供地图控件绘制航线
-            if not self._track or self._track[-1] != (pos.x_val, pos.y_val):
-                self._track.append((pos.x_val, pos.y_val))
-                if len(self._track) > 2000:
-                    del self._track[:500]   # 超上限丢最旧一批 (省得每拍裁剪)
         else:
             self._tele_prev = None
             self._tele_t = 0.0
             tele['alt'] = tele['hs'] = tele['vs'] = 0.0
+        # 航迹记录 (NED x=北 y=东), 供地图控件绘制航线: 地面连通也记录
+        # (地图即刻显示所在点, 不用等起飞), 起飞瞬间清零重新累计飞行航迹
+        if not self._track or self._track[-1] != (pos.x_val, pos.y_val):
+            self._track.append((pos.x_val, pos.y_val))
+            if len(self._track) > 2000:
+                del self._track[:500]   # 超上限丢最旧一批 (省得每拍裁剪)
         tele['hdg'] = (math.degrees(math.atan2(
             2.0 * (q.w_val * q.z_val + q.x_val * q.y_val),
             1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val))) + 360.0) % 360.0
