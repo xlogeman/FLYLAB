@@ -47,7 +47,7 @@ WSL2 (Ubuntu 22.04) + ROS2 Humble，围绕 PX4 + Cosys-AirSim 做无人机自主
 | `bridge_fastlio` | `points_raw` → `/airsim/lidar/points` | NED→FLU + 挂载外参静态 TF |
 | `bridge_super` | `points_raw`+odom → `/cloud_registered` `/lidar_slam/odom` | 位姿按点云时刻插值对齐 + 逐点去畸变 + 机身回波过滤 |
 
-其他节点：`tracker_uxrce`/`tracker_mavros`（轨迹跟踪+混控，`tracker:=` 选链路）、`super_cmd_bridge`（mars→PositionCommand）、`octomap_dynamic`（建图动态清理）、`vins_arming_switch`（VINS 起飞联动）
+其他节点：`tracker_uxrce`/`tracker_mavros`（轨迹跟踪+混控，`tracker:=` 选链路）、`super_cmd_bridge`（mars→PositionCommand）、`vins_arming_switch`（VINS 起飞联动）
 
 ### 2.3. 环境依赖
 

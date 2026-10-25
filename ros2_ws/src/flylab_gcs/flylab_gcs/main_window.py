@@ -128,11 +128,6 @@ class MainWindow(QMainWindow):
         self.anno_timer.timeout.connect(self._poll_annotations)
         self.anno_timer.start(33)
 
-    _BTN_STYLE = """
-        QPushButton { min-height: 32px; }
-        QPushButton:checked { background-color: #2d8a3e; color: white; }
-    """
-
     @staticmethod
     def _set_btn_on(btn, on):
         """工具按钮状态灯: on 动态属性切换点亮/熄灭 (样式见 _TOOL_BTN_STYLE)。
@@ -854,9 +849,9 @@ class MainWindow(QMainWindow):
         # 遥测六值条 + 罗盘 + 航线地图刷新 (数据随 0.5s 飞控心跳采样)
         tele = self.veh_ctrl.get_telemetry()
         self.tele_bar.update_values(tele)
-        self.compass.set_heading(tele.get('hdg', 0.0))
+        self.compass.set_heading(tele.get('hdg') or 0.0)
         track, home = self.veh_ctrl.get_track()
-        self.map_view.update_state(track, home, tele.get('hdg', 0.0))
+        self.map_view.update_state(track, home, tele.get('hdg') or 0.0)
         # 标注上屏门控: 仅在"算法运行中或降落进行中"时显示。防止外部遗留的
         # 算法节点进程 (仍处于 start 状态) 在用户未运行任何算法时擅自叠加;
         # 此种场景直接清掉已有分组, 不让来路不明的过期标注上屏

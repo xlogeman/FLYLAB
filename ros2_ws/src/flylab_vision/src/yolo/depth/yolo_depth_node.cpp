@@ -39,7 +39,7 @@ public:
     // ---------- 参数 ----------
     const auto model = declare_parameter<std::string>(
       "model", default_model_path("depth", "yolo26s-depth.onnx"));
-    // 0 = 自动取模型固定输入尺寸 (yolo26s-depth-log 导出为 768)
+    // 0 = 自动取模型固定输入尺寸 (yolo26s-depth 导出为 768)
     const auto input_size = declare_parameter<int>("input_size", 0);
     const auto device = declare_parameter<std::string>("device", "cpu");
     // 画中画小窗宽度占原帧比例

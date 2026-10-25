@@ -11,7 +11,6 @@ find_package(px4_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(octomap_msgs REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
@@ -21,15 +20,6 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(quadrotor_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(mars_quadrotor_msgs REQUIRED)
-
-# octomap 动态清理: 订阅 /airsim_node/PX4/odom_local，
-# 周期调用 /octomap_server/clear_bbox 清理无人机周围的旧地图
-add_executable(octomap_dynamic src/octomap_dynamic.cpp)
-ament_target_dependencies(octomap_dynamic
-  rclcpp
-  nav_msgs
-  octomap_msgs
-)
 
 # VINS 起飞联动开关: 监听 /fmu/out/vehicle_status,
 # 在 arming/disarming 时开关 VINS 的 IMU/相机并重启估计器 (mono/stereo 共用)
@@ -143,7 +133,6 @@ ament_target_dependencies(bridge_super
 )
 
 install(TARGETS
-  octomap_dynamic
   vins_arming_switch
   airsim_camera
   airsim_imu

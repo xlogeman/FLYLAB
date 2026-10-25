@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// YOLO 单目深度估计器实现 —— onnxruntime 推理 + 伪彩编码 + 地面站标注 JSON。
 ///
-/// 模型: Ultralytics depth 任务 ONNX 导出 (models/depth/yolo26s-depth-log.onnx)
+/// 模型: Ultralytics depth 任务 ONNX 导出 (models/depth/yolo26s-depth.onnx)
 ///   输入  1x3xSxS (RGB, /255, letterbox 正方形)  —— S 由模型固定输入尺寸决定
 ///   输出  1x1xSxS 逐像素 (log-)深度, 与输入画布同分辨率
 ///

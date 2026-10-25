@@ -48,8 +48,9 @@ class VehicleController(threading.Thread):
         # QGC 式遥测 (0.5s 心跳顺带采样 kinematics, 飞行中积分行程/时长):
         # alt=相对起飞点高度 hs=水平速度 vs=垂直速度 hdg=航向 dist=累计行程
         # ftime=飞行时间(秒) flying=是否在空中
-        self._tele = {'alt': 0.0, 'hs': 0.0, 'vs': 0.0, 'hdg': 0.0,
-                      'dist': 0.0, 'ftime': 0.0, 'flying': False}
+        # 值为 None = 尚无有效数据 (未连通/PX4 未跑), 界面显示 "--" 而非 0
+        self._tele = {'alt': None, 'hs': None, 'vs': None, 'hdg': None,
+                      'dist': None, 'ftime': None, 'flying': False}
         self._tele_t = 0.0        # 上次遥测采样时刻 (monotonic, 0=未采样)
         self._tele_prev = None    # 上次采样水平位置 (x, y)
         self._z_ground = 0.0      # 起飞点 z (NED), 高度基准
@@ -132,11 +133,13 @@ class VehicleController(threading.Thread):
         高度/速度落地后显示 0, 航向始终跟随。"""
         try:
             st = self._client.getMultirotorState()
-            # ready 标识 PX4 固件链路已建立 (is_ready_ 连接成功才置位)。
-            # PX4 没跑/启动中时 landed_state 是默认值 (landed=false → 误报
-            # Flying 且永远不会有 EXTENDED_SYS_STATE 纠正), 必须 False 才可信
+            # ready 只代表 RPC 连接已建立 (连接成功即置位, PX4 没跑也是
+            # True, 区分不出 PX4 死活); PX4 没跑/启动中时 landed_state 是
+            # 默认值 (误报 Flying 且不会有 EXTENDED_SYS_STATE 纠正)。
+            # can_arm = ready && has_gps_lock_, GPS 锁定只有收到 PX4 的
+            # GPS 数据后才置位 —— 用它过滤 PX4 未跑时的陈旧 Flying 误报
             raw_flying = (st.landed_state != airsim.LandedState.Landed
-                          and bool(st.ready))
+                          and bool(st.ready) and bool(st.can_arm))
         except Exception:
             return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
         # PX4 上电瞬态: landed 默认 false, AirSim 在收到首条 EXTENDED_SYS_STATE
@@ -171,15 +174,18 @@ class VehicleController(threading.Thread):
             self._track = []
             self._tele_t = now
             self._tele_prev = (pos.x_val, pos.y_val)
+            # 按次清零: None 初始化后必须显式置数, 否则下一拍 None+float 崩
+            self._tele['dist'] = 0.0
+            self._tele['ftime'] = 0.0
         tele = dict(self._tele)
         tele['flying'] = flying
         if flying:
             dt = max(0.0, now - self._tele_t) if self._tele_t else 0.0
             if self._tele_prev is not None and dt > 0:
-                tele['dist'] = self._tele['dist'] + math.hypot(
+                tele['dist'] = (self._tele['dist'] or 0.0) + math.hypot(
                     pos.x_val - self._tele_prev[0],
                     pos.y_val - self._tele_prev[1])
-                tele['ftime'] = self._tele['ftime'] + dt
+                tele['ftime'] = (self._tele['ftime'] or 0.0) + dt
             self._tele_prev = (pos.x_val, pos.y_val)
             self._tele_t = now
             tele['alt'] = max(0.0, self._z_ground - pos.z_val)   # NED z 下为正
@@ -195,9 +201,12 @@ class VehicleController(threading.Thread):
             self._track.append((pos.x_val, pos.y_val))
             if len(self._track) > 2000:
                 del self._track[:500]   # 超上限丢最旧一批 (省得每拍裁剪)
-        tele['hdg'] = (math.degrees(math.atan2(
+        # 航向连接 PX4 即有效 (can_arm = 收到过 PX4 的 GPS 数据), 不等起飞;
+        # PX4 未跑时保持 None -> 界面显示 "--" (地面陈旧姿态无意义)
+        tele['hdg'] = ((math.degrees(math.atan2(
             2.0 * (q.w_val * q.z_val + q.x_val * q.y_val),
             1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val))) + 360.0) % 360.0
+            if st.can_arm else None)
         with self._lock:
             self._tele.update(tele)
 

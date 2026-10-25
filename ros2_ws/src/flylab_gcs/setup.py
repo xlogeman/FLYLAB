@@ -17,7 +17,6 @@ setup(
     maintainer_email='flylab@todo.todo',
     description='flylab camera viewer: pull AirSim camera images via RPC and display',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'camera_view = flylab_gcs.camera_view:main',

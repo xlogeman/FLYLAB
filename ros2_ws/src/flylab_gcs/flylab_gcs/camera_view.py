@@ -18,6 +18,7 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication, QMainWindow
 
 from .camera_widget import CameraViewWidget
+from .config import AIRSIM_RPC_PORT
 
 
 def main(args=None):
@@ -25,7 +26,7 @@ def main(args=None):
     node = rclpy.create_node('camera_view')
     host = node.declare_parameter(
         'host', os.environ.get('PX4_SIM_HOST_ADDR', '127.0.0.1')).value
-    port = node.declare_parameter('port', 41451).value
+    port = node.declare_parameter('port', AIRSIM_RPC_PORT).value
 
     # opencv-python 自带一套 Qt 库, 与 PyQt5 冲突: 强制 Qt 使用 PyQt5 对应的系统插件
     os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH',

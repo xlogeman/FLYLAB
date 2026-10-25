@@ -15,7 +15,6 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  <depend>octomap_msgs</depend>
   <depend>std_msgs</depend>
   <depend>quadrotor_msgs</depend>
   <!-- SUPER 输出桥接节点 (super_cmd_bridge.cpp) 编译依赖 -->

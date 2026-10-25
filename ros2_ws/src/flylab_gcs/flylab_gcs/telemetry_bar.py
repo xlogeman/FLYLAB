@@ -3,8 +3,8 @@
 
 数据来自 VehicleController 心跳采样的 get_telemetry() (AirSim kinematics,
 不依赖 mavros/uxrce 链路): 水平速度/垂直速度/高度(相对起飞点)/航向/
-累计行程/飞行时间。地面未起飞时高度与速度显示 "--", 行程/时长保留
-上次飞行 (下次起飞清零重计)。
+累计行程/飞行时间。航向连接 PX4 即有效 (不等起飞), 其余未起飞时
+显示 "--", 行程/时长保留上次飞行 (下次起飞清零重计)。
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -54,12 +54,14 @@ class TelemetryBar(QFrame):
         """刷新六格 (tele 为 VehicleController.get_telemetry() 的 dict)。"""
         flying = tele.get('flying', False)
         for key, (val, unit, fmt) in self._cells.items():
-            v = tele.get(key, 0.0)
-            if key == 'ftime':
+            v = tele.get(key)
+            if v is None:
+                text = '--:--' if key == 'ftime' else '--'   # 尚无有效数据
+            elif key == 'ftime':
                 text = (f'{int(v) // 60:02d}:{int(v) % 60:02d}'
                         if v > 0 else '--:--')
             elif not flying and v == 0 and key != 'hdg':
-                text = '--'          # 未起飞: 高度/速度/行程无意义 (航向/时间除外)
+                text = '--'          # 未起飞且为零: 高度/速度/行程显示 "--" (航向连接即有效)
             else:
                 text = fmt.format(v)
                 if unit:
