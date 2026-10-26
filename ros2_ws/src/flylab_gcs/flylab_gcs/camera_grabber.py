@@ -87,14 +87,16 @@ def _load_gimbal_state():
                 last_applied[cam] = airsim.Quaternionr(*q)
             except Exception:
                 pass
+        fov_v = state.get('fov')
+        fov = float(fov_v) if isinstance(fov_v, (int, float)) else None
         return (_clamp_gimbal(float(gimbal[0]), float(gimbal[1])),
-                mounts, last_applied)
+                mounts, last_applied, fov)
     except Exception:
-        return (0.0, 0.0), {}, {}
+        return (0.0, 0.0), {}, {}, None
 
 
-def _save_gimbal_state(gimbal, mounts, last_applied):
-    """持久化云台状态; 失败静默, 不影响主流程。"""
+def _save_gimbal_state(gimbal, mounts, last_applied, fov=None):
+    """持久化云台状态 (fov=各相机视场角, 与云台同一文件); 失败静默。"""
     try:
         data = {'gimbal': list(gimbal), 'mounts': {}, 'last_applied': {}}
         for cam, mount in mounts.items():
@@ -106,6 +108,7 @@ def _save_gimbal_state(gimbal, mounts, last_applied):
                 [ori.x_val, ori.y_val, ori.z_val, ori.w_val]]
         for cam, q in last_applied.items():
             data['last_applied'][cam] = [q.x_val, q.y_val, q.z_val, q.w_val]
+        data['fov'] = fov
         with open(_GIMBAL_STATE_FILE, 'w') as f:
             json.dump(data, f)
     except Exception:
@@ -240,9 +243,12 @@ class Grabber(threading.Thread):
         # 软件云台: 全局角度 (yaw, pitch), 同步作用于所有 AirSim 相机。
         # 状态持久化: 地面站重启沿用上次视角; 仅检测到 UE 重新 play 才回中,
         # 见 _restore_or_reset (连接建立时调用)
-        (self._gimbal,
-         self._gimbal_mount,
-         self._gimbal_last) = _load_gimbal_state()
+        (self._gimbal, self._gimbal_mount, self._gimbal_last,
+         self._fov) = _load_gimbal_state()
+        # 全局视场角 (度): 所有 AirSim 相机共用一个值 (None=用户从未调整,
+        # 保持 settings.json 原值, _apply_fov 不下发)
+        self._fov_saved = self._fov   # 上次落盘值 (变化才写盘)
+        self._fov_dirty = False       # 视场角待下发标记
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
         # 摇杆连续转动: 当前角速度 (°/s) 与上次帧时刻 (None=未在转动)
@@ -285,6 +291,8 @@ class Grabber(threading.Thread):
             # 切源后立即按新相机重下发视角: 非当前相机不跟随机体姿态, 视角
             # 已过时, dirty 让下一拍抓图前先补下发 (不等云台节拍), 避免闪帧
             self._gimbal_dirty = True
+            # 视场角同理: 按新相机记忆值对齐 (没调过的相机不动)
+            self._fov_dirty = True
 
     def stop(self):
         self.running = False
@@ -331,7 +339,7 @@ class Grabber(threading.Thread):
             if yaw_rate == 0.0 and pitch_rate == 0.0:
                 if any(self._gimbal_rate):
                     _save_gimbal_state(self._gimbal, self._gimbal_mount,
-                                       self._gimbal_last)   # 停止时落盘最终角
+                                       self._gimbal_last, self._fov)   # 停止时落盘最终角
                 self._gimbal_rate = (0.0, 0.0)
                 return
             self._gimbal_rate = (yaw_rate, pitch_rate)
@@ -430,6 +438,32 @@ class Grabber(threading.Thread):
             self._gimbal_stab = on
             self._gimbal_dirty = True
 
+    # ---------- 视场角 (界面线程调用, 由抓取线程经 RPC 写入相机) ----------
+
+    def set_fov(self, deg):
+        """设置全局视场角 (度): 所有 AirSim 相机共用一个值, 记忆 + 置
+        dirty, 下一拍经 simSetCameraFov 下发到当前相机 (值不变重复调用
+        无副作用)。拖动滑杆高频进入, 节流靠抓取帧率 (每拍最多一次 RPC)。
+        本机/视频文件源为空操作。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return
+            deg = max(config.GIMBAL_FOV_MIN_DEG,
+                      min(config.GIMBAL_FOV_MAX_DEG, float(deg)))
+            if self._fov == deg:
+                return
+            self._fov = deg
+            self._fov_dirty = True
+
+    def get_fov(self):
+        """全局视场角 (度); 未调整过返回默认 (界面滑杆显示用)。
+        本机/视频文件源返回 None (界面置灰依据)。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return None
+            return self._fov if self._fov is not None \
+                else config.GIMBAL_FOV_DEFAULT_DEG
+
     def get_cam_orientation(self):
         """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
         位姿数据返回 None。
@@ -467,7 +501,7 @@ class Grabber(threading.Thread):
             self._gimbal = (ty, tp)
             self._gimbal_anim = None
             _save_gimbal_state(self._gimbal, self._gimbal_mount,
-                               self._gimbal_last)
+                               self._gimbal_last, self._fov)
         else:
             s = max_d / dist
             self._gimbal = _clamp_gimbal(yaw + dy * s, pitch + dp * s)
@@ -621,7 +655,7 @@ class Grabber(threading.Thread):
                         self._gimbal_saved = (yaw_deg, pitch_deg)
                 if changed:
                     _save_gimbal_state(self._gimbal, self._gimbal_mount,
-                                       applied)
+                                       applied, self._fov)
         except Exception as e:
             # 失败不置回 dirty: 避免每帧重试刷屏; 置空云台连接下拍惰性重建,
             # 重连或下次按键会重新下发
@@ -629,6 +663,30 @@ class Grabber(threading.Thread):
             self._gimbal_client = None
         finally:
             self._gimbal_dirty = False
+
+    def _apply_fov(self, client, cam):
+        """把全局视场角经 simSetCameraFov 写入当前相机 (走云台专用 RPC
+        连接, 不阻塞拉图)。只在值变化/切源/重连/UE 重 play 后对齐一次
+        (dirty 标记), 不逐帧重发; 其余相机切到时同样对齐 —— 各相机共用
+        同一个值。用户从未调过 (None) 时保持 settings.json 原值不动;
+        失败置空云台连接下拍惰性重建。"""
+        with self.lock:
+            fov = self._fov
+            if fov is None:
+                self._fov_dirty = False
+                return
+        try:
+            client.simSetCameraFov(cam, fov, VEHICLE)
+            self._fov_dirty = False
+            with self.lock:
+                if self._fov_saved != fov:
+                    self._fov_saved = fov
+                    _save_gimbal_state(self._gimbal, self._gimbal_mount,
+                                       self._gimbal_last, self._fov)
+        except Exception as e:
+            self.log(f'视场角下发失败: {e}')
+            self._fov_dirty = False
+            self._gimbal_client = None
 
     def _commit(self, arr, is_depth, gen):
         """写入最新帧并统计 fps。gen 与当前切源代数不符 (读取阻塞期间
@@ -777,6 +835,11 @@ class Grabber(threading.Thread):
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
                     # 判断 UE 是否重新 play: play 过则回中, 没过则沿用记忆
                     self._restore_or_reset(client)
+                    # 视场角对齐: 地面站重启/UE 重 play 后按记忆恢复
+                    # (UE 端 FOV 随重 play 复位到 settings.json 值)
+                    with self.lock:
+                        if self._fov is not None:
+                            self._fov_dirty = True
 
                 is_depth = 'depth' in cam.lower()
                 with self.lock:
@@ -809,6 +872,10 @@ class Grabber(threading.Thread):
                             >= 1.0 / config.GIMBAL_HOLD_HZ)):
                     self._apply_gimbal(self._gimbal_client, *gim, cam)
                     self._gimbal_apply_t = now
+                # 视场角: dirty 时按当前相机记忆值对齐一次 (与云台共用
+                # 专用 RPC 连接, 下发不阻塞拉图)
+                if self._fov_dirty and self._gimbal_client is not None:
+                    self._apply_fov(self._gimbal_client, cam)
                 # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
                 # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
                 # PF_FloatRGBA ensure 断言并返回无效数据 (NaN/Inf)

@@ -27,7 +27,9 @@ class VideoLabel(QLabel):
 
     def __init__(self, text='等待图像...'):
         super().__init__(text)
-        self.setMinimumSize(640, 480)
+        # 最小尺寸给小些: 窗口拉小时左栏 (画面+日志) 能跟着收缩, 布局
+        # 不被 640x480 的下限顶爆 (画面本身等比缩放, 小窗口只是看小些)
+        self.setMinimumSize(320, 240)
         self.setAlignment(Qt.AlignCenter)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)

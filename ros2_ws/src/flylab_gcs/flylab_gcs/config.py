@@ -5,7 +5,7 @@
 # 初始窗口大小 = 屏幕可用区域 × 比例 (画面随窗口等比缩放;
 # 窗口无固定尺寸, 启动后可直接拖拽边缘调整, 此处只影响初始大小)。
 # 高度取大些: 画面下方留出日志框 (免切终端看日志)
-WINDOW_SIZE_RATIO = (0.5, 0.4)   # (宽, 高) 相对屏幕可用区域的比例
+WINDOW_SIZE_RATIO = (0.5, 0.55)   # (宽, 高) 相对屏幕可用区域的比例
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -69,6 +69,18 @@ GIMBAL_SLEW_RATE_DEG_S = 90.0
 GIMBAL_YAW_LIMIT_DEG = 45.0      # 偏航限位 ±45°
 GIMBAL_PITCH_MIN_DEG = -90.0     # 俯仰下限 (垂直向下)
 GIMBAL_PITCH_MAX_DEG = 90.0      # 俯仰上限 (垂直向上)
+
+# ---------- 视场角 (AirSim 相机, 经 simSetCameraFov 实时调整) ----------
+# 云台面板"视场"滑杆的调节范围与默认值。所有 UE 相机共用同一个值: 下发到
+# 当前显示的相机, 其余相机切到时对齐, 保证各相机视场一致。默认值只用于
+# 界面显示 —— 用户从未动过滑杆时不下发, 保持 settings.json 里各相机的
+# 原始 FOV; 一旦调整过即持久化 (与云台角同一个状态文件), 重启/重连/
+# UE 重 play 后自动恢复。注意: FOV 变化会改变图传画面几何 —— 未提供
+# 标定文件、按 FOV 估算内参的算法 (如 ArUco 降落) 会受影响, 飞行中
+# 调整需留意
+GIMBAL_FOV_MIN_DEG = 30.0
+GIMBAL_FOV_MAX_DEG = 120.0
+GIMBAL_FOV_DEFAULT_DEG = 90.0
 
 # ---------- ArUco 降落 (主窗口独立按钮) ----------
 # 完整降落链路: 点击按钮拉起 aruco_landing_node (三态状态机:

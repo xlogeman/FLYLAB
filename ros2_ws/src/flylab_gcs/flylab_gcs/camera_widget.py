@@ -23,8 +23,8 @@ import threading
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QFileDialog, QFrame, QGridLayout,
                            QGroupBox, QHBoxLayout, QLabel, QMenu,
-                           QPushButton, QSlider, QToolButton, QVBoxLayout,
-                           QWidget)
+                           QPushButton, QScrollArea, QSlider, QToolButton,
+                           QVBoxLayout, QWidget)
 
 from . import config
 from .camera_grabber import (DEFAULT_CAMERA, DEFAULT_CAMERAS, FILE_PREFIX,
@@ -108,14 +108,26 @@ class CameraViewWidget(QWidget):
             self._left_layout = left   # 供 add_bottom_widget 往画面下方插控件
             left.addWidget(self.video, stretch=1)
             left.addWidget(self.file_ctrl)
-            outer.addLayout(left, stretch=1)
+            # 宽度比例 5:2: 左画面 (含日志框) 占大头, 右功能区窄栏
+            outer.addLayout(left, stretch=5)
             line = QFrame()                  # 画面区与功能区之间的竖分隔线
             line.setFrameShape(QFrame.VLine)
             line.setFrameShadow(QFrame.Sunken)
             outer.addWidget(line)
-            panel = QVBoxLayout()
-            outer.addLayout(panel)
-            # 云台分组框不直接入栏: 主窗口把它与罗盘并排一行后再插入
+            # 右栏套 QScrollArea 自适应窗口: 组件各有最小尺寸 (摇杆固定、
+            # 地图/罗盘有下限), 窗口拉小到放不下时出滚动条, 而不是组件互相
+            # 挤压/截断导致布局错乱; 拉大时组件按 stretch 扩展占满
+            body = QWidget()
+            panel = QVBoxLayout(body)
+            panel.setContentsMargins(0, 0, 0, 0)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)   # body 随视口伸缩, 宽时组件撑满
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setWidget(body)
+            outer.addWidget(scroll, stretch=2)
+            # 云台分组框不直接入栏: 主窗口单独往右栏插入
             gimbal_box = QGroupBox('云台')
             gim_lay = QVBoxLayout(gimbal_box)
             gim_lay.setContentsMargins(6, 4, 6, 6)
@@ -211,10 +223,48 @@ class CameraViewWidget(QWidget):
         angles.addStretch(1)
         g.addLayout(angles, 2, 0, 1, 2)
 
+        # 视场角滑杆 (竖排, 云台方向键/回中稳定按钮右侧): 经 simSetCameraFov
+        # 实时调整 UE 相机 FOV (真实视场, 图传/算法看到的画面同步变化);
+        # 本机/文件源物理上改不了, 随云台整体置灰 (在 _refresh 里统一门控)。
+        # 上=大视场 (广角), 下=小视场 (拉近)
+        fov_col = QVBoxLayout()
+        fov_col.setSpacing(2)
+        fov_title = QLabel('视场')
+        fov_title.setAlignment(Qt.AlignHCenter)
+        self.fov_slider = QSlider(Qt.Vertical)
+        self.fov_slider.setRange(int(config.GIMBAL_FOV_MIN_DEG),
+                                 int(config.GIMBAL_FOV_MAX_DEG))
+        self.fov_slider.setValue(int(config.GIMBAL_FOV_DEFAULT_DEG))
+        self.fov_slider.setMinimumHeight(96)
+        self.fov_slider.setToolTip(
+            f'相机视场角 ({config.GIMBAL_FOV_MIN_DEG:.0f}~'
+            f'{config.GIMBAL_FOV_MAX_DEG:.0f}°): 实时调整 UE 相机, '
+            '所有相机共用一个值, 重启/重连自动恢复; '
+            '未动过时保持 settings.json 原值')
+        self.fov_slider.valueChanged.connect(self._on_fov_slider)
+        self.fov_value = QLabel()
+        self.fov_value.setStyleSheet('color: #444; font-family: monospace;')
+        self.fov_value.setAlignment(Qt.AlignHCenter)
+        fov_col.addWidget(fov_title)
+        # 滑杆宽度固定, 布局默认靠左放 —— 显式居中, 与上下文字同轴线
+        fov_col.addWidget(self.fov_slider, stretch=1, alignment=Qt.AlignHCenter)
+        fov_col.addWidget(self.fov_value)
+        g.addLayout(fov_col, 1, 2, 2, 1)   # 右侧整列 (与摇杆/角度读数同高)
+        self._fov_sync_label(self.fov_slider.value())
+
     def _on_gimbal_joy(self, x, y):
         """云台摇杆偏转 → 角速度 (x=偏航右+, y=俯仰上+), 回中即停。"""
         rate = config.GIMBAL_JOY_RATE_DEG_S
         self.grabber.gimbal_set_rate(x * rate, y * rate)
+
+    def _on_fov_slider(self, value):
+        """视场滑杆变化 → 下发 FOV (拖动中实时跟手, 节流靠抓取帧率)。
+        界面同步回写滑杆时已 blockSignals, 不会误触发本槽。"""
+        self._fov_sync_label(value)
+        self.grabber.set_fov(float(value))
+
+    def _fov_sync_label(self, value):
+        self.fov_value.setText(f'{value}°')
 
     def set_gimbal_locked(self, locked):
         """锁定/解锁云台面板 (视觉反控进行中锁定, 防止反控时转动视角)。
@@ -344,6 +394,14 @@ class CameraViewWidget(QWidget):
             self._gimbal_labels['yaw'].setText(f'航向 {yaw:+.0f}°')
             self._gimbal_labels['pitch'].setText(f'俯仰 {pitch:+.0f}°')
             self._update_gimbal_limit()
+            # 视场滑杆跟随当前相机的 FOV (切源后换记忆值); 用户拖动中
+            # 不回写, 程序回写 blockSignals 防误触发 set_fov
+            fov = self.grabber.get_fov()
+            if fov is not None and not self.fov_slider.isSliderDown():
+                self.fov_slider.blockSignals(True)
+                self.fov_slider.setValue(int(round(fov)))
+                self.fov_slider.blockSignals(False)
+                self._fov_sync_label(int(round(fov)))
         frame, src, fps = self.grabber.get()
         if frame is None:
             # 无信号提示直接写在画面中央 (带源名), 右栏状态条不再重复

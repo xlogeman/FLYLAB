@@ -109,17 +109,17 @@ class MainWindow(QMainWindow):
         # 开启: 拉起 teleop_node (按所选通信链路传 link 参数) 并发 teleop_start
         # 接管 offboard; 摇杆控速度、松开回中悬停; 关闭: 交还控制权。
         # 与视觉反控 (ArUco降落) 互斥 (都走 offboard, 会争抢 setpoint)
-        # 右栏布局 (自上而下): 航线地图 → 云台 (左) + 罗盘 (右, 撑满等高)
-        # 并排 → 手动遥控
+        # 右栏布局 (自上而下): 航线地图 + 罗盘并排一行 → 云台 (视场角
+        # 竖排在云台方向键右侧) → 手动遥控
         self.compass = Compass()
         self.map_view = MapView()   # 俯视轨迹, 数据同遥测: 飞控心跳采样
-        self.camera_tab.add_side_widget(self.map_view)
-        top_row = QWidget()
-        row_lay = QHBoxLayout(top_row)
-        row_lay.setContentsMargins(0, 0, 0, 0)
-        row_lay.addWidget(self.camera_tab.gimbal_box, stretch=2)
-        row_lay.addWidget(self.compass, stretch=1)
-        self.camera_tab.add_side_widget(top_row)
+        map_row = QWidget()
+        map_lay = QHBoxLayout(map_row)
+        map_lay.setContentsMargins(0, 0, 0, 0)
+        map_lay.addWidget(self.map_view, stretch=3)
+        map_lay.addWidget(self.compass, stretch=1)
+        self.camera_tab.add_side_widget(map_row)
+        self.camera_tab.add_side_widget(self.camera_tab.gimbal_box)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
 
         self.setCentralWidget(self.camera_tab)
