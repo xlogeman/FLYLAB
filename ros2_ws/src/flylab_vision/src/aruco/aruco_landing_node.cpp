@@ -186,6 +186,17 @@ public:
         gimbal_ever_ = true;  // 标记数据源存在过 (中断时悬停告警区分诊断用)
       });
 
+    // ---------- 地面站码边长同步 ----------
+    // 场景含多种尺寸码时, 地面站右栏滑杆运行中同步 marker_length:
+    // 影响位姿尺度 (面板"实际宽度/距离"换算), 降落控制只用图像空间量
+    // 不受影响。latched 话题, 后启动的节点一接入即收到最近值。
+    const auto marker_len_topic = declare_parameter<std::string>(
+      "marker_length_topic", "/flylab/aruco_marker_length");
+    marker_length_ = marker_length;
+    marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
+      marker_len_topic, 10,
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_marker_length(*msg);});
+
     // ---------- 地面站视场角同步 ----------
     // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
     // latched 话题, 节点后启动也能收到最近一次发布的值。话题名可用参数覆盖。
@@ -349,6 +360,20 @@ private:
     const double fx = detector_->calibrated() ? detector_->fx() :
       img_w_ / (2.0 * std::tan(fov_deg_ * CV_PI / 360.0));
     return d.bbox_wh.x * d.tvec[2] / fx;
+  }
+
+  // ---------------- 地面站码边长同步 ----------------
+  void on_marker_length(const std_msgs::msg::Float64 & msg)
+  {
+    // 非法值/值未变化跳过 (滑杆拖动重发布降噪)
+    if (msg.data <= 0.0 || msg.data == marker_length_) {
+      return;
+    }
+    marker_length_ = msg.data;
+    detector_->set_marker_length(msg.data);
+    RCLCPP_INFO(
+      get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
+      msg.data);
   }
 
   // ---------------- 地面站视场角同步 ----------------
@@ -846,6 +871,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr fov_sub_;
   double fov_deg_ = 60.0;   // 当前生效的 FOV (视场角同步去重用)
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr marker_len_sub_;
+  double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻

@@ -24,7 +24,10 @@
 import time
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGridLayout, QFormLayout, QGroupBox, QLabel
+from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QFormLayout, QGroupBox, \
+    QLabel, QSlider
+
+from . import config
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
 
@@ -194,7 +197,7 @@ class AlgoOutputPanel(QGroupBox):
     """右栏算法信息面板: set_active() 决定显示哪些分组 (随运行中算法变化),
     refresh() 按各分组最新数据刷新 (33ms 轮询驱动, 内部去重)。"""
 
-    def __init__(self, get_info, parent=None):
+    def __init__(self, get_info, set_marker_length=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -204,6 +207,48 @@ class AlgoOutputPanel(QGroupBox):
         self._lay = QGridLayout(self)
         self._lay.setContentsMargins(0, 2, 0, 0)
         self._lay.setSpacing(4)
+        # ArUco 码边长滑杆 (常驻, 网格下方一整行): 场景含多种尺寸码时
+        # 运行中同步节点 marker_length (位姿解算尺度)
+        self._marker_box = None
+        if set_marker_length is not None:
+            self._build_marker_slider(set_marker_length)
+
+    def _build_marker_slider(self, publish):
+        """码边长滑杆: 值域/步进取 config; 拖动才发布 (未动过节点用
+        aruco.yaml 的 marker_length, 与视场角同步同一约定)。
+        索引式量程 (0~N 档, 每档=一个步长): QSlider 直接用物理值时拖动
+        按像素细步 (1px=0.01m), 索引式保证拖动只会落在步长档位上。"""
+        box = QGroupBox('ArUco 码边长 (m)')
+        box.setToolTip(
+            '场景含多种尺寸码时拖动同步算法节点; 先把码摆到已知距离,\n'
+            '调到面板"实际宽度"≈码的真实边长, 此时"距离"显示即准确')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        lo_cm = int(round(config.ARUCO_MARKER_LENGTH_MIN * 100))
+        step_cm = max(1, int(round(config.ARUCO_MARKER_LENGTH_STEP * 100)))
+        n_steps = max(1, (int(round(config.ARUCO_MARKER_LENGTH_MAX * 100)) -
+                          lo_cm) // step_cm)
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, n_steps)
+        val = QLabel()
+        val.setStyleSheet('font-family: monospace;')
+        val.setMinimumWidth(44)
+
+        def on_change(idx):
+            cm = lo_cm + idx * step_cm
+            val.setText(f'{cm / 100.0:.2f}')
+            publish(cm / 100.0)
+
+        slider.valueChanged.connect(on_change)
+        # 初始占位不发默认值 (未拖动不发布, 节点用 aruco.yaml 的值)
+        default_cm = int(round(config.ARUCO_MARKER_LENGTH_DEFAULT * 100))
+        slider.blockSignals(True)
+        slider.setValue(max(0, min(n_steps, (default_cm - lo_cm) // step_cm)))
+        slider.blockSignals(False)
+        val.setText(f'{(lo_cm + slider.value() * step_cm) / 100.0:.2f}')
+        lay.addWidget(slider, 1)
+        lay.addWidget(val)
+        self._marker_box = box
 
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除。"""
@@ -233,8 +278,12 @@ class AlgoOutputPanel(QGroupBox):
         self._relayout()
 
     def _relayout(self):
-        """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零。"""
+        """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零;
+        码边长滑杆固定占下方一整行 (横跨全部分组列)。"""
         for col, key in enumerate(self._order):
             self._lay.addWidget(self._sections[key], 0, col)
         for col in range(self._lay.columnCount()):
             self._lay.setColumnStretch(col, 1 if col < len(self._order) else 0)
+        if self._marker_box is not None:
+            self._lay.addWidget(
+                self._marker_box, 1, 0, 1, max(1, self._lay.columnCount()))

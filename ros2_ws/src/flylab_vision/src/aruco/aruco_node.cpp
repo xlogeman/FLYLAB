@@ -66,6 +66,17 @@ public:
       fov_topic, 10,
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
 
+    // ---------- 地面站码边长同步 ----------
+    // 场景含多种尺寸码时, 地面站右栏滑杆运行中同步 marker_length
+    // (影响位姿解算尺度/距离显示, 检测不受影响); latched 话题,
+    // 后启动的节点一接入即收到最近值。话题名可用参数覆盖。
+    const auto marker_len_topic = declare_parameter<std::string>(
+      "marker_length_topic", "/flylab/aruco_marker_length");
+    marker_length_ = marker_length;
+    marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
+      marker_len_topic, 10,
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_marker_length(*msg);});
+
     // ---------- 降落节点跟踪码同步 (MAX 让位) ----------
     // 降落中每帧广播正在跟踪的码 ID: 若恰为画面最大码, 本节点不画洋红
     // MAX, 该码由降落节点橙色 TRACK 独占, 避免两组标注叠在同一码上;
@@ -142,6 +153,20 @@ private:
     //   msg.data);
   }
 
+  /// 地面站码边长滑杆同步: 更新检测器位姿解算尺度 (下一帧生效)
+  void on_marker_length(const std_msgs::msg::Float64 & msg)
+  {
+    // 非法值/值未变化跳过 (滑杆拖动重发布降噪)
+    if (msg.data <= 0.0 || msg.data == marker_length_) {
+      return;
+    }
+    marker_length_ = msg.data;
+    detector_->set_marker_length(msg.data);
+    RCLCPP_INFO(
+      get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
+      msg.data);
+  }
+
   /// 码的实际物理宽度 (米): w_px × Z / fx (针孔模型), 无位姿返回 -1。
   /// fx 与检测器同源: 有标定用标定 K, 否则按当前同步 FOV 估算
   double physicalWidth(double img_w, const Detection & d) const
@@ -195,6 +220,8 @@ private:
   std::unique_ptr<ArucoDetector> detector_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr fov_sub_;
   double fov_deg_ = 60.0;   // 当前生效的 FOV (同步去重用)
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr marker_len_sub_;
+  double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr tracked_id_sub_;
   int tracked_id_rx_ = -1;  // 降落节点正在跟踪的码 ID (最新广播值)
   rclcpp::Time tracked_id_rx_time_{0, 0, RCL_ROS_TIME};  // 广播到达时刻 (有效期判定)

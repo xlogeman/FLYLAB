@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.6, 0.7)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.6, 0.74)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -92,6 +92,18 @@ LANDING_STATUS_TOPIC = '/flylab/landing_status'
 # 算法信息面板数据话题 (std_msgs/String JSON): 各算法节点按 src 分组发布
 # 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 algo_output_panel.py)
 ARUCO_INFO_TOPIC = '/flylab/aruco_info'
+
+# ---------- ArUco 码边长运行时调节 (右栏"算法信息"面板滑杆) ----------
+# 场景里放了多种尺寸的码时, 拖动滑杆运行中同步 aruco_node /
+# aruco_landing_node 的 marker_length (影响位姿解算尺度 → 面板的
+# "距离/实际宽度"显示; 检测与降落控制不受影响)。latched 话题: 后启动的
+# 节点一接入即拿到当前值; 未拖动过不发布 (与视场角同步同一约定),
+# 节点用 aruco.yaml 的 marker_length。默认值应与该 yaml 保持一致。
+ARUCO_MARKER_LENGTH_TOPIC = '/flylab/aruco_marker_length'
+ARUCO_MARKER_LENGTH_MIN = 0.1       # 米 (滑杆下限, 与步进对齐保证档位落在整数)
+ARUCO_MARKER_LENGTH_MAX = 2.00      # 米 (滑杆上限)
+ARUCO_MARKER_LENGTH_STEP = 0.1      # 米 (滑杆步进, 拖动按此跳档)
+ARUCO_MARKER_LENGTH_DEFAULT = 0.8   # 米 (与 aruco.yaml 默认一致)
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）

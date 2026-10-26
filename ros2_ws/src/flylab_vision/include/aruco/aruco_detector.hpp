@@ -59,6 +59,10 @@ public:
   /// 仅无标定 (K 为空, 按 FOV 估算) 时有意义, 已标定调用无效果
   void set_fov(double fov_deg) {config_.fov_deg = fov_deg;}
 
+  /// 运行中更新码边长 (米): 场景含多种尺寸码时, 地面站滑杆同步过来,
+  /// 下一帧位姿解算即用新尺度 (tvec 随边长线性缩放); 检测本身不受影响
+  void set_marker_length(double length_m) {config_.marker_length = length_m;}
+
 
 private:
   cv::Mat K_for(const cv::Mat & bgr) const;  // 有标定用标定, 否则按分辨率+FOV 估算

@@ -188,6 +188,15 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # ArUco 码边长同步 (latched): 右栏滑杆拖动即发布, 算法节点运行中
+        # 更新 marker_length (位姿解算尺度); 后启动的节点一接入即收到最近值
+        self.marker_len_pub = self.create_publisher(
+            Float64, config.ARUCO_MARKER_LENGTH_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -323,6 +332,13 @@ class GroundStationNode(Node):
         msg = Float64()
         msg.data = float(deg)
         self.fov_pub.publish(msg)
+
+    def publish_marker_length(self, length_m):
+        """发布 ArUco 码边长 (米) 供 aruco_node / aruco_landing_node
+        运行中同步 marker_length (位姿解算尺度)。"""
+        msg = Float64()
+        msg.data = float(length_m)
+        self.marker_len_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

@@ -16,6 +16,7 @@
     marker_length: 0.8                       # 码物理边长 (米), 影响 3D 位姿解算尺度
     fov_deg: 90.0                            # 初始视场角估算 (无标定时); 地面站调整 FOV 滑杆后经 /flylab/camera_fov 自动同步覆盖
     calib: ""                                # 相机标定 yaml 路径; 空 = 按 FOV 估算 (位姿仅供参考)
+    marker_length_topic: /flylab/aruco_marker_length  # 地面站"码边长"滑杆运行中同步 (latched, 后启动节点也收到)
     annotation_topic: /flylab/annotations    # 标注输出话题
 
     # ---------- 降落参数 (仅 aruco_landing_node, 检测节点忽略) ----------
