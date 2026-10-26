@@ -1,27 +1,20 @@
 // bridge_super —— SUPER 规划器输入适配桥接节点 (纯 ROS, 不依赖 AirSim)
 //
-// 功能: 把 airsim_lidar 的原始传感器系点云 (NED, 含逐点捕获时间) 变换到
-//       world 系 ENU 已配准点云, 供 SUPER (hku-mars, rog_map) 直接使用;
-//       并把 airsim_odom 的真值里程计转发为 SUPER 订阅的话题。
-// 订阅: /airsim/lidar/points_raw  (PointXYZIRT: 传感器局部 NED,
-//                                  header=帧首, time=逐点捕获时刻-帧首)
-//       /airsim/odom              (world 系 ENU, 时间戳与点云同一时间轴)
-// 发布: /cloud_registered  (PointXYZI: world 系 ENU, best_effort, 与 SUPER 订阅端匹配)
-//       /lidar_slam/odom   (Odometry: 原样转发, SUPER 唯一的位姿来源, 100Hz)
-// 位姿对齐 (核心): 点云帧是 UE 端传感器更新 tick 的缓存快照 (age 可达 1 个
-//       更新周期 + RPC 延迟), 不能用最新位姿去变换, 否则旋转/平移时点云
-//       整体错位 (拖影), 幽灵障碍被写进 ROG-Map 导致规划失败/目标被挪。
-//       本节点用 odom 环形缓冲按 ROS 时间戳插值 (两路数据源在
-//       airsim_lidar/airsim_odom 内已统一映射到同一时间轴):
-//         - 帧位姿 = 帧结束时刻 (header + max(time)) 的插值位姿;
-//         - 去畸变: GPU 雷达一帧是旋转周期内多次渲染累积, 各点捕获时刻
-//           不同, 按每点 time 字段插值该时刻的位姿逐点放置 (deskew_en 控制);
-//         - 点云时刻早于缓冲范围 (过旧, UE 卡顿) 时丢弃该帧。
-// 过滤: 未命中点 (0,0,0) 已在采集端过滤; 本节点再过滤机身半径
-//       body_filter_radius 内的点 (螺旋桨/机身回波会污染占据地图)。
-// 参数:
-//   deskew_en, body_filter_radius, intensity,
-//   mount_x/y/z, mount_roll_deg/pitch_deg/yaw_deg (挂载外参, NED 机体系)
+// 订阅: /airsim/lidar/points_raw (传感器局部 NED, header=帧首, time=逐点捕获时刻-帧首)
+//       /airsim/odom             (world 系 ENU, 与点云同一时间轴)
+// 发布: /cloud_registered  (world 系 ENU PointXYZI, best_effort 匹配 SUPER 订阅端)
+//       /lidar_slam/odom   (原样转发, SUPER 唯一位姿来源, 100Hz)
+//
+// 位姿对齐 (核心): 点云帧是 UE 端更新 tick 的缓存快照, 不能用最新位姿变换,
+// 否则旋转/平移时点云整体错位 (拖影), 幽灵障碍进 ROG-Map 导致规划失败。
+// 用 odom 环形缓冲按 ROS 时间戳插值:
+//   - 帧位姿 = 帧结束时刻 (header + max(time)) 的插值位姿;
+//   - 去畸变: GPU 雷达一帧为旋转周期内多次渲染累积, 按每点 time 字段
+//     插值该时刻位姿逐点放置 (deskew_en 控制);
+//   - 点云时刻早于缓冲范围 (过旧, UE 卡顿) 时丢弃该帧。
+// 过滤: 再过滤机身半径 body_filter_radius 内的点 (螺旋桨/机身回波污染地图)。
+// 参数: deskew_en, body_filter_radius, intensity,
+//       mount_x/y/z, mount_roll_deg/pitch_deg/yaw_deg (挂载外参, NED 机体系)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
@@ -57,9 +50,8 @@ public:
                         mount_pitch_ * M_PI / 180.0,
                         mount_yaw_ * M_PI / 180.0);
 
-        // 2. 发布/订阅 (SUPER 订阅端为 best_effort, 发布端用同款 QoS 匹配;
-        //    内部订阅传感器流用 reliable, 不丢帧; 深度压到 2, 上游卡顿时
-        //    reliable 积压会在恢复后一次性补发旧帧, 不给积压留空间)
+        // 2. 发布/订阅 (输出 best_effort 匹配 SUPER; 输入 reliable 深度 2,
+        //    上游卡顿恢复后不一次性补发旧帧)
         auto qos_in = rclcpp::QoS(rclcpp::KeepLast(2)).reliable();
         auto qos_out = rclcpp::QoS(rclcpp::KeepLast(2)).best_effort();
         pub_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -96,8 +88,7 @@ private:
         tf2::Vector3 p(msg->pose.pose.position.x, msg->pose.pose.position.y,
                        msg->pose.pose.position.z);
         std::lock_guard<std::mutex> lk(hist_mutex_);
-        // 时间轴必须单调: 小回跳 (时钟估计抖动) 钳位处理不清缓冲,
-        // 大回跳 (>1s, 仿真重置) 才清空重建
+        // 时间轴必须单调: 小回跳钳位不清缓冲, 大回跳 (>1s, 仿真重置) 才清空
         if (!hist_.empty() && stamp < hist_.back().t) {
             if ((hist_.back().t - stamp).seconds() > 1.0) {
                 hist_.clear();
@@ -164,7 +155,7 @@ private:
         const rclcpp::Time end_stamp = rclcpp::Time(msg->header.stamp) +
             rclcpp::Duration::from_seconds(max_time);
 
-        // 帧位姿: 取点云生成时刻的插值位姿 (时间对齐, 见文件头注释)
+        // 帧位姿: 取点云生成时刻的插值位姿 (时间对齐)
         tf2::Quaternion q_end;
         tf2::Vector3 t_end;
         {

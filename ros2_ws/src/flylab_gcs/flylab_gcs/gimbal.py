@@ -19,18 +19,15 @@ except ImportError:
 from . import config
 from .quat_math import quat_conj, quat_mul, quat_rot_vec
 
-# 云台状态持久化文件。地面站重启时沿用上次视角与安装基准 (UE 端相机并没
-# 被动过); 连接建立时对比相机实际姿态与上次下发值即可判断 UE 是否重新
-# play 过 —— play 过则回中重采基准, 没过则保持记忆 (见 Grabber._restore_or_reset)。
+# 云台状态持久化文件: 重启沿用上次视角与安装基准, 连接时比对相机实际
+# 姿态判断 UE 是否重新 play 过 (见 Grabber._restore_or_reset)
 STATE_FILE = os.path.join(os.path.expanduser('~'), '.flylab_gimbal.json')
 
 # 判定 UE 重新 play 的阈值 (度): 相机实际姿态与上次下发值相差超过该值
 REPLAY_THRESHOLD_DEG = 2.0
 
-# 云台稳定重下发的姿态容差 (度): 机体姿态与上次下发时相对转角在该阈值内
-# 视为"没变" 跳过整批下发; 0.25° 视角偏移肉眼不可见, 却能滤掉大半悬停
-# 抖动 (真实机动远超阈值照常下发补偿)。若飞行中发现视角有可见的缓慢
-# 漂移再调回 0.1
+# 云台稳定重下发的姿态容差 (度): 姿态相对转角在阈值内视为"没变"跳过
+# 整批下发, 滤掉大半悬停抖动 (0.25° 偏移肉眼不可见)
 APPLY_TOL_DEG = 0.25
 
 
@@ -92,12 +89,9 @@ def save_gimbal_state(gimbal, mounts, last_applied, fov=None):
 def capture_mount(client, cam, log):
     """采集相机安装位姿 (机体系)。
 
-    注意 AirSim 的坐标系陷阱: simGetCameraInfo 返回的是世界系位姿
-    (位置相对出生点、姿态为世界姿态, 见 PIPCamera.cpp getCameraInfo 的
-    toLocalNed/toNed), 而 simSetCameraPose 按"机体相对位姿"解释输入
-    (SetActorRelativeLocation/Rotation)。直接把 get 的结果 set 回去,
-    飞机一旦起飞/偏航/移动, 相机会被瞬移甩歪。必须先取机体当前世界
-    位姿 (simGetGroundTruthKinematics), 把相机位姿换算到机体系。"""
+    注意: simGetCameraInfo 返回世界系位姿, 而 simSetCameraPose 按
+    "机体相对位姿"解释输入 —— 直接把 get 的结果 set 回去, 飞机一移动
+    相机会被瞬移甩歪。必须先取机体世界位姿, 换算到机体系。"""
     info = client.simGetCameraInfo(cam, 'PX4')
     kin = client.simGetGroundTruthKinematics('PX4')
     q_b, p_b = kin.orientation, kin.position   # KinematicsState 字段是扁平的

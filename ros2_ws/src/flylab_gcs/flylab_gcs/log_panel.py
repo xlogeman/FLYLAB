@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """画面下方日志框 —— 终端日志分流上屏, 免切终端。
 
-数据来源 (main_window 挂接):
-  - rclpy 日志: ros_node.TeeLogger 分流, 经 Qt 信号队列投递 append_line
-  - PX4 SITL 进程输出: processes.ManagedProcess 输出接管, 同上 ('PX4' 级别)
+数据来源: rclpy 日志 (TeeLogger 分流) 与 PX4 进程输出, 经 Qt 信号队列
+投递 append_line。
 
-抗日志风暴设计 (实测 PX4 控制台循环刷屏时, 逐行 appendHtml+滚底会把 GUI
-事件队列灌满 —— 日志疯狂上滚、菜单失灵、点击无响应): 行先入内存缓冲
-(O(1), 不触发渲染), 定时器批量上屏并限速; 缓冲满丢最旧并计数, 恢复后补
-一条折叠提示。渲染节奏恒定, 无论上游刷多快, GUI 线程都不被拖垮。
-maximumBlockCount 限行数, 旧行自动丢弃防内存膨胀。
+抗日志风暴: 行先入内存缓冲 (O(1) 不触发渲染), 定时器批量上屏并限速;
+缓冲满丢最旧并计数, 恢复后补一条折叠提示。无论上游刷多快, GUI 线程
+渲染节奏恒定。maximumBlockCount 限行数防内存膨胀。
 """
 import html
 import time

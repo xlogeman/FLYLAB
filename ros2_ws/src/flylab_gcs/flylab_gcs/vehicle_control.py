@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """飞行控制 —— AirSim 飞控命令的独立 RPC 会话线程。
 
-解锁/起飞/降落/悬停/返航/上锁, 经 AirSim API → MAVLink 控制通道 (14580)
-下发 PX4, 与 offboard tracker (mavros/uxrce) 相互独立。
+解锁/起飞/降落/悬停/返航/上锁, 经 AirSim API → MAVLink 控制通道下发 PX4,
+与 offboard tracker 相互独立。独立于 camera_grabber: 抓图线程有自己的
+重连节奏和拉流负载, 飞控连通状态/命令成败在这里自治。
 
-为什么独立于 camera_grabber: 飞控与相机抓取是两个功能域。抓图线程有
-自己的重连节奏 (UE 未 play 时探针循环) 和拉流负载, 飞控命令不应寄生
-其中 —— 连通状态、命令执行成败在这里自治, 抓图卡顿/切源/重连互不影响。
+线程模型: 守护线程 0.5s 一拍 —— ping 维护连通状态 (状态迁移才打日志) +
+处理命令队列; 客户端短超时 2s 快速失败。takeoff/land/hover/gohome 为
+异步指令, 结果看 QGC / mavros state。
 
-线程模型: 守护线程 0.5s 一拍 —— ping 维护连通状态 (界面按钮门控依据,
-状态迁移才打日志不刷屏) + 处理命令队列。客户端短超时 (2s), ping 不通
-快速失败, 绝不长阻塞。takeoff/land/hover/gohome 为异步指令: 下发即
-返回不等待完成, 实际动作由 PX4 执行 (结果看 QGC / mavros state)。
-
-注意: 飞控方法 (takeoff/land/...) 在 MultirotorClient 上, 抓图用的
-VehicleClient 没有 (armDisarm 两边都有) —— 本模块统一用 MultirotorClient。
+注意: 飞控方法只在 MultirotorClient 上 (抓图的 VehicleClient 没有), 本模块统一用 MultirotorClient。
 """
 import math
 import threading
@@ -45,10 +40,9 @@ class VehicleController(threading.Thread):
         self._connected = False
         self._flying = False    # 已解锁且在空中 (视觉反控门控依据)
         self._fly_streak = 0    # 连续报"空中"的拍数 (过滤上电瞬态误报)
-        # QGC 式遥测 (0.5s 心跳顺带采样 kinematics, 飞行中积分行程/时长):
-        # alt=相对起飞点高度 hs=水平速度 vs=垂直速度 hdg=航向 dist=累计行程
-        # ftime=飞行时间(秒) flying=是否在空中
-        # 值为 None = 尚无有效数据 (未连通/PX4 未跑), 界面显示 "--" 而非 0
+        # QGC 式遥测 (随 0.5s 心跳采样, 飞行中积分行程/时长):
+        # alt=相对起飞点高度 hs=水平速度 vs=垂直速度 hdg=航向 dist=行程
+        # ftime=飞行时间 flying=在空中; None=无有效数据, 界面显示 "--"
         self._tele = {'alt': None, 'hs': None, 'vs': None, 'hdg': None,
                       'dist': None, 'ftime': None, 'flying': False}
         self._tele_t = 0.0        # 上次遥测采样时刻 (monotonic, 0=未采样)
@@ -122,29 +116,21 @@ class VehicleController(threading.Thread):
         self._poll_flying()
 
     def _poll_flying(self):
-        """随心跳低频查询飞行状态 (离地, 供视觉反控门控) + 采集遥测六值。
-        注: 不用 st.rc.armed —— PX4 SITL 经 MAVLink 通道解锁时 RCData.armed
-        不可靠 (不走模拟遥控器通道, 恒为 False)。改用 LandedState 判离地:
-        Landed=在地面, Takeoff/Landing/Flying=离空。状态迁移打一条日志;
-        单次查询失败保持上次状态 (RPC 抖动不产生假迁移), 下个心跳恢复。
-        遥测: 高度=相对起飞点 (起飞瞬间记 z 基准), 垂直速度 NED 上为正,
-        航向 0-360°; 飞行中按采样间隔积分水平行程与飞行时长 (0.5s 采样,
-        行程为折线近似, 略短于实际轨迹), 起飞瞬间清零按次累计, 落地保留;
-        高度/速度落地后显示 0, 航向始终跟随。"""
+        """随心跳查询飞行状态 (供反控门控) + 采集遥测。
+        不用 st.rc.armed (MAVLink 通道解锁时恒为 False), 改用 LandedState
+        判离地。单次查询失败保持上次状态, RPC 抖动不产生假迁移。
+        遥测: 高度相对起飞点 (起飞瞬间记 z 基准), 垂直速度 NED 上为正,
+        航向 0-360°; 飞行中按采样间隔积分行程/时长, 起飞清零落地保留。"""
         try:
             st = self._client.getMultirotorState()
-            # ready 只代表 RPC 连接已建立 (连接成功即置位, PX4 没跑也是
-            # True, 区分不出 PX4 死活); PX4 没跑/启动中时 landed_state 是
-            # 默认值 (误报 Flying 且不会有 EXTENDED_SYS_STATE 纠正)。
-            # can_arm = ready && has_gps_lock_, GPS 锁定只有收到 PX4 的
-            # GPS 数据后才置位 —— 用它过滤 PX4 未跑时的陈旧 Flying 误报
+            # ready 只代表 RPC 已建立; PX4 未跑时 landed_state 是默认值
+            # (误报 Flying)。can_arm = 收到过 PX4 的 GPS 数据, 用它过滤误报
             raw_flying = (st.landed_state != airsim.LandedState.Landed
                           and bool(st.ready) and bool(st.can_arm))
         except Exception:
             return   # 单次查询失败不动状态不打日志 (避免抖动出假迁移), 下个心跳恢复
-        # PX4 上电瞬态: landed 默认 false, AirSim 在收到首条 EXTENDED_SYS_STATE
-        # 前把地面飞机误报为 Flying (~1~2s) —— 报"空中"需连续两拍确认才采信,
-        # 报"地面"立即采信 (落地宁早勿晚), 瞬态单拍即被吞掉
+        # PX4 上电瞬态 (~1~2s): 地面飞机被误报 Flying —— 报"空中"需连续两拍
+        # 确认, 报"地面"立即采信 (落地宁早勿晚)
         if raw_flying:
             self._fly_streak += 1
             flying = self.is_flying() or self._fly_streak >= 2
@@ -153,9 +139,7 @@ class VehicleController(threading.Thread):
             flying = False
         kin = st.kinematics_estimated
         pos, vel, q = kin.position, kin.linear_velocity, kin.orientation
-        # 物理异常/仿真毛刺时 AirSim 可能回 NaN/Inf 坐标 —— 整拍丢弃:
-        # NaN 进航迹/遥测会沿 渲染→paintEvent 抛异常→PyQt abort 的链路
-        # 带崩整个界面 (曾致 GUI 静默退出、托管进程无人回收)
+        # 仿真毛刺可能回 NaN/Inf —— 整拍丢弃, 否则 NaN 进渲染会带崩界面
         if not (math.isfinite(pos.x_val) and math.isfinite(pos.y_val)
                 and math.isfinite(pos.z_val)
                 and math.isfinite(vel.x_val) and math.isfinite(vel.y_val)
@@ -195,14 +179,12 @@ class VehicleController(threading.Thread):
             self._tele_prev = None
             self._tele_t = 0.0
             tele['alt'] = tele['hs'] = tele['vs'] = 0.0
-        # 航迹记录 (NED x=北 y=东), 供地图控件绘制航线: 地面连通也记录
-        # (地图即刻显示所在点, 不用等起飞), 起飞瞬间清零重新累计飞行航迹
+        # 航迹记录 (NED x=北 y=东), 地面连通也记录, 起飞瞬间清零
         if not self._track or self._track[-1] != (pos.x_val, pos.y_val):
             self._track.append((pos.x_val, pos.y_val))
             if len(self._track) > 2000:
                 del self._track[:500]   # 超上限丢最旧一批 (省得每拍裁剪)
-        # 航向连接 PX4 即有效 (can_arm = 收到过 PX4 的 GPS 数据), 不等起飞;
-        # PX4 未跑时保持 None -> 界面显示 "--" (地面陈旧姿态无意义)
+        # 航向连接 PX4 即有效, PX4 未跑时保持 None (界面显示 "--")
         tele['hdg'] = ((math.degrees(math.atan2(
             2.0 * (q.w_val * q.z_val + q.x_val * q.y_val),
             1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val))) + 360.0) % 360.0
@@ -228,8 +210,7 @@ class VehicleController(threading.Thread):
             elif key == 'hover':
                 mc.hoverAsync(VEHICLE)
             elif key == 'gohome':
-                # 注: 签名是 goHomeAsync(timeout_sec, vehicle_name) —— 第一参
-                # 是超时秒数, 之前误传 vehicle_name 导致 RPC 失败无声无息
+                # 注意: 首参是超时秒数, 误传 vehicle_name 会 RPC 失败无声无息
                 mc.goHomeAsync(60, VEHICLE)
             else:
                 self.log.error(f'飞行控制: 未知命令 {key}')

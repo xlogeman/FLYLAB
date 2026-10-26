@@ -7,25 +7,21 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-# EGO 避障飞行一键启动 (支持 tracker 参数选择控制链路):
+# EGO 避障飞行一键启动:
 #   ros2 launch flylab_flight fly_ego.launch.py                     # 默认 MAVROS 链路
 #   ros2 launch flylab_flight fly_ego.launch.py tracker:=uxrce      # uXRCE-DDS 链路
-# 等价于同时启动以下组件:
-#   1. airsim_camera/airsim_imu/airsim_odom/airsim_nav
-#                               AirSim 直连传感器节点 (可插拔: 深度图/IMU/里程计/GPS/气压计/磁力计)
-#   2. ego_planner.launch.py     EGO-Planner 规划器 + 轨迹服务器
-#   3. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
-#      tracker:=uxrce 时可用 xrce:=true 启动 MicroXRCEAgent
-#      注意: PX4 SITL 的 14540/14580 onboard 实例对端会被 AirSim 控制通道 (UnrealEditor, UDP 14580) 抢占,
-#      MAVROS 必须使用 14582↔14542 专属实例 (见 px4-rc.mavlink)
-#   4. tracker_mavros / tracker_uxrce  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
-#   5. rviz2                     EGO 链路 RViz 可视化
-# 可选:
-#   tracker:=uxrce|mavros        轨迹跟踪链路选择 (默认 mavros, 即 MAVROS 桥)
-#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=uxrce 时需要, 已手动启动则保持 false)
-#   mavros:=false                不启动 MAVROS (tracker:=mavros 且已手动启动过时使用)
-#   fcu_url:=udp://:14542@       MAVROS 连接串, 默认指向 PX4 的 MAVROS 专属实例 (14582→14542)
-#   rviz:=false                  不启动 RViz
+# 组件: 1. AirSim 直连传感器 (深度相机/IMU/里程计/低频导航)
+#       2. ego_planner.launch.py (规划器 + 轨迹服务器)
+#       3. MAVROS 桥 (14542 专属实例; 14580 会被 AirSim 抢占, 见 README §7)
+#          / MicroXRCEAgent (tracker:=uxrce + xrce:=true)
+#       4. tracker_mavros / tracker_uxrce (RViz 点目标接管, 到达后交还 QGC)
+#       5. RViz
+# 可选参数:
+#   tracker:=uxrce|mavros   跟踪链路选择 (默认 mavros)
+#   xrce:=true              启动 MicroXRCEAgent udp4 -p 8888
+#   mavros:=false           不随 launch 启动 MAVROS (已手动启动时用)
+#   fcu_url:=udp://:14542@  MAVROS 连接串 (默认 MAVROS 专属实例)
+#   rviz:=false             不启动 RViz
 
 
 def generate_launch_description():

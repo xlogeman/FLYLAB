@@ -1,17 +1,14 @@
 // bridge_fastlio —— FAST-LIO 输入适配桥接节点 (纯 ROS, 不依赖 AirSim)
 //
-// 功能: 把 airsim_lidar 的原始传感器系点云 (NED) 转成 FAST-LIO 期望的
-//       ROS 标准机体系 (FLU), 并发布雷达挂载外参静态 TF。
+// 把 airsim_lidar 原始 NED 点云转成 FAST-LIO 期望的 FLU 机体系, 并发布
+// 挂载外参静态 TF。
 // 订阅: /airsim/lidar/points_raw  (PointXYZIRT, 传感器局部 NED, header=帧首)
-// 发布: /airsim/lidar/points      (同字段, y/z 取反转 FLU, frame=lidar_link)
-//       静态 TF: body -> base_link (恒等, fast_lio.yaml 零位外参 => body 即机体系,
-//                                  把 FAST-LIO 的 camera_init->body 与挂载链接通,
-//                                  消除 RViz "No transform from base_link to camera_init")
-//       静态 TF: base_link -> lidar_link (挂载参数 NED -> FLU 换算)
-// 说明: IMU 由 airsim_imu 直接以 /airsim/imu/data (FLU) 供 fast_lio.yaml 使用,
-//       本节点不处理 IMU; per-point time 字段在 NED->FLU 旋转下不变, 原样透传。
-// 参数 (挂载位置/姿态, 与 settings.json 中 LiDAR 的 X/Y/Z/Roll/Pitch/Yaw 一致,
-//       NED 机体系, 米/度):
+// 发布: /airsim/lidar/points      (y/z 取反转 FLU, frame=lidar_link)
+//       静态 TF: body -> base_link (恒等, 接通 FAST-LIO body 子树)
+//                base_link -> lidar_link (挂载参数 NED -> FLU)
+// 说明: IMU 由 airsim_imu 直接以 FLU 提供, 本节点不处理;
+//       per-point time 在 NED->FLU 旋转下不变, 原样透传。
+// 参数 (挂载外参, 与 settings.json LiDAR 一致, NED 机体系, 米/度):
 //   mount_x, mount_y, mount_z, mount_roll_deg, mount_pitch_deg, mount_yaw_deg
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>

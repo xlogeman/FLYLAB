@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""AirSim 相机抓取器 —— 直连 AirSim RPC 拉图 + 本机 V4L2 摄像头，与界面解耦。
+"""AirSim 相机抓取器 —— 直连 RPC 拉图 + 本机 V4L2 摄像头, 与界面解耦。
 
-被 camera_view (独立调试工具) 和 ground_station (总界面) 共用。
-附带软件云台：经 simSetCameraPose 旋转相机视角 (摇杆角速度 + 回中)，
-世界系稳定云台：视线方位/仰角钉在世界系 (方位参考机头朝向)，机体怎么
-转、怎么斜都由周期重下发 (GIMBAL_HOLD_HZ) 补偿——垂直向下时原地旋转
-仍保持垂直向下，方向键上下左右与机体姿态无关。
+被 camera_view (独立调试) 和 ground_station 共用。附带软件云台: 经
+simSetCameraPose 旋转相机视角; 世界系稳定云台把视线方位/仰角钉在世界系,
+机体转动/倾斜由周期重下发 (GIMBAL_HOLD_HZ) 补偿。
 
 支撑模块 (本文件只留抓取线程与云台运行时状态):
   quat_math.py      四元数数学工具 (纯函数)
@@ -18,8 +16,7 @@ import time
 
 import numpy as np
 
-# /dev/video* 里 metadata 节点探测失败是预期行为, 屏蔽 V4L2 的 WARN 刷屏
-# (apt 旧版没有 setLogLevel, 用环境变量; 4.8+ 再用 API 双保险)
+# /dev/video* 的 metadata 节点探测失败是预期行为, 屏蔽 V4L2 WARN 刷屏
 import os
 os.environ.setdefault('OPENCV_LOG_LEVEL', 'ERROR')
 try:
@@ -80,18 +77,15 @@ class Grabber(threading.Thread):
         # 本机摄像头/视频文件设备 IO (见 camera_sources.LocalFileReader;
         # 设备仅在抓取线程访问, 播放控制标志位由界面线程设置)
         self.reader = LocalFileReader(log)
-        # 软件云台: 全局角度 (yaw, pitch), 同步作用于所有 AirSim 相机。
-        # 状态持久化: 地面站重启沿用上次视角; 仅检测到 UE 重新 play 才回中,
-        # 见 _restore_or_reset (连接建立时调用)
+        # 软件云台: 全局角度 (yaw, pitch), 作用于所有 AirSim 相机。
+        # 状态持久化, 重启沿用; 仅 UE 重新 play 才回中 (见 _restore_or_reset)
         (self._gimbal, self._gimbal_mount, self._gimbal_last,
          self._fov) = load_gimbal_state()
-        # 全局视场角 (度): 所有 AirSim 相机共用一个值 (None=用户从未调整,
-        # 保持 settings.json 原值, _apply_fov 不下发)
+        # 全局视场角 (度): 所有相机共用 (None=从未调整, 保持 settings.json 原值)
         self._fov_saved = self._fov   # 上次落盘值 (变化才写盘)
         self._fov_dirty = False       # 视场角待下发标记
-        # 数字变焦 (显示层中心裁切, 不改 UE 相机): 1.0=原图。裁切在抓取层
-        # 完成, 图传/转发/算法标注同一像素系; _raw 留未变焦原帧, 档位变化
-        # 时重提交 (暂停中的文件源也能立即看到变焦)
+        # 数字变焦 (抓取层中心裁切, 图传/转发/标注同一像素系);
+        # _raw 留未变焦原帧, 档位变化时重提交
         self._zoom = 1.0
         self._raw = None
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
@@ -100,43 +94,34 @@ class Grabber(threading.Thread):
         self._gimbal_rate = (0.0, 0.0)
         self._rate_t_prev = None
         self._gimbal_dirty = False
-        # 云台稳定 (follow 模式): 开启后任何云台角 (含居中) 都按
-        # GIMBAL_HOLD_HZ 持续世界系重下发 —— 俯仰/横滚钉在世界系不随机体
-        # 晃动, 偏航跟随机头 (真实云台手感); 关闭为刚性挂载 (FPV 手感)。
-        # 注: UE 端原生 Gimbal.Stabilization 是"拉回出生安装姿态", 与
-        # simSetCameraPose 控制互斥, 故稳定在地面站侧实现
+        # 云台稳定 (follow 模式): 云台角按 GIMBAL_HOLD_HZ 世界系持续重下发
+        # (俯仰/横滚不随机体晃动, 偏航跟随机头); 关闭为刚性挂载 (FPV 手感)。
+        # UE 原生 Gimbal.Stabilization 与 simSetCameraPose 互斥, 故在地面站侧实现
         self._gimbal_stab = True
-        # 上次持久化时的云台角 (稳定模式连续下发期间省去每秒几十次写盘)
+        # 上次持久化时的云台角 (连续下发期间避免频繁写盘)
         self._gimbal_saved = None
-        # 上次成功下发时的 (机体姿态, 云台角, 相机) 指纹: 机体姿态与上次
-        # 相对转角在容差内 (悬停抖动) 则视角与上次几乎一致, 跳过下发 RPC
-        # (云台与拉图共用一条 RPC 连接, 省下的是串行等待, 直接转化为图传
-        # 帧率); 姿态真正变化 (机动/转弯) 时失配照常下发
+        # 上次成功下发的 (机体姿态, 云台角, 相机) 指纹: 悬停抖动在容差内
+        # 则跳过下发 RPC, 省下的串行等待直接转化为图传帧率
         self._gimbal_apply_key = None
-        # Scene 帧走 PNG 压缩传输 (线上体积约为原始 BGR 的 1/3~1/4);
-        # 服务端不支持/返回异常时自动回退原始传输 (会话内一次性)
+        # Scene 帧走 PNG 压缩传输 (线上体积约 1/3); 服务端不支持时回退原始传输
         self._scene_compress = config.DISPLAY_SCENE_COMPRESS and cv2 is not None
-        # 会话内限位拒绝标记 (方向 -> bool): 仅当按键被限位卡住时标红,
-        # 该方向恢复可动即清; 不持久化, 地面站重启后一律不红
+        # 会话内限位拒绝标记 (方向 -> bool), 按键被限位卡住时标红, 不持久化
         self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
                                 'pitch+': False, 'pitch-': False}
         self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
         self.running = True
         self._airsim_ok = False     # AirSim RPC 是否已连通 (云台可用性依据)
-        self._conn_last_log = 0.0   # AirSim 未连接时的日志节流 (每 10 秒一条)
-        # 云台专用 RPC 连接 (惰性创建): 与拉图连接分离, 云台下发不阻塞拉图
-        # 往返; 断开/超时置 None, 下一拍惰性重建
+        self._conn_last_log = 0.0   # 未连接日志节流 (每 10 秒一条)
+        # 云台专用 RPC 连接 (惰性创建): 与拉图分离, 下发不阻塞拉图往返
         self._gimbal_client = None
 
     def set_camera(self, name):
         with self.lock:
             self.camera = name
-            self._gen += 1      # 旧源正在读取中的帧提交时会被本代数拒绝
+            self._gen += 1      # 旧源读取阻塞期间的帧提交时被代数拒绝
             self.frame = None   # 丢弃旧相机画面，避免切换时闪现错图
-            # 切源后立即按新相机重下发视角: 非当前相机不跟随机体姿态, 视角
-            # 已过时, dirty 让下一拍抓图前先补下发 (不等云台节拍), 避免闪帧
+            # 切源后视角/视场已过时, 置 dirty 让下一拍立即补下发
             self._gimbal_dirty = True
-            # 视场角同理: 按新相机记忆值对齐 (没调过的相机不动)
             self._fov_dirty = True
 
     def stop(self):
@@ -173,9 +158,8 @@ class Grabber(threading.Thread):
     # ---------- 软件云台 (界面线程调用, 角度由抓取线程经 RPC 写入相机) ----------
 
     def gimbal_set_rate(self, yaw_rate, pitch_rate):
-        """设置云台连续转动角速度 (°/s, 摇杆控制): 抓取线程每帧按限位
-        夹紧步进 (_rate_tick), 回零即停 (位置保持)。限位卡住的方向记入
-        _gimbal_blocked 供界面标红。本机/视频文件源为空操作。"""
+        """设置云台连续转动角速度 (°/s, 摇杆控制), 每帧按限位夹紧步进,
+        回零即停; 限位卡住的方向记入 _gimbal_blocked 供标红。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
@@ -190,9 +174,8 @@ class Grabber(threading.Thread):
             self._rate_t_prev = None   # 下一帧重新计时
 
     def _rate_tick(self):
-        """摇杆连续转动: 每帧按当前角速度步进 (限位夹紧, 被夹住的方向
-        标红, 该方向恢复可动即清)。仅在 _gimbal_rate 非零期间生效;
-        角度落盘延后到摇杆回零时一次完成 (避免每帧写文件)。"""
+        """摇杆连续转动: 每帧按角速度步进 (限位夹紧并标红);
+        角度落盘延后到摇杆回零时一次完成。"""
         ry, rp = self._gimbal_rate
         if ry == 0.0 and rp == 0.0:
             self._rate_t_prev = None
@@ -238,9 +221,8 @@ class Grabber(threading.Thread):
             self._anim_t_prev = time.monotonic()
 
     def gimbal_pitch_bottom(self):
-        """俯仰平滑转到垂直向下限位 (视觉反控前自动摆位, 航向保持不变):
-        复用回中动画机制, 以 GIMBAL_SLEW_RATE_DEG_S 匀速转动、画面连续
-        过渡 (每帧推进并置 dirty 连续下发); 本机/视频文件源为空操作。"""
+        """俯仰平滑转到垂直向下限位 (视觉反控前自动摆位, 航向不变),
+        复用回中动画机制匀速转动。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
@@ -284,10 +266,8 @@ class Grabber(threading.Thread):
     # ---------- 视场角 (界面线程调用, 由抓取线程经 RPC 写入相机) ----------
 
     def set_fov(self, deg):
-        """设置全局视场角 (度): 所有 AirSim 相机共用一个值, 记忆 + 置
-        dirty, 下一拍经 simSetCameraFov 下发到当前相机 (值不变重复调用
-        无副作用)。拖动滑杆高频进入, 节流靠抓取帧率 (每拍最多一次 RPC)。
-        本机/视频文件源为空操作。"""
+        """设置全局视场角 (度): 记忆 + 置 dirty, 下一拍下发到当前相机。
+        滑杆高频调用, 节流靠抓取帧率 (每拍最多一次 RPC)。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
@@ -344,14 +324,11 @@ class Grabber(threading.Thread):
         return cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
 
     def get_cam_orientation(self):
-        """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
-        位姿数据返回 None。
+        """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源返回 None。
 
         语义: 相机 NED 体约定 (x 视轴, y 图右, z 图下) 相对机体 FRD 的旋转,
-        取最近一次 simSetCameraPose 实际下发的机体相对姿态 (_gimbal_last,
-        世界系稳定云台会随飞行周期重下发而持续更新); 云台从未动过时回退
-        安装姿态基准。供 aruco_landing 做图像方向 -> 机体系的泛化映射,
-        不依赖"图像上边朝机头"假设。"""
+        取最近一次实际下发的机体相对姿态, 云台未动过时回退安装基准。
+        供 aruco_landing 做图像方向 -> 机体系的泛化映射。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return None
@@ -388,9 +365,8 @@ class Grabber(threading.Thread):
 
     def _restore_or_reset(self, client):
         """连接建立时判断 UE 是否重新 play 过: 对比各相机当前机体系姿态与
-        上次下发值 (机体相对姿态不随飞机移动/姿态变化, 比对可靠)。
-        全部一致 => 地面站只是重启/重连, 相机没动过, 沿用记忆不碰相机;
-        有不一致 => UE 重玩过相机已复位, 云台回中并重采安装基准。"""
+        上次下发值 (机体相对姿态不随飞机移动, 比对可靠)。
+        一致 => 沿用记忆; 不一致 => UE 重玩过, 云台回中并重采安装基准。"""
         try:
             with self.lock:
                 last = dict(self._gimbal_last)
@@ -428,32 +404,21 @@ class Grabber(threading.Thread):
     def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur):
         """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。
 
-        只持续下发当前显示的相机 cam_cur; 其余相机仅在首次同步时下发一次
-        (进入 _gimbal_last 供 UE 重玩检测用), 之后不跟随机体姿态 —— 非当前
-        相机的视角过时没关系, 切到它时指纹含相机名必失配, 下一拍立即补发
-        到位         (set_camera 置 dirty 保证当拍生效)。这样飞行中每拍只有
-        1 次 kinematics + 1 次 simSetCameraPose, 而不是 1+N 次; 且本方法
-        走云台专用 RPC 连接 (_gimbal_client), 下发不阻塞拉图连接的往返。
+        只持续下发当前相机; 其余相机仅在首次同步时下发一次 (供 UE 重玩
+        检测), 切到它时指纹含相机名必失配, 下一拍立即补发。飞行中每拍
+        只有 1 次 kinematics + 1 次 simSetCameraPose, 且走云台专用 RPC
+        连接, 不阻塞拉图。
 
-        simSetCameraPose 按"机体相对位姿"解释输入, 而机体在悬停/飞行中带着
-        姿态倾斜: 若把云台角直接叠加在机体系安装姿态上, 偏航绕的是机体 z 轴
-        而非竖直轴 —— 绕斜轴连续步进会沿斜锥面进动, 起初看着在左转, 转过
-        一定角度视角就甩到天上/地下, 俯仰也随之变斜、地平线滚动。
-
-        这里改为世界系稳定云台: 目标视线方向用 (方位角, 仰角) 在世界系直接
-        重建 —— 方位 = 机体前向方位 + 云台偏航 + 安装偏航, 仰角 = 安装仰角 +
-        云台俯仰, roll 恒为 0 (地平线水平)。机体怎么转、怎么斜, 视线都钉在
-        世界系目标方向上 (垂直向下时原地旋转/倾斜仍保持垂直向下), 方向键的
-        上下左右与机体姿态完全无关。历次错误做法的教训: 两角合成一个四元数
-        世界系左乘会把俯仰轴钉死在世界 East 轴 (航向一变上下变侧滚/反向);
-        都机体系叠加则偏航绕斜轴进动、俯仰随姿态倾斜漂移。
-        云台偏航的参考是当前机头朝向, 回中恢复安装方向的水平重建。"""
+        simSetCameraPose 按"机体相对位姿"解释输入, 若把云台角直接叠加在
+        机体系安装姿态上, 偏航绕的是机体 z 轴 (斜轴), 连续步进会沿斜锥面
+        进动、视角甩偏。改为世界系稳定云台: 目标视线用 (方位角, 仰角) 在
+        世界系直接重建 —— 方位 = 机体前向方位 + 云台偏航 + 安装偏航,
+        仰角 = 安装仰角 + 云台俯仰, roll=0。视线钉在世界系, 方向键与机体
+        姿态完全无关。"""
         try:
             q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
             # 指纹 = (机体姿态, 云台角, 当前相机), 姿态按四元数夹角容差判定
-            # (|dot| = cos(θ/2), q 与 -q 同旋转): 悬停抖动在容差内时 30Hz
-            # 跟随几乎全部命中跳过, RPC 连接让给拉图; 真实机动或切换相机
-            # (云台角/相机名严格比对) 时失配照常下发补偿
+            # (|dot| = cos(θ/2)): 悬停抖动在容差内跳过下发, 真实机动照常补偿
             last = self._gimbal_apply_key
             if last is not None:
                 lq, lyaw, lpitch, lcam = last
@@ -478,9 +443,7 @@ class Grabber(threading.Thread):
                 if mount is None:
                     continue
                 pos, ori = mount
-                # 世界系稳定云台: 方位 = 机体前向方位 + 云台偏航 + 安装偏航,
-                # 仰角 = 安装仰角 + 云台俯仰, 按世界系方位/仰角重建目标姿态
-                # (roll=0), 再反算回机体系下发
+                # 世界系重建目标姿态 (方位/仰角, roll=0), 再反算回机体系下发
                 yaw_b, _ = quat_yaw_el(q_b)
                 yaw_m, el_m = quat_yaw_el(ori)
                 q_des_world = quat_mul(
@@ -493,11 +456,8 @@ class Grabber(threading.Thread):
                 except Exception as e:
                     self.log(f'云台: {cam} 下发失败: {e}')
             if applied:
-                # 指纹仅在成功下发后更新 (记录当时的机体姿态供容差比对)
-                self._gimbal_apply_key = (q_b, yaw_deg, pitch_deg, cam_cur)
-                # 记录本次实际下发的相机姿态 (供 UE 重玩检测比对); 持久化
-                # 仅在云台角变化时进行 —— 稳定模式 30Hz 连续下发, 角度不变
-                # 的周期若也写盘就是每秒几十次文件 IO
+                # 指纹仅在成功下发后更新; 持久化仅在云台角变化时进行
+                # (稳定模式连续下发, 角度不变的周期写盘就是纯 IO 浪费)
                 with self.lock:
                     self._gimbal_last = applied
                     changed = (yaw_deg, pitch_deg) != self._gimbal_saved
@@ -507,19 +467,15 @@ class Grabber(threading.Thread):
                     save_gimbal_state(self._gimbal, self._gimbal_mount,
                                       applied, self._fov)
         except Exception as e:
-            # 失败不置回 dirty: 避免每帧重试刷屏; 置空云台连接下拍惰性重建,
-            # 重连或下次按键会重新下发
+            # 失败不置回 dirty (避免每帧重试刷屏); 置空云台连接下拍惰性重建
             self.log(f'云台控制失败: {e}')
             self._gimbal_client = None
         finally:
             self._gimbal_dirty = False
 
     def _apply_fov(self, client, cam):
-        """把全局视场角经 simSetCameraFov 写入当前相机 (走云台专用 RPC
-        连接, 不阻塞拉图)。只在值变化/切源/重连/UE 重 play 后对齐一次
-        (dirty 标记), 不逐帧重发; 其余相机切到时同样对齐 —— 各相机共用
-        同一个值。用户从未调过 (None) 时保持 settings.json 原值不动;
-        失败置空云台连接下拍惰性重建。"""
+        """把全局视场角经 simSetCameraFov 写入当前相机 (走云台专用 RPC)。
+        只在 dirty 时对齐一次, 不逐帧重发; 从未调过 (None) 保持原值。"""
         with self.lock:
             fov = self._fov
             if fov is None:
@@ -539,9 +495,8 @@ class Grabber(threading.Thread):
             self._gimbal_client = None
 
     def _commit(self, arr, is_depth, gen):
-        """写入最新帧并统计 fps。gen 与当前切源代数不符 (读取阻塞期间
-        发生了切源) 时丢弃 —— 否则旧源最后一帧会在切源后回填, 界面清屏
-        被覆盖, 表现为"卡在旧画面, 要再切一次才出现等待提示"。"""
+        """写入最新帧并统计 fps。切源代数不符 (读取阻塞期间切了源) 时
+        丢弃, 否则旧源最后一帧会在切源后回填。"""
         with self.lock:
             if gen != self._gen:
                 return
@@ -582,10 +537,7 @@ class Grabber(threading.Thread):
                 self.reader.close()                 # 切回 AirSim 相机时释放本机设备
                 if client is None:
                     # 连接探测必须用短超时探针: VehicleClient 默认 RPC 超时
-                    # 长达 3600s (client.py timeout_value=3600), UE 未 play 时
-                    # confirmConnection 里的同步 ping 会把抓取线程阻塞在
-                    # 这里, 切到本机摄像头/文件源也回不到循环顶 —— 直到
-                    # UE play ping 通才恢复。探针 2s ping 通才建正式连接。
+                    # 3600s, UE 未 play 时 ping 会把抓取线程长期阻塞在这里
                     try:
                         probe = airsim.VehicleClient(
                             ip=self.host, port=self.port, timeout_value=0.5)
@@ -599,9 +551,8 @@ class Grabber(threading.Thread):
                             self._airsim_ok = False
                         time.sleep(1.0)
                         continue
-                    # 正式连接必须带短超时: VehicleClient 默认 RPC 超时
-                    # 3600s, UE 卡顿/网络抖动时 simGetImages 会把抓图线程
-                    # 冻结最长 1 小时 (图传假死); 3s 超时抛异常走下方重连
+                    # 正式连接带 3s 超时: 默认 3600s 下 UE 卡顿会把抓图线程
+                    # 冻结成图传假死, 超时抛异常走重连
                     client = airsim.VehicleClient(
                         ip=self.host, port=self.port, timeout_value=3.0)
                     self._gimbal_client = airsim.VehicleClient(
@@ -611,8 +562,7 @@ class Grabber(threading.Thread):
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
                     # 判断 UE 是否重新 play: play 过则回中, 没过则沿用记忆
                     self._restore_or_reset(client)
-                    # 视场角对齐: 地面站重启/UE 重 play 后按记忆恢复
-                    # (UE 端 FOV 随重 play 复位到 settings.json 值)
+                    # 视场角对齐: 重启/重 play 后按记忆恢复
                     with self.lock:
                         if self._fov is not None:
                             self._fov_dirty = True
@@ -623,15 +573,10 @@ class Grabber(threading.Thread):
                     self._anim_tick()    # 回中动画: 每帧推进并置 dirty
                     gim_dirty, gim = self._gimbal_dirty, self._gimbal
                     stab = self._gimbal_stab
-                # 云台角只在按键瞬间按当时机体姿态换算一次, 相机随后刚性跟
-                # 随机体; 飞行中机体姿态一变 (前飞俯身/转向偏航), 记忆的
-                # (yaw,pitch) 就与实际视角脱钩, 下次按键会把积累的姿态差一
-                # 次性归零 —— 方向键不再纯上下/左右。因此除 dirty 立即下发
-                # 外, 还周期性按当前机体姿态重下发保持基准新鲜 (回中动画
-                # 每帧置 dirty 本就连续下发, 方向键路径在此补齐)。
-                # 稳定模式 (follow) 下居中角 (0,0) 也持续重下发: 俯仰/横滚
-                # 被钉在世界系, 机体剧烈晃动时视角保持水平不跟着抖; 非稳定
-                # 模式维持原语义, 居中=刚性挂载 (省 RPC, FPV 手感)。
+                # 云台角只在下发瞬间按当时机体姿态换算, 机体姿态一变记忆
+                # 角就与实际视角脱钩, 故除 dirty 立即下发外还周期重下发;
+                # 稳定模式下居中角 (0,0) 也持续重下发 (视角保持水平),
+                # 非稳定模式居中=刚性挂载 (省 RPC)
                 now = time.monotonic()
                 if self._gimbal_client is None:
                     # 云台连接惰性重建: 构造失败 (UE 未 play 等) 不拖累拉图
@@ -652,16 +597,13 @@ class Grabber(threading.Thread):
                 # 专用 RPC 连接, 下发不阻塞拉图)
                 if self._fov_dirty and self._gimbal_client is not None:
                     self._apply_fov(self._gimbal_client, cam)
-                # 深度必须用 DepthPlanar 类型: 若用 Scene+pixels_as_float,
-                # UE 端会对 8-bit 彩色渲染目标做浮点读回, 触发 D3D12 的
-                # PF_FloatRGBA ensure 断言并返回无效数据 (NaN/Inf)
+                # 深度必须用 DepthPlanar: Scene+float 读回会触发 D3D12
+                # 断言并返回 NaN/Inf
                 if is_depth:
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.DepthPlanar, True, False)
                 else:
-                    # Scene 走 PNG 压缩传输 (线上体积约原始 BGR 的 1/3):
-                    # UE 端编码 + 本端 imdecode 都是 C 实现, 用少量 CPU 换
-                    # 3~4 倍传输量缩减, RPC 往返变短直接转化为帧率
+                    # Scene 走 PNG 压缩传输 (线上体积约 1/3, RPC 往返变短直接转化为帧率)
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.Scene, False, self._scene_compress)
                 resp = client.simGetImages([req], VEHICLE)
@@ -682,17 +624,14 @@ class Grabber(threading.Thread):
                                 self._scene_compress = False
                                 self.log('图传: 服务端未按 PNG 返回, 回退原始传输')
                         if arr is None and not self._scene_compress:
-                            # 服务端原始字节是 RGB 序 (RenderRequest 逐字节
-                            # R,G,B 写出, 见 Cosys RenderRequest.cpp), 显示
-                            # 约定 BGR —— 翻转通道, 与 PNG 路径色彩一致
+                            # 服务端原始字节是 RGB 序, 显示约定 BGR —— 翻转通道
                             arr = np.ascontiguousarray(
                                 data.reshape(r.height, r.width, 3)[..., ::-1])
                     if arr is not None:
                         self._commit(arr, is_depth, gen)
                     else:
                         time.sleep(0.05)
-                # 自适应节流: 扣除 RPC 往返耗时后再补足剩余间隔。
-                # 往返超过 1/GRAB_HZ 时不再额外睡眠, 帧率由网络/渲染延迟决定
+                # 自适应节流: 扣除 RPC 往返后补足剩余间隔
                 time.sleep(max(0.0, 1.0 / GRAB_HZ - (time.monotonic() - t_start)))
             except Exception as e:
                 self.log(f'连接中断: {e}，1 秒后重连...')

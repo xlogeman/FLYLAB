@@ -1,23 +1,19 @@
 // airsim_lidar —— 通用 3D LiDAR 采集节点 (算法无关, 可插拔)
 //
-// 功能: 通过 RPC 直连 Cosys-AirSim 采集原始点云 (传感器局部 NED 系), 填充
-//       时间模型后发布。坐标变换 (FLU/world 系) 与外参属于算法适配,
-//       由 bridge_fastlio / bridge_super 各自完成。
-// 发布: /airsim/lidar/points_raw
-//       (PointCloud2: x,y,z 传感器局部 NED; intensity,ring,time;
-//        frame_id=lidar_ned, reliable QoS)
-// 时间模型 (Cosys-AirSim LiDAR 无逐点时间戳, 整帧只有一个 time_stamp):
-//   - CPU 雷达 (SensorType 6): 单 tick 瞬时快照, 整帧同一位姿, 统一填
-//     sweep_dur, header = 快照时刻 - sweep_dur (窗口末 = 真实成像时刻);
-//   - GPU 雷达 (SensorType 8): 旋转扫描式, 一帧 = 一个旋转周期内多段渲染
-//     累积, 各点真实捕获时刻不同。使用插件逐段上报的真实渲染时刻
-//     (GPULidarData.segment_stamps) 生成真实逐点时间, 下游据此做逐点
-//     运动畸变校正; 无段数据 (旧插件) 回退 CPU 雷达同款快照模型。
+// RPC 直连 Cosys-AirSim 采集原始点云 (传感器局部 NED), 发布:
+//   /airsim/lidar/points_raw (x,y,z NED; intensity,ring,time;
+//    frame_id=lidar_ned, reliable QoS)。坐标变换与外参由 bridge_* 完成。
+//
+// 时间模型 (Cosys LiDAR 无逐点时间戳, 整帧一个 time_stamp):
+//   - CPU 雷达 (SensorType 6): 单 tick 瞬时快照, 统一填 sweep_dur,
+//     header = 快照时刻 - sweep_dur (窗口末 = 真实成像时刻);
+//   - GPU 雷达 (SensorType 8): 一帧 = 一个旋转周期内多段渲染累积,
+//     用插件逐段上报的真实渲染时刻生成逐点时间, 下游据此去畸变;
+//     无段数据时回退 CPU 雷达快照模型。
 //   未命中的 (0,0,0) 占位点被过滤。
-// 时间戳: header = 帧首 (仿真 time_stamp 经 SimClockSync 统一映射), 与
-//         airsim_imu/airsim_odom 落在同一条时间轴 (仿真慢于实时时不会
-//         系统性过积分, 详见 airsim_common.hpp)。
-// 参数 (必须与 UE 端 settings.json 中 Lidar1 配置一致):
+// 时间戳: header 经 SimClockSync 统一映射, 与 airsim_imu/airsim_odom
+// 同一时间轴 (详见 airsim_common.hpp)。
+// 参数 (须与 UE 端 settings.json 的 Lidar1 配置一致):
 //   lidar_name, use_gpu_lidar, num_channels, rotation_frequency,
 //   intensity, lidar_period_ms, vehicle_name
 #include <rclcpp/rclcpp.hpp>
@@ -46,9 +42,7 @@ public:
         cloud_frame_ = this->declare_parameter<std::string>("cloud_frame_id", "lidar_ned");
         const int lidar_ms = this->declare_parameter<int>("lidar_period_ms", 100);  // 10Hz
 
-        // KeepLast(2): 实时传感器流不缓存旧帧。深度 5 时下游(RViz/桥接)一旦卡顿,
-        // reliable 语义会积压 5 帧并在恢复后一次性补发, 点云爆发导致下游失效;
-        // 压到 2 后卡顿只损失数据, 不产生积压回放
+        // KeepLast(2): 卡顿只损失数据, 不产生 reliable 积压回放
         auto qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable();
         pub_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/airsim/lidar/points_raw", qos);
@@ -125,18 +119,15 @@ private:
             const double wall_s = this->now().seconds();
             const double sweep_dur = (rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1;
 
-            // 重复帧去重: RPC 轮询相位与雷达输出相位未锁定, 同一帧可能被连续
-            // 抓取两次; 下游 (FAST-LIO) 对相同时间戳的帧不去重, 会导致空 IMU
-            // 窗口的退化配准
+            // 重复帧去重: RPC 轮询与雷达输出相位未锁定, 同一帧可能被连抓两次
             if (sim_stamp > 0 && sim_stamp == last_sim_stamp_) {
                 return;
             }
             last_sim_stamp_ = sim_stamp;
 
-            // FAST-LIO 约定 header.stamp = 扫描"起始"时刻 (lidar_end = beg + max(time)).
-            // AirSim time_stamp (纳秒, 仿真时钟) = 数据生成时刻 ≈ 扫描"结束"时刻。
-            // GPU 雷达有段级时刻时: header = 最早段渲染时刻 (真实帧首), 各点 time =
-            // 所属段渲染时刻 - header (纯仿真轴差值, 经时间轴线性映射不变)。
+            // FAST-LIO 约定 header.stamp = 扫描起始时刻;
+            // AirSim time_stamp = 数据生成时刻 ≈ 扫描结束时刻。
+            // GPU 雷达有段级时刻时: header = 最早段渲染时刻 (真实帧首)。
             bool use_seg_times = !seg_stamps.empty() && sim_stamp > 0;
             uint64_t t_header_ns = 0;
             double header_s;
@@ -155,11 +146,9 @@ private:
             }
             const auto stamp = rclcpp::Time(static_cast<int64_t>(header_s * 1e9), RCL_ROS_TIME);
 
-            // 跨卡顿帧过滤: UE 卡顿恢复后, GPU 雷达在同一旋转周期内累积了停顿前后
-            // 两段渲染, 段时刻跨度远超一个扫描周期。这种帧的逐点 time 跨越停顿
-            // 间隔, 下游按时间去畸变/对齐会把停顿期当真实运动处理 -> 整帧拖影,
-            // 定位/建图失效, 直接丢弃。正常帧跨度 = sweep_dur, 3 倍容差覆盖参数
-            // 舍入与渲染抖动
+            // 跨卡顿帧过滤: UE 卡顿恢复后同一帧累积了停顿前后两段渲染,
+            // 段时刻跨度远超扫描周期, 去畸变会把停顿期当真实运动 -> 整帧拖影,
+            // 直接丢弃 (3 倍容差覆盖参数舍入与渲染抖动)
             if (use_seg_times) {
                 uint64_t t_max = 0;
                 for (const auto& s : seg_stamps) {
@@ -180,14 +169,13 @@ private:
                 return;
             }
 
-            // per-point time 回退语义 (无段级时刻时): AirSim 整帧点云按单时刻
-            // 快照处理, 统一填 sweep_dur (而非 0~sweep_dur 递增):
-            //   - header.stamp = 成像时刻 - sweep_dur (扫描"起始"), FAST-LIO 窗口
-            //     末点 = header + max(time) = 成像时刻, 恰为快照真实位姿 -> 零剪切;
-            //   - 不能填 0: 会触发 FAST-LIO "按方位角反推时间"兜底, 重新注入伪畸变;
-            //   - 不能填递增值: 伪逐点时间会反向注入最大 sweep_dur*速度 的剪切。
-            // 有段级时刻时: time = 真实捕获时刻 - header, FAST-LIO 按真实时刻做
-            // 逐点畸变校正 (GPU 帧本就是一个旋转周期的多次渲染累积, 非快照)。
+            // per-point time 回退语义 (无段级时刻时): 整帧按单时刻快照处理,
+            // 统一填 sweep_dur (而非 0~sweep_dur 递增):
+            //   - FAST-LIO 窗口末点 = header + max(time) = 成像时刻, 恰为快照
+            //     真实位姿 -> 零剪切;
+            //   - 不能填 0: 触发 FAST-LIO "按方位角反推时间"兜底, 重新注入伪畸变;
+            //   - 不能填递增值: 反向注入最大 sweep_dur*速度 的剪切。
+            // 有段级时刻时: time = 真实捕获时刻 - header, 按真实时刻去畸变。
             const float kPointTime =
                 static_cast<float>((rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1);
 

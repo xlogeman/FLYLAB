@@ -1,9 +1,8 @@
 // airsim_camera —— 通用相机采集节点 (算法无关, 可插拔)
 //
-// 功能: 通过 RPC 直连 Cosys-AirSim, 按参数采集一路或多路相机并发布 ROS2 话题。
-//       与算法解耦: 深度图/双目/单目均由参数配置, 哪个算法需要就由其 launch
-//       启动一个实例并按需配置; 多相机在同一次 RPC 请求中采集 (硬件同步),
-//       共用同一时间戳。
+// RPC 直连 Cosys-AirSim, 按参数采集一路或多路相机发布。深度/双目/单目均
+// 由参数配置, 各算法的 launch 启动实例按需配置; 多相机同一次 RPC 采集
+// (硬件同步), 共用同一时间戳。
 // 参数:
 //   camera_names    相机名列表, 逗号分隔 (默认 "left_cam,front_cam,right_cam",
 //                   需与 UE 端 settings.json 中的相机名一致)
@@ -99,10 +98,9 @@ private:
             if (responses.size() != requests_.size()) {
                 return;
             }
-            // 多相机共用同一时间戳 (同一次请求, 硬件同步)。
-            // 时间戳必须与 airsim_imu 等节点落在同一时间轴 (SimClockSync 映射
-            // 仿真 time_stamp), 否则视觉算法 (OpenVINS 等) 按时间戳对齐 IMU/图像
-            // 时会全部错位, 永远无法初始化; 仿真端未填 time_stamp 时退回墙钟。
+            // 多相机共用同一时间戳; 须经 SimClockSync 映射到统一时间轴,
+            // 否则视觉算法对齐 IMU/图像时全部错位, 无法初始化。
+            // 仿真端未填 time_stamp 时退回墙钟。
             const double wall_s = this->now().seconds();
             rclcpp::Time stamp = this->now();
             if (responses[0].time_stamp > 0) {

@@ -118,9 +118,7 @@ class CameraViewWidget(QWidget):
             line.setFrameShape(QFrame.VLine)
             line.setFrameShadow(QFrame.Sunken)
             outer.addWidget(line)
-            # 右栏套 QScrollArea 自适应窗口: 组件各有最小尺寸 (摇杆固定、
-            # 地图/罗盘有下限), 窗口拉小到放不下时出滚动条, 而不是组件互相
-            # 挤压/截断导致布局错乱; 拉大时组件按 stretch 扩展占满
+            # 右栏套 QScrollArea: 窗口拉小时出滚动条, 避免组件互相挤压
             body = QWidget()
             panel = QVBoxLayout(body)
             panel.setContentsMargins(0, 0, 0, 0)
@@ -169,10 +167,8 @@ class CameraViewWidget(QWidget):
             self._left_layout.addWidget(w)
 
     def _build_gimbal(self, in_group=False):
-        """云台控制面板: 摇杆连续转动 (偏转量=角速度, 松手停) + 回中 +
-        角度读数 (被限位卡住时标红)。仅 AirSim 相机源可用 (本机/文件源
-        在 _refresh 里置灰)。in_group=True 时外面已有分组框, 面板内不再
-        重复"云台:"标题。"""
+        """云台控制面板: 摇杆连续转动 (偏转量=角速度) + 回中 + 角度读数
+        (限位卡住标红)。仅 AirSim 相机源可用。in_group=True 时不再重复标题。"""
         self._gimbal_locked = False   # 视觉反控进行中锁定云台 (见 set_gimbal_locked)
         self._angle_red = {'yaw': False, 'pitch': False}   # 各轴读数标红缓存
 
@@ -227,10 +223,8 @@ class CameraViewWidget(QWidget):
         angles.addStretch(1)
         g.addLayout(angles, 2, 0, 1, 2)
 
-        # 视场角滑杆 (竖排, 云台方向键/回中稳定按钮右侧): 经 simSetCameraFov
-        # 实时调整 UE 相机 FOV (真实视场, 图传/算法看到的画面同步变化);
-        # 本机/文件源物理上改不了, 随云台整体置灰 (在 _refresh 里统一门控)。
-        # 上=大视场 (广角), 下=小视场 (拉近)
+        # 视场角滑杆 (竖排): 经 simSetCameraFov 实时调整 UE 相机 FOV,
+        # 本机/文件源随云台整体置灰。上=广角, 下=拉近
         fov_col = QVBoxLayout()
         fov_col.setSpacing(2)
         fov_title = QLabel('视场')
@@ -255,9 +249,8 @@ class CameraViewWidget(QWidget):
         fov_col.addWidget(self.fov_value)
         g.addLayout(fov_col, 1, 2, 2, 1)   # 右侧整列 (与摇杆/角度读数同高)
 
-        # 数字变焦滑杆 (视场滑杆右侧, 同款竖排): 显示层中心裁切, 与 FOV
-        # (真实视场) 相互独立; 滚轮/双击画面仍可用, 滑杆实时跟随。滑杆
-        # 整数值 = 倍数×100 (分辨率 0.01, 滚轮步进 0.25 可整除不漂移)
+        # 数字变焦滑杆 (视场滑杆右侧): 显示层中心裁切, 与 FOV 相互独立;
+        # 滑杆整数值 = 倍数×100 (分辨率 0.01)
         zoom_col = QVBoxLayout()
         zoom_col.setSpacing(2)
         zoom_title = QLabel('变焦')
@@ -320,9 +313,8 @@ class CameraViewWidget(QWidget):
             self.gimbal.setEnabled(False)
 
     def _update_gimbal_limit(self):
-        """到限位提示: 摇杆转动被限位卡住时只红对应轴的读数 (偏航卡住红
-        航向, 俯仰卡住红俯仰), 恢复可动即清红。拒绝状态由 grabber 会话内
-        判定, 打开地面站时一律不红; 样式只在变化时更新。"""
+        """到限位提示: 被限位卡住时只红对应轴的读数, 恢复可动即清红。
+        拒绝状态由 grabber 会话内判定, 样式只在变化时更新。"""
         blocked = self.grabber.get_gimbal_blocked()
         red = {'yaw': blocked['yaw+'] or blocked['yaw-'],
                'pitch': blocked['pitch+'] or blocked['pitch-']}
@@ -344,9 +336,8 @@ class CameraViewWidget(QWidget):
         return raw
 
     def _rebuild_src_menu(self):
-        """重建源菜单: UE 相机 + 本机摄像头 + 已打开的文件 + 打开文件对话框。
-        本机摄像头展开时后台重扫, 扫完经 cams_found 信号刷新 —— 菜单开着
-        也能看到新设备 (热插拔即时可见)。勾选标记跟随当前源。"""
+        """重建源菜单: UE 相机 + 本机摄像头 + 已打开文件 + 打开文件对话框。
+        展开时后台重扫本机摄像头, 热插拔即时可见。"""
         menu = self.src_btn.menu()
         menu.clear()
         cur = self.grabber.camera
@@ -400,9 +391,7 @@ class CameraViewWidget(QWidget):
         self.src_btn.setText(f'视频源: {self._src_display(raw)}')
 
     def _switch_source(self, name):
-        """切换抓取源并立即清屏: 新源暂时无帧 (设备不存在/UE 相机未配置/
-        文件打不开等) 时, 界面回到"等待图像..."占位, 而不是残留上一源的
-        定格画面 (看起来像图传卡死)。"""
+        """切换抓取源并立即清屏: 新源暂时无帧时不残留上一源定格画面。"""
         self.video.clear_frame()
         self.grabber.set_camera(name)
 
@@ -438,8 +427,7 @@ class CameraViewWidget(QWidget):
             self._gimbal_labels['yaw'].setText(f'航向 {yaw:+.0f}°')
             self._gimbal_labels['pitch'].setText(f'俯仰 {pitch:+.0f}°')
             self._update_gimbal_limit()
-            # 视场滑杆跟随当前相机的 FOV (切源后换记忆值); 用户拖动中
-            # 不回写, 程序回写 blockSignals 防误触发 set_fov
+            # 视场滑杆跟随当前相机 FOV; 用户拖动中不回写
             fov = self.grabber.get_fov()
             if fov is not None and not self.fov_slider.isSliderDown():
                 self.fov_slider.blockSignals(True)
@@ -457,8 +445,7 @@ class CameraViewWidget(QWidget):
             arr = colorize_depth(arr)
         self.video.show_frame(arr)
         self.video.set_hud(f'图传 {fps:.1f}')   # 帧率显示在画面左上角
-        # 变焦滑杆跟随当前倍率 (滚轮/双击改的也同步); 拖动中不回写,
-        # 程序回写 blockSignals 防误触发 set_zoom
+        # 变焦滑杆跟随当前倍率 (滚轮/双击改的也同步); 拖动中不回写
         zoom = self.grabber.get_zoom()
         if not self.zoom_slider.isSliderDown():
             self.zoom_slider.blockSignals(True)

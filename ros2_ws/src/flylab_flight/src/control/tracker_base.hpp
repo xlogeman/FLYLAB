@@ -1,14 +1,12 @@
 // tracker_base.hpp —— 避障规划轨迹跟踪节点公共基类
 //
-// tracker_uxrce (uXRCE-DDS 链路) 与 tracker_mavros (MAVROS 链路) 的
-// 控制逻辑一致, 因此把共用部分收敛到这里:
-//   共用 (基类): 参数声明 / RViz 目标点拦截与转发 / 规划指令缓存与事件驱动下发 /
+// tracker_uxrce 与 tracker_mavros 控制逻辑一致, 共用部分收敛到这里:
+//   共用 (基类): 参数声明 / RViz 目标点拦截 / 规划指令缓存与事件驱动下发 /
 //                到达检测 (距离+速度双条件) / OFFBOARD 状态机骨架
 //   差异 (派生): setpoint 编码与坐标系转换 / 心跳形式 / 模式切换命令 / 状态来源
 //
-// 与具体规划算法解耦: 基类只订阅 quadrotor_msgs/PositionCommand 规划指令话题
-// (参数 pos_cmd_topic, 默认 /planning/pos_cmd), 不关心轨迹由哪个规划器生成;
-// 换用其他避障规划算法时写一个桥接节点把其输出转成 PositionCommand 即可.
+// 与规划算法解耦: 只订阅 quadrotor_msgs/PositionCommand (pos_cmd_topic),
+// 换其他规划器时写桥接节点转成 PositionCommand 即可。
 //
 // 派生类需实现:
 //   checkLink / isArmed / isOffboard / isAutoLand
@@ -106,9 +104,8 @@ protected:
     } else if (isAutoLand()) {
       // 降落由 QGC 控制, 不干预
     } else if (planner_active_) {
-      // 规划器已接管但还没进 OFFBOARD (QGC / commander takeoff 起飞后悬停的场景):
-      // PX4 要求切入 OFFBOARD 前必须有持续的有效 setpoint 流, 否则切换会被拒绝。
-      // 因此这里在请求切换模式的同时补发悬停 setpoint 凑齐切换条件。
+      // 规划器已接管但还没进 OFFBOARD: PX4 要求切入前必须有持续 setpoint 流,
+      // 请求切换的同时补发悬停 setpoint 凑齐切换条件
       enterOffboard();
       publishHover();
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,

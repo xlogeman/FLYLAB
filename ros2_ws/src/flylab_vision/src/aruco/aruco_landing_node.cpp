@@ -328,24 +328,19 @@ private:
     }
   }
 
-  /// 目标选择 (指定 ID 优先 + 最大码回退, 适配多尺度嵌套码场景):
-  ///   target_id = -1  自动模式: 首帧选画面最大的码并锁定, 持续丢失超
-  ///                   reacquire_sec 才重选 (原逻辑不变)
-  ///   target_id >= 0  指定模式: 指定 ID (如嵌套小码) 出现 → 对齐目标切到它;
-  ///                   不可见 → 回退跟踪画面最大码 (target_fallback=true, 默认),
-  ///                   或只认指定 ID (target_fallback=false, 原严格模式)
-  /// 回退目标软锁定: 仍在画面就继续跟, 防多个大码间逐帧跳变; 指定 ID 重新
-  /// 出现则立即切回 (两码同心布置时中心重合, 切换无水平跳变, 无需确认帧)
-  /// 同 ID 多码 (用户布置了两个相同码): 一律取画面面积最大者, 不随检出
-  /// 顺序跳变 (检出列表顺序帧间不稳定)
+  /// 目标选择 (指定 ID 优先 + 最大码回退, 适配多尺度嵌套码):
+  ///   target_id = -1  自动模式: 首帧选画面最大的码并锁定, 持续丢失超 reacquire_sec 重选
+  ///   target_id >= 0  指定模式: 指定 ID 出现即切为对齐目标; 不可见则回退
+  ///                   画面最大码 (target_fallback=true) 或只认指定 ID
+  /// 回退目标软锁定防跳变; 指定 ID 重新出现立即切回 (同心码无水平跳变)。
+  /// 同 ID 多码一律取画面面积最大者, 不随检出顺序跳变。
   const Detection * pickTarget(double dt)
   {
     if (detections_.empty()) {
       noteTargetMissed(dt);
       return nullptr;
     }
-    // 同 ID 多码取画面面积最大者: 检出列表顺序帧间不稳定, 取"第一个"
-    // 会让目标在两码间逐帧跳变; 面积最大 (通常离得最近) 且逐帧一致
+    // 同 ID 多码取面积最大者: 检出顺序帧间不稳定, 取第一个会逐帧跳变
     auto largestOf = [&](int id) -> const Detection * {
       const Detection * best = nullptr;
       double best_area = -1.0;
@@ -626,12 +621,10 @@ private:
   }
 
   /// 目标丢失处理 (TRACKING), 按高度分场景:
-  ///   低空 + 丢失前已对齐 → 自阴影遮挡 (影子随高度降低盖住码), 直接切
-  ///     AUTO.LAND —— 对齐状态在丢失瞬间仍有效, 再等面积/趋势角只会更糟;
-  ///   低空未对齐 或 爬升恢复进行中 → 爬升重捕获: 影子偏移随高度增大,
-  ///     升到码重新可见自动回到正常对齐下降; 上限 shadow_max_climb (相对
-  ///     丢失时高度), 超限仍无码 → 切 AUTO_LOITER 交还控制权;
-  ///   高空丢失 → 原地悬停, 超时交还控制权 (原有逻辑)。
+  ///   低空 + 丢失前已对齐 → 自阴影遮挡, 直接切 AUTO.LAND;
+  ///   低空未对齐/爬升中 → 爬升重捕获 (影子偏移随高度增大), 上限
+  ///     shadow_max_climb, 超限仍无码 → 切 AUTO_LOITER 交还控制权;
+  ///   高空丢失 → 原地悬停, 超时交还控制权。
   void handleTargetLost(double dt)
   {
     const auto & pos = px4_->localPosition();
@@ -799,8 +792,7 @@ private:
       oss << " 触发计数 " << landing_count_ << "/" << min_landing_frames_;
     }
     std::ostringstream json;
-    // 字号用 px (原图像素高, 约 3% 画高) 随显示缩放等比渲染 —— 窗口
-    // 大小变化时文字与画面比例恒定, 不会忽大忽小; 位置固定画面左下角
+    // 字号用原图像素高 (约 3% 画高) 随显示缩放等比渲染, 位置固定左下角
     json << "{\"algo\":\"" << kAnnoState << "\",\"items\":["
          << "{\"type\":\"text\",\"pos\":[12," << (img_h_ - 12) << "],"
          << "\"px\":" << (img_h_ * 0.03) << ","

@@ -19,12 +19,10 @@ class ControlPanelsMixin:
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
     def _update_landing_btn(self):
-        """门控 (33ms 轮询), offboard 功能互斥 + 反控锁云台 + 遥控最高优先:
-        - 视觉反控 (降落): 需已解锁升空 + ArUco检测运行中 + AirSim 源 +
-          已开启链路 (点击时自动把云台俯仰转到垂直向下);
-          进行中保持可点 (随时取消),
-          锁定链路与云台面板; 允许开遥控 (遥控接管即自动取消反控, 防炸机)
-        - 遥控: 仅需已开启链路; 进行中锁定链路与视觉反控"""
+        """offboard 功能互斥门控 (33ms 轮询):
+        - 视觉反控: 需已解锁升空 + ArUco检测运行中 + AirSim 源 + 链路已开;
+          进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口)
+        - 遥控: 仅需链路已开; 进行中锁链路与视觉反控"""
         link_ok = self._selected_link() is not None
         # 进行中的按钮自身必须保持可点 (否则无法取消), 只锁定其余项
         if self.teleop_btn.isChecked():
@@ -61,9 +59,8 @@ class ControlPanelsMixin:
             link = self._selected_link() or 'mavros'
             cmd = list(config.LANDING_CMD) + ['--ros-args', '-p', f'link:={link}']
             self.land_proc.start(cmd)
-            # 新进程要完成 DDS 发现 + 收到首帧飞控状态 (共 1~3s), 单发一条
-            # landing_start 撞上任何一步都会被吞掉 (表现为"第一次点击无效"),
-            # 故启动后重发多次: 节点对重复 start 幂等, 多发无副作用
+            # 新进程需完成 DDS 发现 + 收首帧飞控状态 (1~3s), 重发多次防吞;
+            # 节点对重复 start 幂等
             QTimer.singleShot(1000, lambda: self._send_landing_start(6))
         else:
             self.landing_btn.setText('视觉反控')
@@ -191,12 +188,11 @@ class ControlPanelsMixin:
 
     def _on_teleop_toggle(self):
         if self.teleop_btn.isChecked():
-            # 遥控接管优先 (防炸机出口): 反控进行中先取消降落, 降落节点
-            # 切回 LOITER 交还 offboard, 遥控 1s 后再接管不会打架
+            # 遥控接管优先 (防炸机出口): 先取消反控, 降落节点交还 offboard
+            # 后遥控再接管
             if self.landing_btn.isChecked():
                 self.landing_btn.setChecked(False)
-            # 避障链路 (EGO/SUPER) 与遥控互斥: 跟踪器同样走 offboard,
-            # 开遥控先整链路退出, offboard 交由遥控节点独占
+            # 避障链路跟踪器同样走 offboard, 与遥控互斥, 先整链路退出
             if self.running_flight is not None and self.running_flight.get('need_link'):
                 self._stop_flight()
                 self.log.info('手动遥控接管, 已自动退出避障链路')

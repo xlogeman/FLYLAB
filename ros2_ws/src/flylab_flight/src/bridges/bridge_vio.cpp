@@ -1,12 +1,11 @@
 // bridge_vio —— VIO 断桨门控桥接节点 (纯 ROS, 不依赖 AirSim)
 //
-// 功能: OpenVINS 没有类似 VINS-Fusion /vins_imu_switch 的控制话题, 因此在
-//       数据源端掐断: 订阅 PX4 /fmu/out/vehicle_status, 断桨(降落)时停发
-//       图像+IMU 使 VIO 等效关闭, 重新解锁后恢复 (OpenVINS 从原状态继续,
-//       不做重置)。数据原样转发, 不做任何变换。
-//       灰度转换在 airsim_camera (grayscale 参数) 完成, 本节点只做门控。
+// OpenVINS 没有 VINS-Fusion 式的 IMU 开关话题, 故在数据源端掐断: 订阅
+// /fmu/out/vehicle_status, 断桨(降落)时停发图像+IMU 使 VIO 等效关闭,
+// 重新解锁后恢复 (OpenVINS 从原状态继续, 不重置)。数据原样转发;
+// 灰度转换在 airsim_camera 完成, 本节点只做门控。
 // 订阅: /airsim/cam/left_cam/image_raw, /airsim/cam/right_cam/image_raw,
-//       /airsim/imu/data_raw  (均可在 launch 中重映射)
+//       /airsim/imu/data_raw  (均可重映射)
 // 发布: /vio/left/image_raw, /vio/right/image_raw, /vio/imu/data
 // 参数: gate_by_arming (默认 true, 关闭则直通)
 #include <rclcpp/rclcpp.hpp>

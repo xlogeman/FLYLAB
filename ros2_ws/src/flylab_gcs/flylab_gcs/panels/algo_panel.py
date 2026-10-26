@@ -65,10 +65,9 @@ class AlgoPanelMixin:
         self._update_algo_state()
 
     def _send_start(self, algo, retries_left=6):
-        """发送启动指令并按 400ms 间隔重发多次: 新进程的 DDS 发现可能
-        超过 1s, 单发一条 start 撞上发现窗口就永远丢掉 (volatile 消息
-        不补发, 表现为"点了运行没反应"); 节点对重复 start 幂等, 多发无副作用。
-        触发前算法被取消/切换/进程已死则跳过。"""
+        """发送启动指令并按 400ms 间隔重发多次: 单发一条 start 撞上
+        DDS 发现窗口会被丢掉 (volatile 消息不补发); 节点对重复 start
+        幂等。算法被取消/切换/进程已死则跳过。"""
         if self.running_algo is not algo:
             return
         rc = self.algo_proc.exited()

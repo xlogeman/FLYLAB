@@ -29,8 +29,7 @@ class VideoLabel(QLabel):
 
     def __init__(self, text='等待图像...'):
         super().__init__(text)
-        # 最小尺寸给小些: 窗口拉小时左栏 (画面+日志) 能跟着收缩, 布局
-        # 不被 640x480 的下限顶爆 (画面本身等比缩放, 小窗口只是看小些)
+        # 最小尺寸给小些: 窗口拉小时左栏能跟着收缩, 不被下限顶爆
         self.setMinimumSize(320, 240)
         self.setAlignment(Qt.AlignCenter)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -70,9 +69,7 @@ class VideoLabel(QLabel):
         self.setText(text)
 
     def clear_frame(self):
-        """清屏: 丢弃当前画面回到占位文字。切换输入源时调用 ——
-        新源暂时无帧时不残留上一源的定格画面 (看起来像图传卡死),
-        旧源标注/HUD 一并清除, 避免叠加物串场。"""
+        """清屏回到占位文字。切源时调用: 新源无帧时不残留上一源定格画面。"""
         self.set_waiting()
 
     # ---------- 框选 ----------
@@ -230,10 +227,8 @@ class VideoLabel(QLabel):
         self._redraw()
 
     def _decode_image_anno(self, anno):
-        """image 图元: base64 -> QImage。同一份 data 只解码一次 (缓存 1 条),
-        每帧更新的稠密输出 (深度图) 与窗口重绘都走缓存, 不重复解码。
-        支持带透明通道的 PNG (4 通道, 语义分割叠加用: 无效像素透明不遮挡
-        原画面) 与普通 JPEG (3 通道, 深度伪彩画中画), 按解码结果自动区分。"""
+        """image 图元: base64 -> QImage, 同一份 data 只解码一次 (缓存 1 条)。
+        支持带透明通道的 PNG (语义分割叠加) 与普通 JPEG (深度伪彩画中画)。"""
         data = anno.get('data', '')
         if not data:
             return None
@@ -280,8 +275,8 @@ class VideoLabel(QLabel):
                 painter.setPen(QPen(c, lw_box))
                 painter.drawRect(r)
                 if label:
-                    # 类别名+置信度放框内左上角 (半透明黑底, 任何画面可读);
-                    # 框太矮放不下文字时贴底部内缘, 横向越界时向左收
+                    # 类别名+置信度放框内左上角 (半透明黑底); 框太矮贴底部,
+                    # 横向越界向左收
                     fm = painter.fontMetrics()
                     tw = fm.horizontalAdvance(label)
                     pad = 2
@@ -350,22 +345,20 @@ class VideoLabel(QLabel):
                 f = painter.font()
                 f.setBold(True)
                 if a.get('px'):
-                    # 标注指定文字像素高 (原图像素): 乘显示缩放后 setPixelSize,
-                    # 字号与码框在屏幕上等比 (窗口缩放不失比例)
+                    # 指定像素高 (原图像素) 乘缩放, 字号与码框屏幕等比
                     f.setPixelSize(max(4, int(a['px'] * scale)))
                 else:
-                    # 缺省: 基准字号 + 偏移 (a['size'], 缺省 +1), 空拍画面里醒目
+                    # 缺省: 基准字号 + 偏移
                     f.setPointSize(f.pointSize() + a.get('size', 1))
                 painter.setFont(f)
                 fm = painter.fontMetrics()
                 tw = fm.horizontalAdvance(text)
                 x = int(tx * scale)
                 y = int(ty * scale)
-                # align=right 时 pos.x 为文字右边缘 (绘制端量宽, C++ 侧
-                # 不知道字体宽度, 只能发右锚点)
+                # align=right 时 pos.x 为文字右边缘 (C++ 侧不知字体宽度)
                 if a.get('align') == 'right':
                     x -= tw
-                # 半透明黑底条: 任何画面下都有足够对比度 (同 HUD 处理)
+                # 半透明黑底条保证对比度
                 pad = 3
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QColor(0, 0, 0, 150))

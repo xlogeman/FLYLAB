@@ -101,8 +101,8 @@ class LocalFileReader:
                 self.log(f'无法打开本机摄像头 {dev}')
                 time.sleep(1.0)
                 return None
-            # 默认常协商到 YUYV 未压缩格式, usbipd 转发下 USB 带宽不足导致
-            # 帧尾数据缺失, 解码出来画面底部是绿色。改用 MJPG 压缩格式。
+            # YUYV 未压缩在 usbipd 转发下 USB 带宽不足, 画面底部发绿,
+            # 改用 MJPG 压缩格式
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

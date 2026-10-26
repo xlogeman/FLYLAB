@@ -19,13 +19,11 @@ from .overlay import parse_message
 
 
 class TeeLogger:
-    """rclpy Logger 分流器: 终端日志照常输出, 同时把 (级别, 文本) 回调给
-    界面日志框。回调可能来自任意线程 (抓取线程/飞控线程), 线程安全由回调
-    方保证 (界面侧经 Qt 信号队列投递到 GUI 线程)。
+    """rclpy Logger 分流器: 终端照常输出, 同时回调 (级别, 文本) 给界面日志框。
+    回调可能来自任意线程, 线程安全由回调方保证。
 
-    注意: rclpy 的 RcutilsLogger 按"调用点代码行"记忆 severity —— 同一行
-    代码先后发不同级别会抛 "Logger severity cannot be changed between
-    calls"。因此每个级别必须走独立调用点 (各占一行, 不用 getattr 转发)。
+    注意: rclpy 按"调用点代码行"记忆 severity, 同一行发不同级别会抛异常,
+    因此各级别走独立调用点 (不用 getattr 转发)。
     """
 
     def __init__(self, ros_logger):
@@ -81,15 +79,10 @@ class TeeLogger:
 class DisplayForwarder(threading.Thread):
     """显示帧转发线程 —— 大图序列化/publish 从 GUI 线程整体挪出。
 
-    为什么必须独立线程: RELIABLE 大图 (~1MB) 的 publish() 在写端历史被
-    未确认样本占满时会阻塞等待 ACK —— 实测把 GUI 线程的 33ms 定时器拖到
-    只剩 ~5Hz (ros2 topic hz 实测 display 4.5Hz / annotations 17Hz),
-    画面帧率与解算帧率随之崩塌。转发与界面彻底解耦后:
-    - GUI 线程只往单槽里放最新帧引用 (set_frame, 加锁赋值, 不拷贝不序列化)
-    - 本线程按固定频率取"最新帧"发布; 上一帧还没发完 (publish 阻塞在
-      ACK 上) 就跳过本轮, 新帧继续覆盖单槽 —— 永不排队积压, 永不阻塞
-      任何别的线程, 行为等价于"最新帧优先, 慢了就丢帧"
-    线程持有独立 node (rclpy 允许每线程一个 node), 无订阅者时不序列化。
+    RELIABLE 大图 publish() 可能阻塞等 ACK (实测曾把 GUI 定时器拖到 ~5Hz),
+    故独立成线程: GUI 线程只往单槽放最新帧引用, 本线程按固定频率发布;
+    上一帧没发完就跳过本轮 —— 最新帧优先, 慢了就丢帧, 永不积压。
+    线程持有独立 node, 无订阅者时不序列化。
     """
 
     def __init__(self):
@@ -126,10 +119,8 @@ class DisplayForwarder(threading.Thread):
 
     def run(self):
         self._node = rclpy.create_node('ground_station_display')
-        # reliable: 大图走 UDP 分片, best-effort 丢一个分片整帧就没了
-        # (实测丢帧率可达 40%+); 阻塞代价已由独立线程 + 跳帧机制消化。
-        # 若测量发现 ACK 等待仍限制吞吐 (发布端稳定低于源帧率), 改
-        # config.DISPLAY_IMAGE_RELIABLE = False 切 best-effort
+        # reliable: best-effort 下大图 UDP 分片丢一个整帧就没 (实测丢帧 40%+);
+        # 若 ACK 等待限制吞吐, 改 config.DISPLAY_IMAGE_RELIABLE = False
         qos = QoSProfile(
             reliability=(
                 ReliabilityPolicy.RELIABLE if config.DISPLAY_IMAGE_RELIABLE
@@ -153,8 +144,7 @@ class DisplayForwarder(threading.Thread):
                         pub.publish(self._to_msg(frame))
                         self.fwd_count += 1
                     except Exception:
-                        # 退出竞态: rclpy.shutdown() 作废上下文时线程正好
-                        # 在 publish (RCLError) —— 线程即将退出, 静默吞掉
+                        # 退出竞态: shutdown 作废上下文时正好在 publish, 静默吞掉
                         pass
                     finally:
                         self._publishing = False
@@ -173,16 +163,12 @@ class GroundStationNode(Node):
         # 算法启停指令 (工具按钮按下/抬起时发)
         self.cmd_pub = self.create_publisher(String, config.CMD_TOPIC, 10)
 
-        # 模型输出叠加: 各算法节点往 ANNOTATION_TOPIC 发 JSON 标注
-        # (schema 见 overlay.py)。按算法分组存放, 各组独立替换/清屏,
-        # 多个算法同时运行互不干扰
+        # 模型输出叠加: 各算法节点发 JSON 标注, 按算法分组存放互不干扰
         self.anno_groups = {}
         self.create_subscription(
             String, config.ANNOTATION_TOPIC, self._anno_cb, 10)
 
-        # 显示画面转发: 独立线程负责 (大图序列化/publish/等 ACK 全部
-        # 移出 GUI 线程, 见 DisplayForwarder 类注释)。界面只往单槽里
-        # 放最新帧引用, 无订阅者时转发线程自动跳过不序列化
+        # 显示画面转发: 独立线程负责, 界面只放最新帧引用 (见 DisplayForwarder)
         self.display_forwarder = DisplayForwarder()
         self.display_forwarder.start()
 
@@ -197,8 +183,8 @@ class GroundStationNode(Node):
         self._anno_last_rx = 0.0
         self.anno_fps = 0.0
 
-        # 降落节点状态回传 (tracking/landing/landed/idle):
-        # 记最新状态 + 递增序号, 界面按序号变化取事件 (不漏 "成功" 这类瞬时状态)
+        # 降落节点状态回传: 记最新状态 + 递增序号, 界面按序号变化取事件
+        # (不漏 "成功" 这类瞬时状态)
         self._landing_status = ''
         self._landing_status_seq = 0
         self.create_subscription(
@@ -307,9 +293,7 @@ class GroundStationNode(Node):
         return self.display_forwarder.take_fwd_count()
 
     def shutdown(self):
-        """停止转发线程 (程序退出时调用, 先于 rclpy.shutdown())。
-        必须等线程真正退出再返回: 否则 rclpy.shutdown() 作废上下文时
-        线程可能还在 publish, 抛 RCLError (退出栈里打印异常)。"""
+        """停止转发线程 (先于 rclpy.shutdown(), 等线程退出防止退出栈 RCLError)。"""
         forwarder = self.display_forwarder
         forwarder.stop()
         forwarder.join(timeout=1.0)

@@ -32,9 +32,8 @@ class MapView(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def update_state(self, track, home, hdg):
-        # 只收有限值坐标: AirSim 物理异常时会回 NaN/Inf, 一旦进入轨迹,
-        # paintEvent 的 log10/缩放计算会抛异常 —— PyQt 对绘制回调里的
-        # 未捕获异常直接 abort 整个进程 (界面静默消失), 故源头过滤
+        # 只收有限值坐标: NaN/Inf 进入轨迹会让 paintEvent 抛异常,
+        # PyQt 对绘制回调里的未捕获异常直接 abort 整个进程
         self._track = [p for p in track
                        if len(p) == 2 and math.isfinite(p[0]) and math.isfinite(p[1])]
         self._home = home if (home is not None

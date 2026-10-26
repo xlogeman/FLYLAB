@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """托管子进程 —— 地面站拉起的所有外部进程的统一生命周期管理。
 
-覆盖四类进程: PX4 SITL (make→px4 进程树) / 通信链路 (uXRCE-DDS Agent、
-MAVROS) / 算法节点 / 降落节点。统一解决三件重复的事:
-1. 独立进程组启动 (start_new_session=True): 停止时 killpg 整棵树回收,
-   避免 ros2 run / make → px4 留孤儿 (残留 px4 占住 /tmp/px4_lock-N)
+覆盖 PX4 SITL / 通信链路 / 算法节点 / 降落节点。统一解决:
+1. 独立进程组启动, 停止时 killpg 整棵树回收 (避免孤儿进程占资源)
 2. 停止: SIGTERM 整组 → 超时 SIGKILL
-3. 输出接管 (可选): 逐行读 stdout/stderr, 剥 ANSI 转义后回调
-   (PX4 SITL 用, 经 Qt 信号队列上界面日志框; 其余进程日志直通终端)
+3. 输出接管 (可选): 逐行读 stdout, 剥 ANSI 转义后回调上界面日志框
 
-注意: 方法在 GUI 线程调用, stop() 最长阻塞 timeout 秒 (SIGTERM 后进程
-通常立即退出, 实际无感)。
+注意: 方法在 GUI 线程调用, stop() 最长阻塞 timeout 秒 (实际通常立即退出)。
 """
 import os
 import re
@@ -80,14 +76,10 @@ class ManagedProcess:
 
     def stop(self, timeout=2.0):
         """SIGTERM 整个进程组, 超时再 SIGKILL。
-        注意: 直接子进程 (如 ros2 launch) 可能先于孤儿孙进程退出 ——
-        此时 wait() 立刻返回, 若只在超时分支才 SIGKILL 就会漏杀整组
-        (表现为 RViz/Pangolin 窗口关不掉)。故 start_new_session 下
-        子进程即组长 (pgid == pid), 等待结束后无条件对组 SIGKILL 兜底:
-        组已空则 ProcessLookupError 自然跳过, 还有成员则确保全灭。
-        设有 kill_cmd 时先执行之: WSL 启动的 Windows exe 真实进程不随
-        Linux 侧中继死亡 (SIGTERM/SIGKILL 只杀掉中继, 窗口仍留着),
-        须 taskkill 按映像名补杀, 再走常规进程组回收清理中继。"""
+        直接子进程可能先于孤儿孙进程退出, wait() 立刻返回, 故等待结束后
+        无条件对组 SIGKILL 兜底 (组已空则 ProcessLookupError 跳过)。
+        设有 kill_cmd 时先执行: WSL 启动的 Windows exe 不随 Linux 侧中继
+        死亡, 须 taskkill 按映像名补杀。"""
         proc, self.proc = self.proc, None
         if proc is None or proc.poll() is not None:
             return

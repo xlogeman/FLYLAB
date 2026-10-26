@@ -52,10 +52,8 @@ from .vehicle_control import VehicleController
 class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                  AlgoPanelMixin, FlightPanelMixin, ControlPanelsMixin,
                  QMainWindow):
-    """主窗口: 组装各功能域面板 (mixin 提供) + 33ms 主轮询调度。
-
-    功能域方法以 mixin 混入, 通过 self.* 访问主窗口共享状态
-    (node/log/各 ManagedProcess/veh_ctrl/按钮等)。"""
+    """主窗口: 组装各功能域面板 (mixin 提供) + 33ms 主轮询调度,
+    功能域方法通过 self.* 访问主窗口共享状态。"""
 
     # 日志行 (level, text) —— 任意线程可 emit, 经队列投递到 GUI 线程上屏
     log_line = pyqtSignal(str, str)
@@ -128,10 +126,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.toolbar.addWidget(self._build_landing_button())
         self.addToolBar(self.toolbar)
 
-        # 手动遥控: toggle 开关 + 双摇杆 (左=升降/偏航, 右=机体系平移)。
-        # 开启: 拉起 teleop_node (按所选通信链路传 link 参数) 并发 teleop_start
-        # 接管 offboard; 摇杆控速度、松开回中悬停; 关闭: 交还控制权。
-        # 与视觉反控 (ArUco降落) 互斥 (都走 offboard, 会争抢 setpoint)
+        # 手动遥控: 开启时拉起 teleop_node 接管 offboard, 关闭交还控制权;
+        # 与视觉反控互斥 (都走 offboard, 会争抢 setpoint)
         # 右栏布局 (自上而下): 航线地图 + 罗盘并排一行 → 云台 (视场角
         # 竖排在云台方向键右侧) → 手动遥控
         self.compass = Compass()
@@ -154,8 +150,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
 
     @staticmethod
     def _set_btn_on(btn, on):
-        """工具按钮状态灯: on 动态属性切换点亮/熄灭 (样式见 _TOOL_BTN_STYLE)。
-        状态不变不重刷 (轮询里每拍调用不产生样式抖动)。"""
+        """工具按钮状态灯: on 动态属性切换点亮/熄灭, 状态不变不重刷。"""
         if bool(btn.property('on') or False) == bool(on):
             return
         btn.setProperty('on', bool(on))
@@ -165,9 +160,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
     # ---------- 主轮询 (33ms, GUI 线程) ----------
 
     def _poll_annotations(self):
-        """轮询入口兜底: 本方法跑在 Qt 定时器槽里, PyQt5 对槽内未捕获的
-        Python 异常会直接 qFatal abort 整个进程 (界面"自己退出"的元凶,
-        进程树无人回收)。任何刷新环节抛异常只记日志跳过本拍, 不带崩界面。"""
+        """轮询兜底: Qt 定时器槽内未捕获异常会 qFatal 杀掉整个进程,
+        任何刷新环节抛异常只记日志跳过本拍。"""
         try:
             self._poll_once()
         except Exception:
@@ -183,21 +177,18 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                        + traceback.format_exc())
 
     def _poll_once(self):
-        # 驱动 ROS 收包 (节点没有独立 spin 线程, 由本定时器在 GUI 线程代转,
-        # 回调天然在主线程执行, 无并发问题); 不 spin 则订阅永远收不到消息
+        # 驱动 ROS 收包 (节点无独立 spin 线程, 回调因此天然在主线程执行)
         try:
             rclpy.spin_once(self.node, timeout_sec=0)
         except Exception:
             pass
-        # 遥测六值条 + 罗盘 + 航线地图刷新 (数据随 0.5s 飞控心跳采样)
+        # 遥测条 + 罗盘 + 航线地图刷新 (数据随 0.5s 飞控心跳采样)
         tele = self.veh_ctrl.get_telemetry()
         self.tele_bar.update_values(tele)
         self.compass.set_heading(tele.get('hdg') or 0.0)
         track, home = self.veh_ctrl.get_track()
         self.map_view.update_state(track, home, tele.get('hdg') or 0.0)
-        # 标注上屏门控: 仅在"算法运行中或降落进行中"时显示。防止外部遗留的
-        # 算法节点进程 (仍处于 start 状态) 在用户未运行任何算法时擅自叠加;
-        # 此种场景直接清掉已有分组, 不让来路不明的过期标注上屏
+        # 标注门控: 仅算法运行中或降落进行中时显示, 其余情况清掉过期标注
         if self.running_algo is None and not self.landing_btn.isChecked():
             if self.node.get_annotations():
                 self.node.clear_annotations()
@@ -213,11 +204,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._check_flight_alive()   # 链路进程异常退出则复位按钮
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
-        # 飞行控制按钮: 需 PX4 SITL 已启动 + 飞控 RPC 已连通才可点
-        # (PX4 没起时 AirSim 对该机型报默认状态且命令必失败, 直接置灰);
-        # 手动遥控/视觉反控接管中同样置灰 (offboard 期间飞控命令会打断
-        # 接管, 想干预先关对应功能交还控制权); 控制权在本按钮时点亮 ——
-        # 飞机在空中且未被遥控/视觉反控接管, 落地或接管结束后恢复常态
+        # 飞行控制按钮: 需 PX4 已启动 + RPC 已连通, 且未被遥控/视觉反控
+        # 接管 (offboard 期间飞控命令会打断接管); 飞行中未被接管时点亮
         veh_ok = (self.px4.is_running() and self.veh_ctrl.is_connected()
                   and not self.teleop_btn.isChecked()
                   and not self.landing_btn.isChecked())
@@ -242,9 +230,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                 self.camera_tab.grabber.get_cam_orientation())
 
     def _publish_display_frame(self):
-        """取当前显示的帧交给转发线程 (深度伪彩帧跳过, 无检测意义)。
-        这里只做 O(1) 引用传递: 大图的 tobytes/序列化/publish/等 ACK
-        全部在 DisplayForwarder 线程完成, 不再占用 GUI 线程。"""
+        """取当前显示帧交给转发线程 (深度伪彩帧跳过)。
+        仅 O(1) 引用传递, 序列化/publish 在 DisplayForwarder 线程完成。"""
         frame, src, fps = self.camera_tab.grabber.get()
         if frame is None:
             return
@@ -263,8 +250,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         cnt = self.node.take_fwd_count()
         if self.running_algo is None:
             return
-        # 启动后 3s 内是算法节点的 DDS 发现窗口, 订阅者尚未匹配,
-        # 转发计数为 0 是正常现象, 不告警
+        # 启动后 3s 是 DDS 发现窗口, 计数 0 属正常不告警
         if cnt == 0 and now - self._algo_started_at > 3.0:
             self.log.warning(
                 f'画面转发: 近 2 秒 0 帧 (源 {self._last_src or "?"} 无图像?)')

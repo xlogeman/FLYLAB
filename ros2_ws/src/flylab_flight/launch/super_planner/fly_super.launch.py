@@ -6,26 +6,23 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-# SUPER 避障飞行一键启动 (支持 tracker 参数选择控制链路):
+# SUPER 避障飞行一键启动:
 #   ros2 launch flylab_flight fly_super.launch.py                     # 默认 MAVROS 链路
 #   ros2 launch flylab_flight fly_super.launch.py tracker:=uxrce      # uXRCE-DDS 链路
-# 等价于同时启动以下组件:
-#   1. airsim_lidar + airsim_odom + bridge_super
-#                        AirSim 直连传感器节点 (原始点云/真值里程计) + SUPER 输入适配桥接
-#   2. fsm_node                  SUPER 规划器 (hku-mars), 目标点来自 tracker 转发的 /goal_pose_3d
-#   3. super_cmd_bridge          SUPER 输出桥接: mars PositionCommand -> 标准 PositionCommand
-#   4. tracker:=mavros 时自动启动 MAVROS 桥 (UDP 14542, PX4 中 MAVROS 专属实例);
-#      tracker:=uxrce 时可用 xrce:=true 启动 MicroXRCEAgent
-#   5. tracker_mavros / tracker_uxrce  轨迹跟踪节点 (按 tracker 参数二选一, RViz 点击目标点接管, 到达后交还 QGC)
-#   6. rviz2                     SUPER 链路 RViz 可视化
-# 前提: PX4 SITL + UE/AirSim 已启动; UE 端 settings.json 需含 Lidar1 雷达
+# 组件: 1. airsim_lidar + airsim_odom + bridge_super (点云配准/去畸变)
+#       2. fsm_node (SUPER 规划器, 目标点来自 /goal_pose_3d)
+#       3. super_cmd_bridge (mars -> 标准 PositionCommand)
+#       4. MAVROS 桥 (14542) / MicroXRCEAgent (tracker:=uxrce + xrce:=true)
+#       5. tracker_mavros / tracker_uxrce (RViz 点目标接管, 到达后交还 QGC)
+#       6. RViz
+# 前提: PX4 SITL + UE/AirSim 已启动; settings.json 需含 Lidar1
 #       (默认 GPU 雷达 SensorType 8, 与 fast_lio 链路共用 configs/fast_lio/settings.json)
-# 可选:
-#   tracker:=uxrce|mavros        轨迹跟踪链路选择 (默认 mavros, 即 MAVROS 桥)
-#   xrce:=true                   同时启动 MicroXRCEAgent udp4 -p 8888 (tracker:=uxrce 时需要)
-#   mavros:=false                不启动 MAVROS (tracker:=mavros 且已手动启动过时使用)
-#   fcu_url:=udp://:14542@       MAVROS 连接串, 默认指向 PX4 的 MAVROS 专属实例 (14582→14542)
-#   rviz:=false                  不启动 RViz
+# 可选参数:
+#   tracker:=uxrce|mavros   跟踪链路选择 (默认 mavros)
+#   xrce:=true              启动 MicroXRCEAgent udp4 -p 8888
+#   mavros:=false           不随 launch 启动 MAVROS (已手动启动时用)
+#   fcu_url:=udp://:14542@  MAVROS 连接串 (默认 MAVROS 专属实例)
+#   rviz:=false             不启动 RViz
 
 
 def generate_launch_description():

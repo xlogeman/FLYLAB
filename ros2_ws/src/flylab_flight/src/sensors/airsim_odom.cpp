@@ -1,19 +1,14 @@
 // airsim_odom —— 通用真值里程计采集节点 (算法无关, 可插拔)
 //
-// 功能: 通过 RPC 直连 Cosys-AirSim 采集真值运动学 (simGetGroundTruthKinematics),
-//       发布 NED->ENU 换算后的标准里程计, 并可选广播 world -> base_link TF。
-// 发布: /airsim/odom  (nav_msgs/Odometry, world 系 ENU)
-//       TF: world -> base_link (enable_tf, 时间戳用本机时钟, 供 RViz 使用)
-// 时间戳: 关键设计 —— header.stamp 落在与 airsim_lidar/airsim_imu 相同的
-//         映射时间轴上 (ros = offset + 仿真时间), bridge_super 据此对点云
-//         帧做位姿插值 (点云是 UE 端缓存快照, 必须用生成时刻的位姿)。
-//         仿真时间基准: getMultirotorState 返回的服务器时钟 (与
-//         LidarData.time_stamp 同一时钟), 每 10 次采样同步一次; 各样本的
-//         仿真时间戳按本地时钟流逝以估计速率外推, 不依赖 WSL/Windows 时钟对齐。
-// 参数:
-//   odom_period_ms  采集周期 (默认 10ms = 100Hz)
-//   enable_tf       是否广播 world -> base_link TF (默认 true)
-//   vehicle_name    默认 PX4
+// RPC 直连 Cosys-AirSim 采集真值运动学, 发布 NED->ENU 换算后的里程计。
+// 发布: /airsim/odom  (world 系 ENU)
+//       TF: world -> base_link (enable_tf, 本机时钟, 供 RViz)
+// 时间戳 (关键): header.stamp 与 airsim_lidar/airsim_imu 同一映射时间轴,
+//         bridge_super 据此对点云帧插值位姿 (点云是 UE 端缓存快照, 必须用
+//         生成时刻位姿)。仿真时间基准 = getMultirotorState 服务器时钟
+//         (与 LidarData.time_stamp 同源), 每 10 次采样同步一次, 各样本按
+//         估计速率外推, 不依赖 WSL/Windows 时钟对齐。
+// 参数: odom_period_ms (默认 10ms=100Hz), enable_tf, vehicle_name
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2/LinearMath/Quaternion.h>
@@ -69,8 +64,8 @@ private:
                 const uint64_t t_ref = client_->getMultirotorState().timestamp;
                 const uint64_t l_ref = std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                // 估计仿真时钟相对本地时钟的速率: UE 卡顿时仿真时间流逝变慢,
-                // 按实际速率外推可避免外推值超前于真实仿真时间
+                // 估计仿真时钟相对本地时钟的速率: UE 卡顿时仿真时间变慢,
+                // 按实际速率外推可避免外推值超前真实仿真时间
                 if (sim_ref_sim_t_ > 0 && t_ref > sim_ref_sim_t_ && l_ref > sim_ref_local_ns_) {
                     const double rate = static_cast<double>(t_ref - sim_ref_sim_t_) /
                                         static_cast<double>(l_ref - sim_ref_local_ns_);
