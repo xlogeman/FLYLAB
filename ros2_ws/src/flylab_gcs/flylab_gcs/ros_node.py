@@ -295,8 +295,8 @@ class GroundStationNode(Node):
 
     def publish_camera_fov(self, deg):
         """发布当前相机视场角 (度) 供算法节点同步估算内参。
-        deg 为 None (用户从未调整过 / 非 AirSim 源) 时不发布 —— 节点继续
-        用各自配置的 fov_deg, 避免拿界面默认值冒充真实 FOV。"""
+        deg 为 None (尚未连上 AirSim / 非 AirSim 源) 时不发布 —— 连上后
+        抓取线程已采纳相机真实 FOV, 节点启动即能同步。"""
         if deg is None:
             return
         msg = Float64()

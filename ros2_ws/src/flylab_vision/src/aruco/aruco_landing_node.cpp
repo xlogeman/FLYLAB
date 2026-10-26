@@ -325,9 +325,9 @@ private:
     }
     fov_deg_ = msg.data;
     detector_->set_fov(msg.data);
-    RCLCPP_INFO(
-      get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
-      msg.data);
+    // RCLCPP_INFO(
+    //   get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
+    //   msg.data);
   }
 
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------

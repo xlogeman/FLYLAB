@@ -230,8 +230,9 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._cam_ori_last = now_mono
             self.node.publish_cam_orientation(
                 self.camera_tab.grabber.get_cam_orientation())
-        # 视场角同步: 用户调整过 FOV 时, 变化即发布 (滑杆拖动靠轮询节流),
-        # ArUco 等按 FOV 估算内参的算法节点订阅后实时更新; 未调整过不发布
+        # 视场角同步: 用户调整过 FOV 时变化即发布 (滑杆拖动靠轮询节流);
+        # 未调整过时抓取线程连上 AirSim 后已采纳相机真实 FOV (见
+        # Grabber._adopt_camera_fov), 这里照常发布, ArUco 等算法节点启动即同步
         fov = self.camera_tab.grabber.get_fov_applied()
         if fov is not None and fov != self._fov_pub_last:
             self._fov_pub_last = fov

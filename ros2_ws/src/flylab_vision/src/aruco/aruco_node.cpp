@@ -9,7 +9,7 @@
 ///
 /// 运行:
 ///   ros2 run flylab_vision aruco_node
-///   ros2 run flylab_vision aruco_node --ros-args --params-file \
+///   ros2 run flylab_vision aruco_node --ros-args --params-file 
 ///       <install>/flylab_vision/share/flylab_vision/configs/aruco.yaml
 ///   也可 -p 覆盖单项: -p image_topic:=/airsim/cam/left_cam/image_raw -p dict_name:=DICT_6X6_250
 
@@ -125,9 +125,9 @@ private:
     }
     fov_deg_ = msg.data;
     detector_->set_fov(msg.data);
-    RCLCPP_INFO(
-      get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
-      msg.data);
+    // RCLCPP_INFO(
+    //   get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
+    //   msg.data);
   }
 
   std::unique_ptr<ArucoDetector> detector_;
