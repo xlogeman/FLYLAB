@@ -64,6 +64,10 @@ class CameraViewWidget(QWidget):
         self.cams_found.connect(self._rebuild_src_menu)
 
         self.video = VideoLabel()
+        # 数字变焦: 滚轮放大缩小 / 双击复位 (变焦在抓取层裁切, 见 grabber)
+        self.video.zoom_step.connect(self._on_zoom_step)
+        self.video.zoom_reset.connect(
+            lambda: self.grabber.set_zoom(1.0))
         self.status = QLabel('未连接')
         self.status.setStyleSheet('color: #666; padding: 2px;')
         self.status.setWordWrap(True)
@@ -250,7 +254,31 @@ class CameraViewWidget(QWidget):
         fov_col.addWidget(self.fov_slider, stretch=1, alignment=Qt.AlignHCenter)
         fov_col.addWidget(self.fov_value)
         g.addLayout(fov_col, 1, 2, 2, 1)   # 右侧整列 (与摇杆/角度读数同高)
-        self._fov_sync_label(self.fov_slider.value())
+
+        # 数字变焦滑杆 (视场滑杆右侧, 同款竖排): 显示层中心裁切, 与 FOV
+        # (真实视场) 相互独立; 滚轮/双击画面仍可用, 滑杆实时跟随。滑杆
+        # 整数值 = 倍数×100 (分辨率 0.01, 滚轮步进 0.25 可整除不漂移)
+        zoom_col = QVBoxLayout()
+        zoom_col.setSpacing(2)
+        zoom_title = QLabel('变焦')
+        zoom_title.setAlignment(Qt.AlignHCenter)
+        self.zoom_slider = QSlider(Qt.Vertical)
+        self.zoom_slider.setRange(int(config.DISPLAY_ZOOM_MIN * 100),
+                                  int(config.DISPLAY_ZOOM_MAX * 100))
+        self.zoom_slider.setValue(int(config.DISPLAY_ZOOM_MIN * 100))
+        self.zoom_slider.setMinimumHeight(96)
+        self.zoom_slider.setToolTip(
+            f'数字变焦 (×{config.DISPLAY_ZOOM_MIN:g}~×{config.DISPLAY_ZOOM_MAX:g}): '
+            '画面中心裁切放大, 不改 UE 相机真实视场; 滚轮/双击画面亦可')
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
+        self.zoom_value = QLabel()
+        self.zoom_value.setStyleSheet('color: #444; font-family: monospace;')
+        self.zoom_value.setAlignment(Qt.AlignHCenter)
+        zoom_col.addWidget(zoom_title)
+        zoom_col.addWidget(self.zoom_slider, stretch=1, alignment=Qt.AlignHCenter)
+        zoom_col.addWidget(self.zoom_value)
+        g.addLayout(zoom_col, 1, 3, 2, 1)   # 视场滑杆右侧同高
+        self._zoom_sync_label(self.zoom_slider.value() / 100.0)
 
     def _on_gimbal_joy(self, x, y):
         """云台摇杆偏转 → 角速度 (x=偏航右+, y=俯仰上+), 回中即停。"""
@@ -265,6 +293,22 @@ class CameraViewWidget(QWidget):
 
     def _fov_sync_label(self, value):
         self.fov_value.setText(f'{value}°')
+
+    def _on_zoom_step(self, step):
+        """滚轮变焦: 每档 ±DISPLAY_ZOOM_STEP, 夹在 1.0~DISPLAY_ZOOM_MAX。
+        滑杆由 _refresh 同步回写 (blockSignals 不回环)。"""
+        z = self.grabber.get_zoom() + step * config.DISPLAY_ZOOM_STEP
+        self.grabber.set_zoom(z)
+
+    def _on_zoom_slider(self, value):
+        """变焦滑杆变化 → 下发 (滑杆整数 = 倍数×100)。界面同步回写时已
+        blockSignals, 不会误触发本槽。"""
+        z = value / 100.0
+        self._zoom_sync_label(z)
+        self.grabber.set_zoom(z)
+
+    def _zoom_sync_label(self, z):
+        self.zoom_value.setText(f'×{z:g}')
 
     def set_gimbal_locked(self, locked):
         """锁定/解锁云台面板 (视觉反控进行中锁定, 防止反控时转动视角)。
@@ -413,6 +457,14 @@ class CameraViewWidget(QWidget):
             arr = colorize_depth(arr)
         self.video.show_frame(arr)
         self.video.set_hud(f'图传 {fps:.1f}')   # 帧率显示在画面左上角
+        # 变焦滑杆跟随当前倍率 (滚轮/双击改的也同步); 拖动中不回写,
+        # 程序回写 blockSignals 防误触发 set_zoom
+        zoom = self.grabber.get_zoom()
+        if not self.zoom_slider.isSliderDown():
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(int(round(zoom * 100)))
+            self.zoom_slider.blockSignals(False)
+            self._zoom_sync_label(zoom)
         self.status.setText('')                # 源/分辨率不再展示
 
     def _refresh_playback(self):

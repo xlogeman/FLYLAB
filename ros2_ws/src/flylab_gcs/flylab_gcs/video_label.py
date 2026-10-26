@@ -24,6 +24,8 @@ class VideoLabel(QLabel):
 
     bbox_selected = pyqtSignal(int, int, int, int)   # 原图坐标 x, y, w, h
     selection_cancelled = pyqtSignal()
+    zoom_step = pyqtSignal(int)    # 数字变焦: +1 放大 / -1 缩小 (滚轮)
+    zoom_reset = pyqtSignal()      # 数字变焦复位 (双击画面)
 
     def __init__(self, text='等待图像...'):
         super().__init__(text)
@@ -112,6 +114,24 @@ class VideoLabel(QLabel):
         return QPoint(int((pos.x() - dx) / scale), int((pos.y() - dy) / scale))
 
     # ---------- 事件 ----------
+
+    def wheelEvent(self, ev):
+        """滚轮数字变焦: 上滚放大 / 下滚缩小 (有画面时才生效)。"""
+        if self._pixmap is not None:
+            d = ev.angleDelta().y()
+            if d:
+                self.zoom_step.emit(1 if d > 0 else -1)
+            ev.accept()
+            return
+        super().wheelEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        """双击画面: 变焦复位到 1.0 (有画面时)。"""
+        if self._pixmap is not None and ev.button() == Qt.LeftButton:
+            self.zoom_reset.emit()
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
 
     def mousePressEvent(self, ev):
         if (self._select_enabled and self._pixmap is not None

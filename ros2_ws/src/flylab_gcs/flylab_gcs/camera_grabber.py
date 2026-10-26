@@ -249,6 +249,11 @@ class Grabber(threading.Thread):
         # 保持 settings.json 原值, _apply_fov 不下发)
         self._fov_saved = self._fov   # 上次落盘值 (变化才写盘)
         self._fov_dirty = False       # 视场角待下发标记
+        # 数字变焦 (显示层中心裁切, 不改 UE 相机): 1.0=原图。裁切在抓取层
+        # 完成, 图传/转发/算法标注同一像素系; _raw 留未变焦原帧, 档位变化
+        # 时重提交 (暂停中的文件源也能立即看到变焦)
+        self._zoom = 1.0
+        self._raw = None
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
         # 摇杆连续转动: 当前角速度 (°/s) 与上次帧时刻 (None=未在转动)
@@ -463,6 +468,42 @@ class Grabber(threading.Thread):
                 return None
             return self._fov if self._fov is not None \
                 else config.GIMBAL_FOV_DEFAULT_DEG
+
+    # ---------- 数字变焦 (界面滚轮/双击, 裁切由抓取线程在 _commit 做) ----------
+
+    def set_zoom(self, factor):
+        """设置数字变焦倍数 (1.0=原图, 上限 config.DISPLAY_ZOOM_MAX):
+        立即用缓存的未变焦原帧重提交一帧, 暂停中的文件源也能即时看到;
+        之后每帧按该倍数中心裁切。"""
+        with self.lock:
+            factor = max(1.0, min(config.DISPLAY_ZOOM_MAX, float(factor)))
+            if self._zoom == factor:
+                return
+            self._zoom = factor
+            raw, gen = self._raw, self._gen
+        if raw is None:
+            return
+        arr, is_depth = raw
+        if factor > 1.0:
+            arr = self._zoom_center(arr, factor)
+        with self.lock:
+            if gen == self._gen:
+                self.frame = (arr, is_depth)
+
+    def get_zoom(self):
+        with self.lock:
+            return self._zoom
+
+    @staticmethod
+    def _zoom_center(arr, z):
+        """中心裁切 1/z 区域并放回原分辨率 (图传/转发/标注坐标不变)。"""
+        h, w = arr.shape[:2]
+        cw, ch = max(1, int(w / z)), max(1, int(h / z))
+        x0, y0 = (w - cw) // 2, (h - ch) // 2
+        crop = np.ascontiguousarray(arr[y0:y0 + ch, x0:x0 + cw])
+        if cv2 is None:          # 无 OpenCV 只裁不缩, 显示端等比放大兜底
+            return crop
+        return cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
 
     def get_cam_orientation(self):
         """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源或尚无
@@ -692,6 +733,13 @@ class Grabber(threading.Thread):
         """写入最新帧并统计 fps。gen 与当前切源代数不符 (读取阻塞期间
         发生了切源) 时丢弃 —— 否则旧源最后一帧会在切源后回填, 界面清屏
         被覆盖, 表现为"卡在旧画面, 要再切一次才出现等待提示"。"""
+        with self.lock:
+            if gen != self._gen:
+                return
+            zoom = self._zoom
+            self._raw = (arr, is_depth)   # 未变焦原帧 (变焦档变化时重提交)
+        if zoom > 1.0:
+            arr = self._zoom_center(arr, zoom)   # 裁切放锁外, 不阻塞 get()
         with self.lock:
             if gen != self._gen:
                 return
