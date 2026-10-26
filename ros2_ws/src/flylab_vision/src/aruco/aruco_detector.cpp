@@ -209,15 +209,27 @@ std::vector<Detection> ArucoDetector::detect(const cv::Mat & bgr)
 }
 
 std::string to_annotations_json(
-  const std::vector<Detection> & results, const std::string & algo)
+  const std::vector<Detection> & results, const std::string & algo,
+  const Detection * emphasized, const char * emphasis_label,
+  const cv::Scalar & emphasis_color)
 {
+  // 强调色 JSON (RGB 顺序, 地面站 QColor 直接用)
+  const std::string emph_rgb =
+    "[" + std::to_string(static_cast<int>(emphasis_color[0])) + "," +
+    std::to_string(static_cast<int>(emphasis_color[1])) + "," +
+    std::to_string(static_cast<int>(emphasis_color[2])) + "]";
   std::ostringstream os;
   os << "{\"algo\":\"" << algo << "\",\"items\":[";
   for (size_t i = 0; i < results.size(); ++i) {
     const auto & d = results[i];
+    const bool emph = (&d == emphasized);
     std::string label = "id=" + std::to_string(d.id);
     if (d.has_pose) {
       label += " z=" + num(d.tvec[2], 2) + "m";
+    }
+    if (emph && emphasis_label[0] != '\0') {
+      label += " ";
+      label += emphasis_label;
     }
     float bx0 = std::numeric_limits<float>::max(), by0 = bx0;
     float bx1 = -bx0, by1 = -bx0;
@@ -233,7 +245,23 @@ std::string to_annotations_json(
     if (i > 0) {
       os << ",";
     }
-    // 四边形轮廓 (绿, 闭合): 沿角点连线, 画的是码的真实形状而非外接框
+    if (emph) {
+      // 强调码: 只画强调可视化 —— 纯色半透明填充四边形 + 标签,
+      // 不再叠普通样式 (绿描边/角点/中心点/位姿轴), MAX 与 TRACK
+      // 各用一色 (调用方传入), 互不混淆
+      os << "{\"type\":\"polyline\",\"points\":[";
+      for (size_t k = 0; k < d.corners.size(); ++k) {
+        os << (k ? "," : "") << "[" << num(d.corners[k].x) << ","
+           << num(d.corners[k].y) << "]";
+      }
+      os << "],\"close\":true,\"fill\":true,\"fill_alpha\":0.3,\"color\":"
+         << emph_rgb << "}";
+      os << ",{\"type\":\"text\",\"pos\":[" << num(bx0) << ","
+         << num(by0 - 4.0f) << "],\"text\":\"" << label << "\","
+         << "\"px\":" << num(text_px) << ",\"color\":" << emph_rgb << "}";
+      continue;
+    }
+    // 普通码: 四边形轮廓 (绿, 闭合) 沿角点连线, 画的是码的真实形状而非外接框
     os << "{\"type\":\"polyline\",\"points\":[";
     for (size_t k = 0; k < d.corners.size(); ++k) {
       os << (k ? "," : "") << "[" << num(d.corners[k].x) << ","

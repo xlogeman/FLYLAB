@@ -10,9 +10,10 @@ import time
 import rclpy
 from geometry_msgs.msg import Quaternion, Twist
 from rclpy.node import Node
-from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy)
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy)
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Float64, String
 
 from . import config
 from .overlay import parse_message
@@ -177,6 +178,15 @@ class GroundStationNode(Node):
         self.gimbal_pub = self.create_publisher(
             Quaternion, config.GIMBAL_STATE_TOPIC, 30)
 
+        # 视场角同步 (latched): 算法节点 (如 ArUco) 按当前 FOV 估算内参,
+        # 后启动的节点一接入即收到最近一次发布的值
+        self.fov_pub = self.create_publisher(
+            Float64, config.CAMERA_FOV_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -282,6 +292,16 @@ class GroundStationNode(Node):
         msg = Quaternion()
         msg.x, msg.y, msg.z, msg.w = q
         self.gimbal_pub.publish(msg)
+
+    def publish_camera_fov(self, deg):
+        """发布当前相机视场角 (度) 供算法节点同步估算内参。
+        deg 为 None (用户从未调整过 / 非 AirSim 源) 时不发布 —— 节点继续
+        用各自配置的 fov_deg, 避免拿界面默认值冒充真实 FOV。"""
+        if deg is None:
+            return
+        msg = Float64()
+        msg.data = float(deg)
+        self.fov_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

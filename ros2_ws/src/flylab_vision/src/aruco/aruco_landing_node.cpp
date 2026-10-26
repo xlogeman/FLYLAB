@@ -31,6 +31,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include <opencv2/imgproc.hpp>
@@ -185,6 +187,25 @@ public:
         gimbal_ever_ = true;  // 标记数据源存在过 (中断时悬停告警区分诊断用)
       });
 
+    // ---------- 地面站视场角同步 ----------
+    // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
+    // latched 话题, 节点后启动也能收到最近一次发布的值。话题名可用参数覆盖。
+    const auto fov_topic =
+      declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
+    fov_deg_ = fov_deg;
+    fov_sub_ = create_subscription<std_msgs::msg::Float64>(
+      fov_topic, 10,
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
+
+    // ---------- 跟踪码 ID 广播 ----------
+    // 每帧发布当前锁定/回退跟踪的码 ID (无则 -1): 检测节点 (aruco_node)
+    // 据此让位 —— 跟踪码恰为画面最大码时不再叠画洋红 MAX, 由本节点橙色
+    // TRACK 独占该码的可视化; 广播停发后检测节点超时自行恢复 MAX
+    const auto tracked_id_topic = declare_parameter<std::string>(
+      "tracked_id_topic", "/flylab/landing_tracked_id");
+    tracked_id_pub_ = create_publisher<std_msgs::msg::Int32>(
+      tracked_id_topic, 10);
+
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
     control_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / control_hz_), [this]() {tick();});
@@ -295,6 +316,20 @@ private:
     RCLCPP_INFO(get_logger(), "[状态] %s", status);
   }
 
+  // ---------------- 地面站视场角同步 ----------------
+  void on_fov(const std_msgs::msg::Float64 & msg)
+  {
+    // 已标定 (真实内参) 或非法值不跟随; 值未变化跳过 (滑杆拖动/重发布降噪)
+    if (detector_->calibrated() || msg.data <= 0.0 || msg.data == fov_deg_) {
+      return;
+    }
+    fov_deg_ = msg.data;
+    detector_->set_fov(msg.data);
+    RCLCPP_INFO(
+      get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
+      msg.data);
+  }
+
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------
   void on_image(const sensor_msgs::msg::Image & msg)
   {
@@ -309,12 +344,42 @@ private:
     img_w_ = bgr.cols;
     img_h_ = bgr.rows;
     detections_ = detector_->detect(bgr);
-    // 检测结果叠加到地面站画面 (与 aruco_node 同一标注接口, 独立分组)
+    // 跟踪码选取与检测节点同规则 (锁定 ID 内取面积最大者); 每帧广播 ID
+    // (无跟踪目标发 -1), 供检测节点判断是否让位
+    const Detection * tracked =
+      tracked_id_ >= 0 ? largestOfId(tracked_id_) : nullptr;
+    std_msgs::msg::Int32 tid;
+    tid.data = tracked ? tracked_id_ : -1;
+    tracked_id_pub_->publish(tid);
+    // 检测结果叠加到地面站画面 (与 aruco_node 同一标注接口, 独立分组);
+    // 正在跟踪的码用强调样式 (橙色 + TRACK 后缀, 与检测节点最大码的洋红
+    // 区分), 一眼看出飞机在定位哪个码
     if (!detections_.empty()) {
       std_msgs::msg::String out;
-      out.data = to_annotations_json(detections_, kAnnoAlgo);
+      out.data = tracked ?
+        to_annotations_json(
+          detections_, kAnnoAlgo, tracked, "TRACK", cv::Scalar(255, 165, 0)) :
+        to_annotations_json(detections_, kAnnoAlgo);
       anno_pub_->publish(out);
     }
+  }
+
+  /// 指定 ID 的检出码中取画面面积最大者; 无该 ID 返回 nullptr
+  const Detection * largestOfId(int id) const
+  {
+    const Detection * best = nullptr;
+    double best_area = -1.0;
+    for (const auto & d : detections_) {
+      if (d.id != id) {
+        continue;
+      }
+      const double a = d.bbox_wh.x * d.bbox_wh.y;
+      if (a > best_area) {
+        best_area = a;
+        best = &d;
+      }
+    }
+    return best;
   }
 
   /// 目标选择 (指定 ID 优先 + 最大码回退, 适配多尺度嵌套码):
@@ -329,25 +394,9 @@ private:
       noteTargetMissed(dt);
       return nullptr;
     }
-    // 同 ID 多码取面积最大者: 检出顺序帧间不稳定, 取第一个会逐帧跳变
-    auto largestOf = [&](int id) -> const Detection * {
-      const Detection * best = nullptr;
-      double best_area = -1.0;
-      for (const auto & d : detections_) {
-        if (d.id != id) {
-          continue;
-        }
-        const double a = d.bbox_wh.x * d.bbox_wh.y;
-        if (a > best_area) {
-          best_area = a;
-          best = &d;
-        }
-      }
-      return best;
-    };
     // 指定 ID 优先: 出现即切换对齐目标
     if (target_id_ >= 0) {
-      const Detection * m = largestOf(target_id_);
+      const Detection * m = largestOfId(target_id_);
       if (m != nullptr) {
         if (tracked_id_ != target_id_) {
           RCLCPP_INFO(
@@ -366,7 +415,7 @@ private:
     }
     // 锁定目标仍在画面: 直接跟它 (指定模式下 tracked_id_ 已是回退码)
     if (tracked_id_ >= 0 && tracked_id_ != target_id_) {
-      const Detection * m = largestOf(tracked_id_);
+      const Detection * m = largestOfId(tracked_id_);
       if (m != nullptr) {
         lost_id_time_ = 0.0;
         return m;
@@ -753,9 +802,12 @@ private:
   std::unique_ptr<ArucoDetector> detector_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr tracked_id_pub_;  // 跟踪码 ID 广播 (检测节点让位依据)
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr fov_sub_;
+  double fov_deg_ = 60.0;   // 当前生效的 FOV (视场角同步去重用)
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻

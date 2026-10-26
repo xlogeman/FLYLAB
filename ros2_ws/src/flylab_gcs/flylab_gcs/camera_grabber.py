@@ -287,6 +287,15 @@ class Grabber(threading.Thread):
             return self._fov if self._fov is not None \
                 else config.GIMBAL_FOV_DEFAULT_DEG
 
+    def get_fov_applied(self):
+        """实际生效的全局视场角 (度); 用户从未调整过返回 None
+        (视场角同步发布依据: 不拿界面默认值冒充相机真实 FOV)。
+        本机/视频文件源返回 None。"""
+        with self.lock:
+            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                return None
+            return self._fov
+
     # ---------- 数字变焦 (界面滚轮/双击/滑杆, 裁切由抓取线程在 _commit 做) ----------
 
     def set_zoom(self, factor):

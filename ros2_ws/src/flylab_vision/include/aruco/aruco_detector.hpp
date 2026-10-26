@@ -52,6 +52,10 @@ public:
   /// 是否使用了真实标定 (false 时内参为估算值, 位姿仅供参考)
   bool calibrated() const {return !config_.K.empty();}
 
+  /// 运行中更新 FOV (度): 地面站视场角调整后同步过来, 下一帧即用新内参。
+  /// 仅无标定 (K 为空, 按 FOV 估算) 时有意义, 已标定调用无效果
+  void set_fov(double fov_deg) {config_.fov_deg = fov_deg;}
+
 
 private:
   cv::Mat K_for(const cv::Mat & bgr) const;  // 有标定用标定, 否则按分辨率+FOV 估算
@@ -73,8 +77,15 @@ cv::Ptr<cv::aruco::Dictionary> make_dictionary(const std::string & name);
 ///   四边形轮廓 polyline (绿) + 首角点/中心 point (红) + id 距离 text (黄)
 ///   + 位姿轴 3 条 polyline (x红/y绿/z蓝, has_pose 时)
 /// 坐标为原图像素, 图像源须与地面站显示的相机/分辨率一致。
+/// emphasized (可选): 指定一个 marker 用强调样式可视化 —— 只画纯色半透明
+/// 填充四边形 + 标签 (emphasis_color 染色, 标签追加 emphasis_label 后缀如
+/// "MAX"/"TRACK"), 不再叠普通样式; nullptr = 全部普通样式。emphasis_color
+/// 为 RGB 顺序, 强调码与普通码各用一色, 多个强调来源 (如最大码/跟踪码) 传
+/// 不同颜色即可一眼区分
 std::string to_annotations_json(
-  const std::vector<Detection> & results, const std::string & algo = "aruco");
+  const std::vector<Detection> & results, const std::string & algo = "aruco",
+  const Detection * emphasized = nullptr, const char * emphasis_label = "",
+  const cv::Scalar & emphasis_color = cv::Scalar(255, 0, 255));
 
 }  // namespace flylab_vision
 

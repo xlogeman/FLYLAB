@@ -16,6 +16,9 @@
 #include <memory>
 #include <string>
 
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
+
 #include "common/display_vision_node.hpp"
 #include "aruco/aruco_detector.hpp"
 
@@ -50,6 +53,29 @@ public:
         "未提供标定 (calib 参数), 内参按 FOV 估算, 位姿解算仅供参考");
     }
 
+    // ---------- 地面站视场角同步 ----------
+    // 地面站调整视场滑杆即发布当前 FOV (latched, 后启动也能收到最近值);
+    // 未标定时按 FOV 估算内参, 实时跟随。话题名可用参数覆盖。
+    const auto fov_topic =
+      declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
+    fov_deg_ = fov_deg;
+    fov_sub_ = create_subscription<std_msgs::msg::Float64>(
+      fov_topic, 10,
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
+
+    // ---------- 降落节点跟踪码同步 (MAX 让位) ----------
+    // 降落中每帧广播正在跟踪的码 ID: 若恰为画面最大码, 本节点不画洋红
+    // MAX, 该码由降落节点橙色 TRACK 独占, 避免两组标注叠在同一码上;
+    // 广播停发 (降落结束/节点退出) 超时后自动恢复 MAX
+    const auto tracked_id_topic = declare_parameter<std::string>(
+      "tracked_id_topic", "/flylab/landing_tracked_id");
+    tracked_id_sub_ = create_subscription<std_msgs::msg::Int32>(
+      tracked_id_topic, 10,
+      [this](const std_msgs::msg::Int32::SharedPtr msg) {
+        tracked_id_rx_ = msg->data;
+        tracked_id_rx_time_ = now();
+      });
+
     // 就绪日志带字典/边长信息, 不用基类 log_ready
     RCLCPP_INFO(
       get_logger(),
@@ -60,7 +86,27 @@ public:
 protected:
   std::string process(const cv::Mat & bgr, int /*frame_width*/) override
   {
-    return to_annotations_json(detector_->detect(bgr));
+    auto results = detector_->detect(bgr);
+    // 画面最大码用强调样式 (洋红 + MAX 后缀), 一眼看出谁最大
+    const Detection * largest = nullptr;
+    double largest_area = -1.0;
+    for (const auto & d : results) {
+      const double a = d.bbox_wh.x * d.bbox_wh.y;
+      if (a > largest_area) {
+        largest_area = a;
+        largest = &d;
+      }
+    }
+    // 让位: 最大码恰为降落节点正在跟踪的码 (广播 1s 内有效) 时,
+    // 不画 MAX —— 该码由降落节点橙色 TRACK 独占, 防止两组标注叠画
+    const bool landing_tracking = tracked_id_rx_ >= 0 &&
+      (now() - tracked_id_rx_time_).seconds() < kTrackedIdTimeoutSec;
+    if (landing_tracking && largest != nullptr &&
+      largest->id == tracked_id_rx_)
+    {
+      largest = nullptr;
+    }
+    return to_annotations_json(results, "aruco", largest, "MAX");
   }
 
   std::string clear_json() const override
@@ -69,7 +115,27 @@ protected:
   }
 
 private:
+  static constexpr double kTrackedIdTimeoutSec = 1.0;  // 跟踪码广播有效期
+
+  void on_fov(const std_msgs::msg::Float64 & msg)
+  {
+    // 已标定 (真实内参) 或非法值不跟随; 值未变化跳过 (滑杆拖动/重发布降噪)
+    if (detector_->calibrated() || msg.data <= 0.0 || msg.data == fov_deg_) {
+      return;
+    }
+    fov_deg_ = msg.data;
+    detector_->set_fov(msg.data);
+    RCLCPP_INFO(
+      get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
+      msg.data);
+  }
+
   std::unique_ptr<ArucoDetector> detector_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr fov_sub_;
+  double fov_deg_ = 60.0;   // 当前生效的 FOV (同步去重用)
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr tracked_id_sub_;
+  int tracked_id_rx_ = -1;  // 降落节点正在跟踪的码 ID (最新广播值)
+  rclcpp::Time tracked_id_rx_time_{0, 0, RCL_ROS_TIME};  // 广播到达时刻 (有效期判定)
 };
 
 }  // namespace flylab_vision

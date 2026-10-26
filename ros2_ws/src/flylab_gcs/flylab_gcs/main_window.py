@@ -111,6 +111,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._poll_err_last = 0.0   # 上次轮询异常上屏时刻 (限频用)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
+        # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)
+        self._fov_pub_last = None
 
         # 顶部工具栏 (VS Code 风格): 工具按钮横排, 后续新功能往右加
         self.toolbar = QToolBar()
@@ -228,6 +230,12 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._cam_ori_last = now_mono
             self.node.publish_cam_orientation(
                 self.camera_tab.grabber.get_cam_orientation())
+        # 视场角同步: 用户调整过 FOV 时, 变化即发布 (滑杆拖动靠轮询节流),
+        # ArUco 等按 FOV 估算内参的算法节点订阅后实时更新; 未调整过不发布
+        fov = self.camera_tab.grabber.get_fov_applied()
+        if fov is not None and fov != self._fov_pub_last:
+            self._fov_pub_last = fov
+            self.node.publish_camera_fov(fov)
 
     def _publish_display_frame(self):
         """取当前显示帧交给转发线程 (深度伪彩帧跳过)。

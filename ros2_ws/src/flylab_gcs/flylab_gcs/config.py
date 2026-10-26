@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.5, 0.55)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.5, 0.65)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -72,6 +72,11 @@ DISPLAY_ZOOM_STEP = 0.1     # 滚轮每档步进 (倍)
 GIMBAL_FOV_MIN_DEG = 30.0
 GIMBAL_FOV_MAX_DEG = 120.0
 GIMBAL_FOV_DEFAULT_DEG = 90.0
+
+# 视场角同步话题 (std_msgs/Float64, latched): 用户拖动视场滑杆即发布,
+# ArUco 等按 FOV 估算内参的算法节点订阅后实时更新; latched 让后启动的
+# 节点一接入即拿到当前值。未调整过 (保持 settings.json 原值) 不发布。
+CAMERA_FOV_TOPIC = '/flylab/camera_fov'
 
 # ---------- ArUco 降落 (主窗口独立按钮) ----------
 # 点击拉起 aruco_landing_node（接管 offboard → 视觉对齐调速下降 → 切 PX4
