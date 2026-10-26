@@ -96,6 +96,9 @@ ament_target_dependencies(teleop_node rclcpp std_msgs px4_msgs geometry_msgs mav
 install(DIRECTORY models
   DESTINATION share/${PROJECT_NAME}
   FILES_MATCHING PATTERN "*.onnx")
+# 参数配置 (configs/aruco.yaml 等) 装到 share/<pkg>/configs/, 地面站经 ament 解析携带
+install(DIRECTORY configs
+  DESTINATION share/${PROJECT_NAME})
 # onnxruntime 动态库 (含版本符号链接) 装到 lib/, 供 rpath 解析
 install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib

@@ -9,8 +9,9 @@
 ///
 /// 运行:
 ///   ros2 run flylab_vision aruco_node
-///   ros2 run flylab_vision aruco_node --ros-args
-///       -p image_topic:=/airsim/cam/left_cam/image_raw -p dict_name:=DICT_6X6_250
+///   ros2 run flylab_vision aruco_node --ros-args --params-file \
+///       <install>/flylab_vision/share/flylab_vision/configs/aruco.yaml
+///   也可 -p 覆盖单项: -p image_topic:=/airsim/cam/left_cam/image_raw -p dict_name:=DICT_6X6_250
 
 #include <memory>
 #include <string>

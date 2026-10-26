@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """flylab_gcs 全局配置 —— 改这里，不改代码。"""
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
+
+# ---------- flylab_vision 参数配置目录 (ArUco 检测/降落等, 改 yaml 即调参) ----------
+VISION_CONFIG_DIR = os.path.join(get_package_share_directory('flylab_vision'), 'configs')
+ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
+
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
 WINDOW_SIZE_RATIO = (0.5, 0.55)   # (宽, 高)
@@ -68,8 +76,10 @@ GIMBAL_FOV_DEFAULT_DEG = 90.0
 # ---------- ArUco 降落 (主窗口独立按钮) ----------
 # 点击拉起 aruco_landing_node（接管 offboard → 视觉对齐调速下降 → 切 PX4
 # AUTO.LAND），再点发 landing_stop 取消。与算法下拉框互不影响。
+# 参数来自 flylab_vision/configs/aruco.yaml（--params-file 携带, -p 可临时覆盖）。
 # 前提: 通信链路在跑 + 已解锁升空 + 运行 enables_landing 的算法
-LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node']
+LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node',
+               '--ros-args', '--params-file', ARUCO_PARAMS_FILE]
 LANDING_START_CMD = 'landing_start'
 LANDING_STOP_CMD = 'landing_stop'
 # 降落节点状态回传话题 (tracking/landing/landed/idle)，地面站据此复位按钮
@@ -130,7 +140,8 @@ VEHICLE_CMDS = [
 # 新算法遵循 start/stop 指令约定后在这里加一项即可。
 ALGORITHMS = [
     {'name': 'ArUco检测',
-     'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node'],
+     'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node',
+             '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
      'start': 'aruco_start', 'stop': 'aruco_stop',
      'enables_landing': True},
     {'name': '目标检测',

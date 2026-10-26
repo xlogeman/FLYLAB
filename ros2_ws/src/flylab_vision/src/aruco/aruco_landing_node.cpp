@@ -6,12 +6,6 @@
 ///            → (对齐 + 面积阈值 + 降落趋势角) 连续 N 帧后进入 LANDING
 ///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
-/// 自阴影规避 (shadow_alt): 影子随高度降低收敛到落点, 低空会盖住码导致
-/// 丢失。低于门限且已对齐 → 立即切 AUTO.LAND (丢失瞬间已对齐同样触发,
-/// 不等面积/趋势角确认); 低空丢失未对齐 → 爬升重捕获 (影子偏移随高度
-/// 增大, 升到码可见高度自动回到原流程), 上限 shadow_max_climb, 超限仍
-/// 无码则切 AUTO_LOITER 交还控制权。
-///
 /// 只用 cx/cy/面积做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
 /// 多尺度嵌套码支持: target_id 指定精准落点码 (小码), 不可见时回退跟踪画面
 /// 最大码 (高空大码), 指定码出现后自动切换对齐目标 (target_fallback:=false 关闭回退)。
@@ -23,7 +17,8 @@
 ///
 /// 使用前提: 已解锁升空, 相机画面垂直向下看到 ArUco 码。
 /// 运行: ros2 run flylab_vision aruco_landing_node
-///       ros2 run flylab_vision aruco_landing_node --ros-args -p vel_gain:=1.0 -p target_id:=92
+///       参数走配置文件 configs/aruco.yaml (--params-file 携带, 地面站默认带上),
+///       也可 -p 覆盖单项: -p vel_gain:=1.0 -p target_id:=92
 
 #include <chrono>
 #include <cmath>
@@ -146,10 +141,6 @@ public:
     angle_window_max_ = declare_parameter<int>("angle_window_max", 50);
     lost_timeout_sec_ = declare_parameter<double>("lost_timeout_sec", 8.0);
     reacquire_sec_ = declare_parameter<double>("reacquire_sec", 0.5);  // 锁定 ID 持续丢失多久后重新选目标
-    // 自阴影规避: 低空影子盖码 → 对齐即切 AUTO.LAND / 丢失则爬升重捕获
-    shadow_alt_ = declare_parameter<double>("shadow_alt", 1.5);                 // 低空门限 (m, AGL), 0=禁用
-    shadow_climb_speed_ = declare_parameter<double>("shadow_climb_speed", 0.5); // 爬升重捕获速度 (m/s)
-    shadow_max_climb_ = declare_parameter<double>("shadow_max_climb", 3.0);     // 爬升上限 (相对丢失时高度, m)
     offboard_warmup_sec_ = declare_parameter<double>("offboard_warmup_sec", 1.0);
     offboard_retry_sec_ = declare_parameter<double>("offboard_retry_sec", 10.0);
     control_hz_ = declare_parameter<double>("control_hz", 20.0);
@@ -256,8 +247,6 @@ private:
     tracked_id_ = -1;      // 重新进入降落流程重新选目标
     lost_id_time_ = 0.0;
     trend_angle_ = 90.0;
-    last_align_err_ = 1e9;
-    shadow_climb_ = false;
     positions_.clear();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_status_anno_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -505,7 +494,6 @@ private:
       return;
     }
     lost_time_ = 0.0;
-    shadow_climb_ = false;   // 目标在画面, 爬升恢复结束
     if (!had_target_) {
       had_target_ = true;
       RCLCPP_INFO(
@@ -564,19 +552,6 @@ private:
     // 下降速度按目标面积分段线性调度: 近慢远快
     const double align_err = std::hypot(cx - land_cx_, cy - land_cy_);
     const bool aligned = align_err < align_tol_;
-    last_align_err_ = align_err;   // 低空丢失判定用 (阴影遮挡瞬间是否已对齐)
-    // 低空已对齐: 再降必然自阴影盖码, 直接切 AUTO.LAND —— 不再等面积/
-    // 趋势角确认, 那些确认在低空阴影下可能永远凑不齐
-    if (shadow_alt_ > 0.0 && pos.z_valid && -pos.z <= shadow_alt_) {
-      RCLCPP_INFO(
-        get_logger(),
-        "\033[32m低空已对齐 (高度 %.2fm <= 门限 %.2fm), 直接切 PX4 AUTO.LAND (规避自阴影)\033[0m",
-        -pos.z, shadow_alt_);
-      state_ = State::LANDING;
-      last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-      publishStatus(kStatusLanding);
-      return;
-    }
     double v_down = 0.0;
     if (aligned) {
       v_down = descendSchedule(area);
@@ -620,64 +595,10 @@ private:
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
   }
 
-  /// 目标丢失处理 (TRACKING), 按高度分场景:
-  ///   低空 + 丢失前已对齐 → 自阴影遮挡, 直接切 AUTO.LAND;
-  ///   低空未对齐/爬升中 → 爬升重捕获 (影子偏移随高度增大), 上限
-  ///     shadow_max_climb, 超限仍无码 → 切 AUTO_LOITER 交还控制权;
-  ///   高空丢失 → 原地悬停, 超时交还控制权。
+  /// 目标丢失处理 (TRACKING): 原地悬停, 超时切 AUTO_LOITER 交还控制权
   void handleTargetLost(double dt)
   {
-    const auto & pos = px4_->localPosition();
-    const bool h_valid = pos.z_valid;
-    const double h = h_valid ? -pos.z : -1.0;
-
-    // 低空 + 丢失前已对齐: 丢失即阴影遮挡, 立即降落
-    if (shadow_alt_ > 0.0 && h_valid && h <= shadow_alt_ &&
-      last_align_err_ < align_tol_)
-    {
-      RCLCPP_INFO(
-        get_logger(),
-        "\033[32m低空目标丢失 (高度 %.2fm, 丢失前对齐误差 %.3f, 疑似自阴影遮挡), "
-        "直接切 PX4 AUTO.LAND\033[0m", h, last_align_err_);
-      state_ = State::LANDING;
-      last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-      publishStatus(kStatusLanding);
-      return;
-    }
-
-    // 低空丢失未对齐 / 爬升恢复中: 爬升重捕获 (限高, 防无限上升)
-    if (shadow_alt_ > 0.0 && (shadow_climb_ || (h_valid && h <= shadow_alt_))) {
-      if (!h_valid) {
-        px4_->sendHover();   // 爬升中位置失效: 悬停等数据
-        return;
-      }
-      if (!shadow_climb_) {
-        shadow_climb_ = true;
-        climb_base_alt_ = h;
-        lost_time_ = 0.0;
-        RCLCPP_WARN(
-          get_logger(),
-          "\033[33m低空丢失且未对齐 (高度 %.2fm, 对齐误差 %.3f), 爬升重捕获 "
-          "(上限 +%.1fm)...\033[0m", h, last_align_err_, shadow_max_climb_);
-      }
-      if (h - climb_base_alt_ > shadow_max_climb_) {
-        RCLCPP_WARN(
-          get_logger(), "爬升 %.1fm 仍未见码, 放弃重捕获, 切回 AUTO_LOITER 交还控制权",
-          shadow_max_climb_);
-        px4_->requestLoiter();
-        toIdle();
-        return;
-      }
-      px4_->sendVelocityFRD(0.0, 0.0, -shadow_climb_speed_);   // z 负 = 上升
-      RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 1000,
-        "[TRACKING][阴影恢复] 爬升中 高度=%.2fm (起点 %.2fm, 上限 %.2fm) 检出=%zu",
-        h, climb_base_alt_, climb_base_alt_ + shadow_max_climb_, detections_.size());
-      return;
-    }
-    shadow_climb_ = false;
-
-    // 高空丢失: 原地悬停, 超时交还控制权
+    // 原地悬停, 超时交还控制权
     px4_->sendHover();
     lost_time_ += dt;
     if (had_target_) {
@@ -861,7 +782,6 @@ private:
   int min_landing_frames_, angle_window_min_, angle_window_max_;
   double lost_timeout_sec_, offboard_warmup_sec_, offboard_retry_sec_, control_hz_;
   double reacquire_sec_;
-  double shadow_alt_, shadow_climb_speed_, shadow_max_climb_;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长
@@ -873,9 +793,6 @@ private:
   bool ever_offboard_ = false;      // 本次流程曾进入过 OFFBOARD (判定外部接管用)
   int tracked_id_ = -1;             // 锁定的目标码 ID (-1 = 未锁定)
   double lost_id_time_ = 0.0;       // 锁定目标持续丢失时长
-  double last_align_err_ = 1e9;     // 最近一帧有目标时的对齐误差 (低空丢失判定用)
-  bool shadow_climb_ = false;       // 低空丢失爬升重捕获进行中
-  double climb_base_alt_ = 0.0;     // 爬升起点高度 (限高基准)
   bool start_pending_ = false;      // landing_start 已挂起 (等飞控状态到达后补执行)
   rclcpp::Time start_pending_deadline_{0, 0, RCL_ROS_TIME};  // 挂起超时时刻
   rclcpp::Time last_mode_cmd_{0, 0, RCL_ROS_TIME};

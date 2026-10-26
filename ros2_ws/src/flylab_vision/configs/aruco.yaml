@@ -1,0 +1,61 @@
+# ArUco 检测 / 视觉降落参数配置 —— 改这里，不用动代码、不用改地面站。
+#
+# 用法: 节点启动时加 --ros-args --params-file <本文件路径>
+#   - 地面站已在 flylab_gcs/config.py 中默认携带本文件 (ArUco检测按钮 + 降落按钮)
+#   - 命令行 -p 的优先级高于本文件, 可临时覆盖单项, 如:
+#     ros2 run flylab_vision aruco_landing_node --ros-args --params-file <本文件> \
+#         -p dict_name:=DICT_6X6_250 -p target_id:=92
+#
+# /**: 通配所有节点名 (aruco_detector / aruco_landing_node),
+#      各节点只取自己声明的参数, 其余自动忽略, 因此两个节点可共用本文件。
+/**:
+  ros__parameters:
+    # ---------- 检测参数 (aruco_node / aruco_landing_node 共用) ----------
+    image_topic: /flylab/display/image_raw   # 算法图像输入 (默认地面站转发帧)
+    dict_name: DICT_4X4_1000                 # 字典; Prometheus 6x6 码用 DICT_6X6_250
+    marker_length: 0.8                       # 码物理边长 (米), 影响 3D 位姿解算尺度
+    fov_deg: 30.0                            # 无标定时按水平视场角估算内参
+    calib: ""                                # 相机标定 yaml 路径; 空 = 按 FOV 估算 (位姿仅供参考)
+    annotation_topic: /flylab/annotations    # 标注输出话题
+
+    # ---------- 降落参数 (仅 aruco_landing_node, 检测节点忽略) ----------
+    cmd_topic: /flylab/vision_cmd            # 启停指令话题
+    status_topic: /flylab/landing_status     # 状态回传话题 (tracking/landing/landed/idle)
+    link: mavros                             # PX4 执行链路: mavros | uxrce
+    gimbal_topic: /flylab/gimbal_state       # 云台姿态话题 (必需, 断流则悬停等待)
+    gimbal_timeout_sec: 0.5                  # 云台数据超时 (s)
+
+    # 目标选择 (多尺度嵌套码)
+    target_id: 41                            # 精准落点码 ID; -1 = 任一 (画面最大并锁定)
+    target_fallback: true                    # 指定 ID 不可见时回退跟踪画面最大码
+
+    # 水平对齐
+    land_cx: 0.5                             # 期望对中的画面位置 (归一化)
+    land_cy: 0.5
+    vel_gain: 1.0                            # 水平对齐 P 增益
+    max_h_vel: 1.2                           # 水平速度限幅 (m/s)
+    align_ref_alt: 2.5                       # 高度增益缩放基准高度 (m, 0=禁用)
+    max_height_scale: 3.0                    # 高度缩放上限
+
+    # 下降速度调度
+    far_descend_tol: 0.20                    # 未对齐时允许慢降的最大误差
+    far_descend_area: 0.05                   # 仅远处 (面积小于此) 允许边对齐边降
+    far_descend_scale: 0.5                   # 边对齐边降的速度折扣
+    descend_close: 0.3                       # 近处下降速度 (m/s, 正值=向下)
+    descend_far: 0.5                         # 远处下降速度 (m/s)
+    area_s_thresh: 0.85                      # 速度调度分段点
+
+    # 切 AUTO.LAND 触发: 对齐 + 面积 + 趋势角, 连续 N 帧确认
+    align_tol: 0.06                          # 对齐容差 (归一化画面)
+    land_area_thresh: 0.12                   # 面积阈值 (足够近)
+    vertical_threshold_deg: 15.0             # 降落趋势角门限 (度)
+    min_landing_frames: 4                    # 条件连续满足帧数
+    angle_window_min: 5                      # 趋势角滑动窗口下限 (帧)
+    angle_window_max: 50                     # 趋势角滑动窗口上限 (帧)
+
+    # 异常处理与 offboard 时序
+    lost_timeout_sec: 8.0                    # 目标丢失超时 (s), 超时切 AUTO_LOITER 交还控制权
+    reacquire_sec: 0.5                       # 锁定 ID 持续丢失多久后重新选目标 (s)
+    offboard_warmup_sec: 1.0                 # offboard 心跳预热 (s)
+    offboard_retry_sec: 10.0                 # offboard 接管失败重试时长 (s)
+    control_hz: 20.0                         # 控制主循环频率 (Hz)
