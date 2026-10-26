@@ -52,6 +52,9 @@ public:
   /// 是否使用了真实标定 (false 时内参为估算值, 位姿仅供参考)
   bool calibrated() const {return !config_.K.empty();}
 
+  /// 焦距 fx (像素, 标定 K 的 (0,0); 仅 calibrated() 为 true 时有效)
+  double fx() const {return config_.K.at<double>(0, 0);}
+
   /// 运行中更新 FOV (度): 地面站视场角调整后同步过来, 下一帧即用新内参。
   /// 仅无标定 (K 为空, 按 FOV 估算) 时有意义, 已标定调用无效果
   void set_fov(double fov_deg) {config_.fov_deg = fov_deg;}

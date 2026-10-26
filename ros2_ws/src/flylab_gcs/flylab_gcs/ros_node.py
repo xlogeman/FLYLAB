@@ -4,6 +4,7 @@
 界面通过 get_annotations() 轮询取模型标注、调用 publish_* 发指令，
 不直接接触任何 rclpy 对象。将来加订阅/发布只改这里。
 """
+import json
 import threading
 import time
 
@@ -200,6 +201,12 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
 
+        # 算法输出面板数据 (右栏): JSON 按 src 分组 (detect/landing),
+        # 各存最新一条, 界面轮询 get_aruco_info() 取用
+        self.aruco_info = {}
+        self.create_subscription(
+            String, config.ARUCO_INFO_TOPIC, self._aruco_info_cb, 10)
+
         # 手动遥控: 归一化遥控量发布 (双摇杆, -1..1) + 遥控节点状态回传
         self.teleop_cmd_pub = self.create_publisher(
             Twist, config.TELEOP_CMD_TOPIC, 10)
@@ -224,6 +231,20 @@ class GroundStationNode(Node):
     def _teleop_status_cb(self, msg):
         self._teleop_status = msg.data.strip()
         self._teleop_status_seq += 1
+
+    def _aruco_info_cb(self, msg):
+        """算法输出面板数据: JSON 解析失败静默 (节点端保证 schema)。"""
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        src = data.get('src')
+        if src:
+            self.aruco_info[src] = {'data': data, 't': time.monotonic()}
+
+    def get_aruco_info(self):
+        """各来源 (src) 最新一条面板数据 {src: {data, t}}。"""
+        return self.aruco_info
 
     def publish_teleop_twist(self, fwd, right, up, yaw_left):
         """发布归一化遥控量 (-1..1): fwd 前+ / right 右+ / up 升+ / yaw_left 左转+。

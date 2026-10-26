@@ -33,6 +33,7 @@ from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QMainWindow, QToolBar, QWidget
 
 from . import config
+from .algo_output_panel import AlgoOutputPanel
 from .camera_widget import CameraViewWidget
 from .compass import Compass
 from .log_panel import LogPanel
@@ -142,6 +143,10 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.camera_tab.add_side_widget(map_row)
         self.camera_tab.add_side_widget(self.camera_tab.gimbal_box)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
+        # 算法信息面板 (右栏底部): 默认空白, 运行中算法动态显示对应分组
+        # (config.ALGORITHMS 的 'panel' 键 + 视觉反控降落)
+        self.algo_panel = AlgoOutputPanel(self.node.get_aruco_info)
+        self.camera_tab.add_side_widget(self.algo_panel)
 
         self.setCentralWidget(self.camera_tab)
 
@@ -202,6 +207,14 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         fps = self.node.get_algo_fps() if self.running_algo is not None else 0.0
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
+        # 算法信息面板: 可见性随运行中算法变化 + 数据刷新 (内部去重)
+        active = []
+        if self.running_algo is not None and self.running_algo.get('panel'):
+            active.append(self.running_algo['panel'])
+        if self.landing_btn.isChecked():
+            active.append('landing')
+        self.algo_panel.set_active(active)
+        self.algo_panel.refresh()
         self._check_algo_alive()
         self._check_flight_alive()   # 链路进程异常退出则复位按钮
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮

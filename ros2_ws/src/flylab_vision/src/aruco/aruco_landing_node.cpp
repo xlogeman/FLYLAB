@@ -49,7 +49,6 @@ namespace
 constexpr const char kCmdStart[] = "landing_start";
 constexpr const char kCmdStop[] = "landing_stop";
 constexpr const char kAnnoAlgo[] = "aruco_landing";     // 检测结果叠加分组
-constexpr const char kAnnoState[] = "landing_state";    // 状态机文字叠加分组
 constexpr const char kStatusTracking[] = "tracking";     // 接管 offboard, 视觉降落中
 constexpr const char kStatusLanding[] = "landing";       // 已切 AUTO.LAND
 constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机上锁)
@@ -206,6 +205,12 @@ public:
     tracked_id_pub_ = create_publisher<std_msgs::msg::Int32>(
       tracked_id_topic, 10);
 
+    // ---------- 右栏"算法输出"面板数据 ----------
+    // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
+    const auto info_topic =
+      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+    info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
+
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
     control_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / control_hz_), [this]() {tick();});
@@ -270,7 +275,6 @@ private:
     trend_angle_ = 90.0;
     positions_.clear();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    last_status_anno_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     px4_->takeoverReset(now());
     state_ = State::TRACKING;
     RCLCPP_INFO(
@@ -303,6 +307,7 @@ private:
       publishStatus(kStatusIdle);
     }
     clear_annotations();
+    publishInfo("{\"src\":\"landing\",\"state\":\"IDLE\"}");  // 面板复位
   }
 
   // ---------------- 状态回传 (地面站据此复位按钮/给反馈) ----------------
@@ -314,6 +319,36 @@ private:
     msg.data = status;
     status_pub_->publish(msg);
     RCLCPP_INFO(get_logger(), "[状态] %s", status);
+  }
+
+  // ---------------- 右栏"算法输出"面板 (JSON 见 aruco_panel.py 注释) ----------------
+  void publishInfo(const std::string & json)
+  {
+    std_msgs::msg::String out;
+    out.data = json;
+    info_pub_->publish(out);
+  }
+
+  /// 面板信息 10Hz 限频判定 (到点返回 true 并刷新上次发布时刻)
+  bool infoDue(const rclcpp::Time & t)
+  {
+    if ((t - last_info_pub_).seconds() < 0.1) {
+      return false;
+    }
+    last_info_pub_ = t;
+    return true;
+  }
+
+  /// 码的实际物理宽度 (米): w_px × Z / fx (针孔模型), 无位姿返回 -1。
+  /// fx 与检测器同源: 有标定用标定 K, 否则按当前同步 FOV 估算
+  double physicalWidth(const Detection & d) const
+  {
+    if (!d.has_pose || img_w_ <= 0.0) {
+      return -1.0;
+    }
+    const double fx = detector_->calibrated() ? detector_->fx() :
+      img_w_ / (2.0 * std::tan(fov_deg_ * CV_PI / 360.0));
+    return d.bbox_wh.x * d.tvec[2] / fx;
   }
 
   // ---------------- 地面站视场角同步 ----------------
@@ -342,7 +377,6 @@ private:
     }
     image_area_ = static_cast<double>(bgr.cols) * bgr.rows;
     img_w_ = bgr.cols;
-    img_h_ = bgr.rows;
     detections_ = detector_->detect(bgr);
     // 跟踪码选取与检测节点同规则 (锁定 ID 内取面积最大者); 每帧广播 ID
     // (无跟踪目标发 -1), 供检测节点判断是否让位
@@ -630,7 +664,30 @@ private:
     }
 
     px4_->sendVelocityFRD(v_fwd, v_right, v_down);
-    publishStatusAnno(now_t, area, align_err, v_fwd, v_right, v_down);
+    // 右栏"算法输出"面板: 对齐下降状态摘要 (10Hz 限频)
+    if (infoDue(now_t)) {
+      const double h = pos.z_valid ? -pos.z : -1.0;
+      std::ostringstream js;
+      js << std::fixed << std::setprecision(3)
+         << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
+         << tracked_id_ << ",\"count\":" << detections_.size()
+         << ",\"area\":" << area
+         << ",\"w\":" << static_cast<int>(tgt->bbox_wh.x + 0.5)
+         << ",\"h\":" << static_cast<int>(tgt->bbox_wh.y + 0.5)
+         << ",\"wm\":" << physicalWidth(*tgt)
+         << ",\"err\":" << align_err
+         << ",\"aligned\":" << (aligned ? "true" : "false")
+         << ",\"lost\":false"
+         << std::setprecision(2)
+         << ",\"height\":" << h
+         << std::setprecision(1)
+         << ",\"trend\":" << trend_angle_
+         << std::setprecision(2)
+         << ",\"vel\":[" << v_fwd << ',' << v_right << ',' << v_down << ']'
+         << ",\"trigger\":" << landing_count_
+         << ",\"trigger_need\":" << min_landing_frames_ << '}';
+      publishInfo(js.str());
+    }
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
@@ -650,6 +707,20 @@ private:
     // 原地悬停, 超时交还控制权
     px4_->sendHover();
     lost_time_ += dt;
+    // 右栏面板: 丢失状态 (10Hz 限频)
+    if (infoDue(now())) {
+      const auto & pos = px4_->localPosition();
+      const double h = pos.z_valid ? -pos.z : -1.0;
+      std::ostringstream js;
+      js << std::fixed << std::setprecision(3)
+         << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
+         << tracked_id_ << ",\"count\":" << detections_.size()
+         << ",\"lost\":true"
+         << std::setprecision(2)
+         << ",\"lost_t\":" << lost_time_
+         << ",\"height\":" << h << '}';
+      publishInfo(js.str());
+    }
     if (had_target_) {
       had_target_ = false;
       RCLCPP_WARN(get_logger(), "\033[33m目标丢失 (画面中无码), 原地悬停等待...\033[0m");
@@ -712,6 +783,15 @@ private:
       toIdle(false);                   // 不再发 idle, 避免覆盖"成功"事件
       return;
     }
+    // 右栏面板: PX4 自动降落中 (10Hz 限频)
+    if (infoDue(now_t)) {
+      const auto & pos = px4_->localPosition();
+      const double h = pos.z_valid ? -pos.z : -1.0;
+      std::ostringstream js;
+      js << std::fixed << std::setprecision(2)
+         << "{\"src\":\"landing\",\"state\":\"LANDING\",\"height\":" << h << '}';
+      publishInfo(js.str());
+    }
     if (px4_->isAutoLand()) {
       if (!land_confirmed_) {
         land_confirmed_ = true;
@@ -738,53 +818,9 @@ private:
     }
   }
 
-  // ---------------- 画面叠加 ----------------
-  void publishStatusAnno(
-    const rclcpp::Time & now_t, double area, double align_err,
-    double v_fwd, double v_right, double v_down)
-  {
-    if (img_h_ <= 0) {
-      return;   // 尚未收到图像帧, 尺寸未知 (不占用 0.2s 节流窗口)
-    }
-    if ((now_t - last_status_anno_).seconds() < 0.2) {  // 5Hz 足够阅读
-      return;
-    }
-    last_status_anno_ = now_t;
-    const auto & pos = px4_->localPosition();
-    const double alt_z = pos.z_valid ? -pos.z : 0.0;
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2)
-        << "LAND[" << stateName() << "] 高度 " << alt_z
-        << "m 面积 " << area << " 对齐误差 " << align_err
-        << " 趋势角 " << std::setprecision(1) << trend_angle_ << "°"
-        << " vel(" << std::setprecision(2) << v_fwd << "," << v_right << "," << v_down << ")";
-    if (landing_count_ > 0) {
-      oss << " 触发计数 " << landing_count_ << "/" << min_landing_frames_;
-    }
-    std::ostringstream json;
-    // 字号用原图像素高 (约 3% 画高) 随显示缩放等比渲染, 位置固定左下角
-    json << "{\"algo\":\"" << kAnnoState << "\",\"items\":["
-         << "{\"type\":\"text\",\"pos\":[12," << (img_h_ - 12) << "],"
-         << "\"px\":" << (img_h_ * 0.03) << ","
-         << "\"text\":\"" << oss.str() << "\","
-         << "\"color\":[0,200,255]}]}";
-    std_msgs::msg::String out;
-    out.data = json.str();
-    anno_pub_->publish(out);
-  }
-
-  const char * stateName() const
-  {
-    switch (state_) {
-      case State::TRACKING: return "TRACKING";
-      case State::LANDING: return "LANDING";
-      default: return "IDLE";
-    }
-  }
-
   void clear_annotations()
   {
-    for (const char * algo : {kAnnoAlgo, kAnnoState}) {
+    for (const char * algo : {kAnnoAlgo}) {
       std::ostringstream json;
       json << "{\"algo\":\"" << algo << "\",\"items\":[]}";
       std_msgs::msg::String out;
@@ -803,6 +839,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr tracked_id_pub_;  // 跟踪码 ID 广播 (检测节点让位依据)
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;  // 右栏面板数据
+  rclcpp::Time last_info_pub_{0, 0, RCL_ROS_TIME};                // 10Hz 限频
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
@@ -849,9 +887,7 @@ private:
   rclcpp::Time start_pending_deadline_{0, 0, RCL_ROS_TIME};  // 挂起超时时刻
   rclcpp::Time last_mode_cmd_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_tick_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_status_anno_{0, 0, RCL_ROS_TIME};
-  int img_w_ = 0;   // 最近一帧图像尺寸 (状态文字按比例定位/定字号用)
-  int img_h_ = 0;
+  double img_w_ = 0.0;   // 最近一帧图像宽 (物理宽度换算的 fx 估算用)
 };
 
 }  // namespace flylab_vision

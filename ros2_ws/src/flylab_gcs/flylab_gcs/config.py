@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.5, 0.65)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.6, 0.7)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -89,6 +89,9 @@ LANDING_START_CMD = 'landing_start'
 LANDING_STOP_CMD = 'landing_stop'
 # 降落节点状态回传话题 (tracking/landing/landed/idle)，地面站据此复位按钮
 LANDING_STATUS_TOPIC = '/flylab/landing_status'
+# 算法信息面板数据话题 (std_msgs/String JSON): 各算法节点按 src 分组发布
+# 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 algo_output_panel.py)
+ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）
@@ -148,7 +151,8 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node',
              '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
      'start': 'aruco_start', 'stop': 'aruco_stop',
-     'enables_landing': True},
+     'enables_landing': True,
+     'panel': 'detect'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
     {'name': '目标检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detector_node',
              '--ros-args', '-p', 'device:=cuda'],

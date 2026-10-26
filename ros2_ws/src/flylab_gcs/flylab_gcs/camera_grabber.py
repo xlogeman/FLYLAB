@@ -36,7 +36,8 @@ except ImportError:
 from . import config
 from .camera_sources import (LocalFileReader, colorize_depth,   # noqa: F401 (re-export)
                              list_local_cameras)
-from .gimbal import APPLY_TOL_DEG, clamp_gimbal, capture_mount
+from .gimbal import (APPLY_TOL_DEG, MountNotReady, clamp_gimbal,
+                     capture_mount)
 from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,
                         quat_mul, quat_yaw_el)
 
@@ -409,8 +410,12 @@ class Grabber(threading.Thread):
                     continue   # 非当前相机且已同步过: 切到它时才会再下发
                 if cam not in self._gimbal_mount:
                     try:
-                        self._gimbal_mount[cam] = capture_mount(
-                            client, cam, self.log)
+                        self._gimbal_mount[cam] = capture_mount(client, cam)
+                    except MountNotReady:
+                        # 基准未就绪 (刚连上时机体弹跳/运动学未就绪): 整批
+                        # 跳过本拍, 靠稳定模式的周期重下发下一拍重采 ——
+                        # 污染的基准会把相机错位到机身外, 云台一动拍到机体
+                        return
                     except Exception as e:
                         self._gimbal_mount[cam] = None   # 该相机不可用, 跳过
                         self.log(f'云台: 获取 {cam} 安装位姿失败, 跳过: {e}')

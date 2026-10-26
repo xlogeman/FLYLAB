@@ -112,8 +112,8 @@ class CameraViewWidget(QWidget):
             self._left_layout = left   # 供 add_bottom_widget 往画面下方插控件
             left.addWidget(self.video, stretch=1)
             left.addWidget(self.file_ctrl)
-            # 宽度比例 5:2: 左画面 (含日志框) 占大头, 右功能区窄栏
-            outer.addLayout(left, stretch=5)
+            # 宽度比例 7:3: 左画面 (含日志框) 占大头, 右功能区窄栏
+            outer.addLayout(left, stretch=7)
             line = QFrame()                  # 画面区与功能区之间的竖分隔线
             line.setFrameShape(QFrame.VLine)
             line.setFrameShadow(QFrame.Sunken)
@@ -128,7 +128,7 @@ class CameraViewWidget(QWidget):
             scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             scroll.setWidget(body)
-            outer.addWidget(scroll, stretch=2)
+            outer.addWidget(scroll, stretch=3)
             # 云台分组框不直接入栏: 主窗口单独往右栏插入
             gimbal_box = QGroupBox('云台')
             gim_lay = QVBoxLayout(gimbal_box)
