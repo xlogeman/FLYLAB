@@ -179,8 +179,7 @@ class GroundStationNode(Node):
         self.gimbal_pub = self.create_publisher(
             Quaternion, config.GIMBAL_STATE_TOPIC, 30)
 
-        # 视场角同步 (latched): 算法节点 (如 ArUco) 按当前 FOV 估算内参,
-        # 后启动的节点一接入即收到最近一次发布的值
+        # 视场角同步发布器 (latched 约定见 config.CAMERA_FOV_TOPIC)
         self.fov_pub = self.create_publisher(
             Float64, config.CAMERA_FOV_TOPIC,
             QoSProfile(
@@ -188,8 +187,7 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
-        # ArUco 码边长同步 (latched): 右栏滑杆拖动即发布, 算法节点运行中
-        # 更新 marker_length (位姿解算尺度); 后启动的节点一接入即收到最近值
+        # ArUco 码边长同步发布器 (latched 约定见 config.ARUCO_MARKER_LENGTH_TOPIC)
         self.marker_len_pub = self.create_publisher(
             Float64, config.ARUCO_MARKER_LENGTH_TOPIC,
             QoSProfile(

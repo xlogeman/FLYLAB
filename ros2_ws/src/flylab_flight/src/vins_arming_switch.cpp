@@ -21,12 +21,9 @@ class VinsSwitch : public rclcpp::Node
 public:
     VinsSwitch() : Node("vins_arming_switch")
     {
-        // 相机模式: true=双目(vins_stereo 用), false=单目左相机(vins_mono 用)
-        // VINS 端 /vins_cam_switch 的语义是 true=切双目 / false=切单目,
-        // mono 配置 (num_of_cam: 1) 若被切到双目会取不到 cam1 数据, 故用参数区分
+        // use_stereo 语义见文件头注释
         use_stereo_ = declare_parameter<bool>("use_stereo", true);
 
-        // 用来发布 VINS FUSION 控制话题
         cam_pub_ = create_publisher<Bool>("/vins_cam_switch", 10);     // 摄像头开关
         imu_pub_ = create_publisher<Bool>("/vins_imu_switch", 10);     // IMU开关
         restart_pub_ = create_publisher<Bool>("/vins_restart", 10);    // 重置动作

@@ -148,9 +148,6 @@ private:
     }
     fov_deg_ = msg.data;
     detector_->set_fov(msg.data);
-    // RCLCPP_INFO(
-    //   get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
-    //   msg.data);
   }
 
   /// 地面站码边长滑杆同步: 更新检测器位姿解算尺度 (下一帧生效)

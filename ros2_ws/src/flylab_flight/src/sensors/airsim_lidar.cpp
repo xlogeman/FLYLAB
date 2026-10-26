@@ -125,9 +125,7 @@ private:
             }
             last_sim_stamp_ = sim_stamp;
 
-            // FAST-LIO 约定 header.stamp = 扫描起始时刻;
-            // AirSim time_stamp = 数据生成时刻 ≈ 扫描结束时刻。
-            // GPU 雷达有段级时刻时: header = 最早段渲染时刻 (真实帧首)。
+            // header 时刻模型见文件头; GPU 雷达有段级时刻时取最早段渲染时刻 (真实帧首)
             bool use_seg_times = !seg_stamps.empty() && sim_stamp > 0;
             uint64_t t_header_ns = 0;
             double header_s;

@@ -385,9 +385,6 @@ private:
     }
     fov_deg_ = msg.data;
     detector_->set_fov(msg.data);
-    // RCLCPP_INFO(
-    //   get_logger(), "视场角同步: %.1f° (内参按 FOV 估算, 来自地面站)",
-    //   msg.data);
   }
 
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------
@@ -845,13 +842,9 @@ private:
 
   void clear_annotations()
   {
-    for (const char * algo : {kAnnoAlgo}) {
-      std::ostringstream json;
-      json << "{\"algo\":\"" << algo << "\",\"items\":[]}";
-      std_msgs::msg::String out;
-      out.data = json.str();
-      anno_pub_->publish(out);
-    }
+    std_msgs::msg::String out;
+    out.data = std::string("{\"algo\":\"") + kAnnoAlgo + "\",\"items\":[]}";
+    anno_pub_->publish(out);
   }
 
   // ---------------- 成员 ----------------

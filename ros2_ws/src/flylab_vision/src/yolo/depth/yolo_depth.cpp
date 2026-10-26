@@ -165,7 +165,6 @@ YoloDepthEstimator::YoloDepthEstimator(const DepthConfig & config)
       impl_->in_size = config_.input_size;
     } else if (fixed > 0) {
       impl_->in_size = fixed;
-      config_.input_size = fixed;   // 回写, config() 反映实际值
     } else {
       throw std::runtime_error(
               "YoloDepthEstimator: 模型输入为动态尺寸, 须显式指定 input_size");

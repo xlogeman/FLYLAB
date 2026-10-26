@@ -36,8 +36,7 @@ struct YoloSemanticResult
 };
 
 /// YOLO 语义分割器 —— 纯算法, 不含 ROS / 窗口显示。
-/// 推理后端为 onnxruntime (同 yolo_detector, 系统 OpenCV DNN 解析不了
-/// yolo26 的 attention Split 节点)。
+/// 推理后端为 onnxruntime (选型原因见 yolo_detector.hpp)。
 /// 模型: Ultralytics 语义分割 ONNX 标准导出 (models/semantic/yolo26s-sem.onnx,
 /// Cityscapes 19 类, SemanticSegment 头)
 ///   输入   1x3xSxS (RGB, /255, letterbox), yolo26s-sem 固定 S=1024

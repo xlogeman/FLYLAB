@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// YOLO 图像分类 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
 ///
-/// 与 yolo_node.cpp 同构, 区别只在算法 (整图分类 vs 目标检测) 和标注形式
+/// 与 yolo_detector_node.cpp 同构, 区别只在算法 (整图分类 vs 目标检测) 和标注形式
 /// (左上角 top-k 文字行 vs 目标框)。链路:
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 cls_start / cls_stop 启停

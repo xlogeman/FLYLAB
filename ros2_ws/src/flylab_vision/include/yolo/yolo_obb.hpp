@@ -35,8 +35,7 @@ struct YoloObbDetection
 };
 
 /// YOLO OBB (旋转框) 检测器 —— 纯算法, 不含 ROS / 窗口显示。
-/// 推理后端为 onnxruntime (同 yolo_detector, 系统 OpenCV DNN 解析不了
-/// yolo26 的 attention Split 节点)。
+/// 推理后端为 onnxruntime (选型原因见 yolo_detector.hpp)。
 /// 模型: Ultralytics OBB ONNX 标准导出 (models/obb/yolo26s-obb.onnx)
 ///   输入  1x3xSxS (RGB, /255, letterbox)
 ///   输出  1x(5+nc)xA: 前 4 通道 = cx/cy/w/h (letterbox 输入坐标系, 像素),

@@ -16,16 +16,6 @@ import time
 
 import numpy as np
 
-# /dev/video* 的 metadata 节点探测失败是预期行为, 屏蔽 V4L2 WARN 刷屏
-import os
-os.environ.setdefault('OPENCV_LOG_LEVEL', 'ERROR')
-try:
-    import cv2
-    if hasattr(cv2, 'setLogLevel') and hasattr(cv2, 'LOG_LEVEL_ERROR'):
-        cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)
-except ImportError:
-    cv2 = None
-
 try:
     import cosysairsim as airsim
 except ImportError:
@@ -35,7 +25,7 @@ except ImportError:
 
 from . import config
 from .camera_sources import (LocalFileReader, colorize_depth,   # noqa: F401 (re-export)
-                             list_local_cameras)
+                             list_local_cameras, cv2)
 from .gimbal import (APPLY_TOL_DEG, MountNotReady, clamp_gimbal,
                      capture_mount)
 from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,
@@ -102,7 +92,7 @@ class Grabber(threading.Thread):
         # 上次成功下发的 (机体姿态, 云台角, 相机) 指纹: 悬停抖动在容差内
         # 则跳过下发 RPC, 省下的串行等待直接转化为图传帧率
         self._gimbal_apply_key = None
-        # Scene 帧走 PNG 压缩传输 (线上体积约 1/3); 服务端不支持时回退原始传输
+        # PNG 压缩传输 (config.DISPLAY_SCENE_COMPRESS); 服务端不支持时回退原始传输
         self._scene_compress = config.DISPLAY_SCENE_COMPRESS and cv2 is not None
         # 会话内限位拒绝标记 (方向 -> bool), 按键被限位卡住时标红, 不持久化
         self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
@@ -135,6 +125,10 @@ class Grabber(threading.Thread):
             return self.frame, self.camera, self.fps
 
     # ---------- 视频文件播放控制 (界面线程调用, 标志位由抓取线程处理) ----------
+
+    @property
+    def file_paused(self):
+        return self.reader.paused
 
     def set_file_paused(self, paused):
         self.reader.paused = paused
@@ -597,7 +591,7 @@ class Grabber(threading.Thread):
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.DepthPlanar, True, False)
                 else:
-                    # Scene 走 PNG 压缩传输 (线上体积约 1/3, RPC 往返变短直接转化为帧率)
+                    # PNG 压缩传输 (体积 1/3, 约定见 config.DISPLAY_SCENE_COMPRESS)
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.Scene, False, self._scene_compress)
                 resp = client.simGetImages([req], VEHICLE)

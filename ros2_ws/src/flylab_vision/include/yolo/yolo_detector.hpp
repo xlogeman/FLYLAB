@@ -69,9 +69,6 @@ private:
 std::string to_annotations_json(
   const std::vector<YoloDetection> & results, const std::string & algo = "yolo");
 
-/// 按类别 id 生成稳定的 BGR 颜色 (HSV 色环均匀取色, 同类同色)
-cv::Scalar class_color(int class_id);
-
 }  // namespace flylab_vision
 
 #endif  // FLYLAB_VISION__YOLO_DETECTOR_HPP_

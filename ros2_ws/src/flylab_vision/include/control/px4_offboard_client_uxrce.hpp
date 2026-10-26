@@ -217,19 +217,6 @@ public:
   /// 原地悬停 (零速度 setpoint)
   void sendHover() override {sendVelocityFRD(0.0, 0.0, 0.0);}
 
-  /// 只发 offboard 心跳 (声明速度控制模式), 不发 setpoint
-  void heartbeatVelocity()
-  {
-    px4_msgs::msg::OffboardControlMode msg;
-    msg.position = false;
-    msg.velocity = true;
-    msg.acceleration = false;
-    msg.attitude = false;
-    msg.body_rate = false;
-    msg.timestamp = timestamp_now();
-    offboard_control_mode_pub_->publish(msg);
-  }
-
   void requestOffboard() override {requestMode(kMainOffboard, 0.0f);}
   void requestAutoLand() override {requestMode(kMainAuto, kSubLand);}
   void requestLoiter() override {requestMode(kMainAuto, kSubLoiter);}
@@ -300,6 +287,19 @@ private:
   static uint64_t timestamp_now()
   {
     return static_cast<uint64_t>(rclcpp::Clock(RCL_SYSTEM_TIME).now().nanoseconds() / 1000);
+  }
+
+  /// 只发 offboard 心跳 (声明速度控制模式), 不发 setpoint
+  void heartbeatVelocity()
+  {
+    px4_msgs::msg::OffboardControlMode msg;
+    msg.position = false;
+    msg.velocity = true;
+    msg.acceleration = false;
+    msg.attitude = false;
+    msg.body_rate = false;
+    msg.timestamp = timestamp_now();
+    offboard_control_mode_pub_->publish(msg);
   }
 
   rclcpp::Node & node_;

@@ -216,7 +216,6 @@ YoloClassifier::YoloClassifier(const ClsConfig & config)
       impl_->in_size = config_.input_size;
     } else if (fixed > 0) {
       impl_->in_size = fixed;
-      config_.input_size = fixed;   // 回写, config() 反映实际值
     } else {
       throw std::runtime_error(
               "YoloClassifier: 模型输入为动态尺寸, 须显式指定 input_size");

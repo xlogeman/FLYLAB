@@ -103,8 +103,3 @@ class ManagedProcess:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             proc.kill()
-
-    def terminate(self):
-        """轻量停止: 仅 SIGTERM 不等待 (需要延迟回收/异步回收的场景)。"""
-        if self.proc is not None and self.proc.poll() is None:
-            self.proc.terminate()

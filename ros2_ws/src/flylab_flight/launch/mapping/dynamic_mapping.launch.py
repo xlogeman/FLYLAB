@@ -1,4 +1,4 @@
-# dynamic_mapping —— 完整建图链路 + octomap_dynamic 动态清理节点（原课程 lesson4 变体）
+# dynamic_mapping —— 完整建图链路（原课程 lesson4 变体）
 import os
 import launch
 import launch_ros.actions
@@ -72,17 +72,6 @@ def generate_launch_description():
             ]
     )
 
-	# 限制octomap显示范围的节点
-    lensson4_map_range_proc_node = launch_ros.actions.Node(
-            package='flylab_flight',
-            executable='octomap_dynamic',
-            name='octomap_dynamic',
-            parameters=[
-                {'range_around_drone': camera_max_range},
-            ]
-    )
-
-
 	# 启动AirSim节点
     airsim_node_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -98,6 +87,5 @@ def generate_launch_description():
     ld.add_action(airsim_node_launch)
     ld.add_action(lensson4_depth_image_proc_node)
     ld.add_action(lensson4_octomap_server_node)
-    #ld.add_action(lensson4_map_range_proc_node)
     ld.add_action(lensson4_rviz_node)
     return ld

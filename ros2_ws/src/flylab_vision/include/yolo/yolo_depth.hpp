@@ -33,8 +33,7 @@ struct DepthResult
 };
 
 /// YOLO 单目深度估计器 —— 纯算法, 不含 ROS / 窗口显示。
-/// 推理后端为 onnxruntime (同 YoloDetector, 系统 OpenCV 4.5.x DNN 解析不了
-/// yolo26 的 attention Split 节点)。
+/// 推理后端为 onnxruntime (选型原因见 yolo_detector.hpp)。
 /// 模型: Ultralytics depth 任务 ONNX 导出 (yolo26s-depth.onnx)
 ///   输入  1x3xSxS (RGB, /255, letterbox 正方形)  —— S 由模型固定输入尺寸决定
 ///   输出  1x1xSxS 逐像素米制深度, 与输入画布同分辨率

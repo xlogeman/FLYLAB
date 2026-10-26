@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <iomanip>
 #include <onnxruntime_cxx_api.h>
 #include <sstream>

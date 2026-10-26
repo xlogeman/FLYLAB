@@ -129,8 +129,6 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.toolbar.addWidget(self._build_landing_button())
         self.addToolBar(self.toolbar)
 
-        # 手动遥控: 开启时拉起 teleop_node 接管 offboard, 关闭交还控制权;
-        # 与视觉反控互斥 (都走 offboard, 会争抢 setpoint)
         # 右栏布局 (自上而下): 航线地图 + 罗盘并排一行 → 云台 (视场角
         # 竖排在云台方向键右侧) → 手动遥控
         self.compass = Compass()

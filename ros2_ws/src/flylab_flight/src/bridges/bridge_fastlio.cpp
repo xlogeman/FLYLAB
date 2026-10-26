@@ -44,7 +44,6 @@ public:
     }
 
 private:
-    // 静态 TF: body -> base_link (恒等, 接通 FAST-LIO 的 body 子树) + 挂载外参 NED -> FLU
     void publish_mount_tf() {
         std::vector<geometry_msgs::msg::TransformStamped> transforms;
 
@@ -83,7 +82,7 @@ private:
         static_tf_->sendTransform(transforms);
     }
 
-    // NED -> FLU: 只需 y/z 取反 (逐点 3 个 float, 直接改写缓冲, 零拷贝结构)
+    // 直接改写输出缓冲 (零拷贝结构), 逐点 y/z 取反成 FLU
     void convert(sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
         sensor_msgs::msg::PointCloud2 out = *msg;
         if (out.point_step >= 12) {

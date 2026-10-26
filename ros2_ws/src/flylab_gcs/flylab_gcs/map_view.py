@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import QSizePolicy, QWidget
 class MapView(QWidget):
     """俯视航线地图: update_state 喂入轨迹 (数据 0.5s 一拍), 直接重绘。"""
 
-    MAX_POINTS = 2000        # 轨迹点上限 (grabber 侧裁剪, 双保险)
     MIN_SPAN_M = 20.0        # 视野最小跨度 (米), 刚起飞不满屏狂放
     TRAIL = QColor('#1a73e8')
     ARROW = QColor('#2d8a3e')

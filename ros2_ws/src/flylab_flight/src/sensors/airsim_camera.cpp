@@ -98,9 +98,7 @@ private:
             if (responses.size() != requests_.size()) {
                 return;
             }
-            // 多相机共用同一时间戳; 须经 SimClockSync 映射到统一时间轴,
-            // 否则视觉算法对齐 IMU/图像时全部错位, 无法初始化。
-            // 仿真端未填 time_stamp 时退回墙钟。
+            // 多相机共用同一时间戳, 经 SimClockSync 映射到统一时间轴 (未填时退回墙钟)
             const double wall_s = this->now().seconds();
             rclcpp::Time stamp = this->now();
             if (responses[0].time_stamp > 0) {

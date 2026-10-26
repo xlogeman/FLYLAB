@@ -2,19 +2,12 @@
 #ifndef PX4_OFFBOARD_CLIENT_BASE_HPP_
 #define PX4_OFFBOARD_CLIENT_BASE_HPP_
 
-/// PX4 offboard 执行层公共接口 —— MAVROS / uXRCE-DDS 双链路的抽象。
-/// 可复用组件, 供 flylab_vision/src/control 下所有"通过 PX4 控制飞机"的
-/// 算法节点使用 (视觉降落 / 目标追踪控制 / ...)。
-///
-/// 两个实现 (见 px4_offboard_client_mavros.hpp / px4_offboard_client_uxrce.hpp)
-/// 与 flylab tracker:=mavros|uxrce 约定一致, 上层节点用 link 参数选择。
+/// PX4 offboard 执行层公共接口 —— MAVROS / uXRCE-DDS 双链路的抽象
+/// (组件用途 / 链路选择 / 与避障 tracker 的互斥见 px4_offboard_client.hpp 总入口)。
 ///
 /// 坐标/符号约定 (两链路统一, 上层无感):
 ///   - 速度指令一律机体系 FRD: x 前 y 右 z 下, "下"为正 = 下降
 ///   - localPosition() 一律返回 NED 语义 (z 下正), MAVROS 侧由 ENU pose 换算
-///
-/// 注意: 两种链路都不要与避障 tracker_uxrce/tracker_mavros 同时运行
-/// (会争抢 setpoint; tracker 与本组件同时走 MAVROS 时争抢的是同一条 setpoint 流)。
 
 #include <string>
 

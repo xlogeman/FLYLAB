@@ -88,7 +88,6 @@ protected:
     if (!isArmed()) {
       // 未解锁: 等待 QGC 起飞解锁, 不干预
     } else if (isOffboard()) {
-      // 已在 OFFBOARD 状态
       if (planner_active_) {
         // 【避障规划自动飞行模式】
         if (!has_planner_cmd_) {

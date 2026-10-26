@@ -20,10 +20,9 @@
   <!-- SUPER 输出桥接节点 (super_cmd_bridge.cpp) 编译依赖 -->
   <depend>mars_quadrotor_msgs</depend>
 
-  <!-- AirSim 直连传感器节点 (airsim_sensor_ego.cpp / airsim_sensor_vio.cpp / airsim_sensor_orb.cpp) 编译依赖 -->
+  <!-- AirSim 直连传感器节点 (src/sensors/) 编译依赖 -->
   <depend>cv_bridge</depend>
   <depend>tf2</depend>
-  <depend>tf2_geometry_msgs</depend>
 
   <!-- EGO 链路运行时依赖 -->
   <exec_depend>ego_planner</exec_depend>

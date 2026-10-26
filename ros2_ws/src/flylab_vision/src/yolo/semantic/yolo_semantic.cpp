@@ -291,7 +291,6 @@ YoloSemanticResult YoloSemanticSegmenter::segment(const cv::Mat & bgr)
       ++hist[row[x]];
     }
   }
-  const long total = static_cast<long>(valid.rows) * valid.cols;
   std::vector<std::pair<int, long>> counts;
   for (int c = 0; c < static_cast<int>(cityscapes_names().size()); ++c) {
     if (hist[c] > 0 && (config_.class_filter.empty() ||
@@ -303,11 +302,10 @@ YoloSemanticResult YoloSemanticSegmenter::segment(const cv::Mat & bgr)
   }
   std::sort(counts.begin(), counts.end(),
     [](const auto & a, const auto & b) {return a.second > b.second;});
-  for (const auto & [c, n] : counts) {
-    (void)n;
+  for (const auto & [c, cnt] : counts) {
+    (void)cnt;
     result.present.push_back(c);
   }
-  (void)total;
 
   result.class_map = std::move(valid);
   return result;
@@ -324,8 +322,7 @@ std::string to_semantic_annotations_json(
 
   // 类别图 -> 配色 BGRA 图: 类别像素不透明, 无效像素半透明深灰打底
   // (保持画中画窗口完整感, 同时暗示"无类别归属")。
-  // PNG 编码: 平坦色块体积远小于 JPEG, 且无块状伪影 (JPEG 伪影每帧
-  // 变化 + 叠加层低频刷新 = 画面闪烁), 还能保留透明通道
+  // PNG 编码: 平坦色块体积小、无 JPEG 伪影闪烁, 且保留透明通道
   cv::Mat bgra(cls.size(), CV_8UC4);
   for (int y = 0; y < cls.rows; ++y) {
     const uint8_t * src = cls.ptr<uint8_t>(y);

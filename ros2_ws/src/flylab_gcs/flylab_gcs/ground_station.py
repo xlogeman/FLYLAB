@@ -1,24 +1,11 @@
 #!/usr/bin/env python3
 """flylab 地面站 GUI（PyQt5）—— 程序入口
 
-单画面 + 工具切换按钮（结构见 main_window.py）：
-  画面: 直连 AirSim RPC / 本机摄像头，支持拖拽框选目标
-  工具按钮: 目标检测/目标追踪等，按下=启动、再按=停止 (发指令给算法节点)
-  模型输出叠加: 模型节点发 JSON 标注到 ANNOTATION_TOPIC，自动画到画面上
-              (schema 见 overlay.py，任何模型都能接入)
-
 用法：
   ros2 run flylab_gcs ground_station
 
-模块结构：
-  config.py        全局配置（按钮、话题、端口，改这里）
-  overlay.py       模型输出叠加接口（标注 schema + 解析）
-  ros_node.py      ROS2 节点（订阅/发布，界面经它与 ROS 通信）
-  video_label.py   视频显示控件（出图/缩放/拖拽框选/标注叠加）
-  camera_grabber.py AirSim RPC / 本机摄像头抓取线程（与界面解耦）
-  camera_widget.py 相机视图控件（下拉框 + 画面 + 状态栏）
-  main_window.py   主窗口（按钮行 + 相机画面 + 叠加轮询）
-  ground_station.py 入口（本文件）
+界面结构 / 模块清单见 main_window.py，全局配置见 config.py，
+标注叠加 schema 见 overlay.py。
 """
 import os
 import signal

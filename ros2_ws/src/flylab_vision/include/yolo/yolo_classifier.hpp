@@ -32,8 +32,7 @@ struct ClsPrediction
 };
 
 /// YOLO 图像分类器 —— 纯算法, 不含 ROS / 窗口显示。
-/// 推理后端为 onnxruntime (同 YoloDetector, 系统 OpenCV 4.5.x DNN 解析不了
-/// yolo26 的 attention Split 节点)。
+/// 推理后端为 onnxruntime (选型原因见 yolo_detector.hpp)。
 /// 模型: Ultralytics ONNX 标准导出 (输入 1x3xSxS, 输出 1xC 类别分数)。
 /// 预处理与 Ultralytics 一致: letterbox 正方形 (114 灰边) + RGB + /255;
 /// 后处理: top-k (yolo26-cls 导出已内建 softmax, 输出即概率; 纯线性导出

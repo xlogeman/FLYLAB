@@ -35,9 +35,4 @@
 #include "px4_offboard_client_mavros.hpp"
 #include "px4_offboard_client_uxrce.hpp"
 
-namespace flylab_vision
-{
-
-}  // namespace flylab_vision
-
 #endif  // PX4_OFFBOARD_CLIENT_HPP_

@@ -75,9 +75,6 @@ class LocalFileReader:
         self.pos, self.total = 0.0, 0.0
         self.fps = 30.0
 
-    def has_device(self):
-        return self.cap is not None
-
     def close(self):
         """释放当前设备 (若有)。"""
         if self.cap is not None:

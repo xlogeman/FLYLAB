@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// YOLO 单目深度估计 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
 ///
-/// 与 yolo_node.cpp 同构, 区别在算法 (逐像素深度) 和标注形式: 稠密输出经
+/// 与 yolo_detector_node.cpp 同构, 区别在算法 (逐像素深度) 和标注形式: 稠密输出经
 /// turbo 伪彩 + JPEG(base64) 以 image 图元画中画显示 (相机画面右下角不透明
 /// 小窗, 不遮挡原画面), 另带左下角深度范围文字。链路:
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw

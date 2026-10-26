@@ -122,14 +122,6 @@ class VideoLabel(QLabel):
             return
         super().wheelEvent(ev)
 
-    def mouseDoubleClickEvent(self, ev):
-        """双击画面: 变焦复位到 1.0 (有画面时)。"""
-        if self._pixmap is not None and ev.button() == Qt.LeftButton:
-            self.zoom_reset.emit()
-            ev.accept()
-            return
-        super().mouseDoubleClickEvent(ev)
-
     def mousePressEvent(self, ev):
         if (self._select_enabled and self._pixmap is not None
                 and ev.button() == Qt.LeftButton):
@@ -145,8 +137,13 @@ class VideoLabel(QLabel):
         super().mouseMoveEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
+        """双击画面: 框选进行中确认选框, 否则变焦复位到 1.0 (有画面时)。"""
         if self._sel_start is not None:
             self._confirm_selection()
+            return
+        if self._pixmap is not None and ev.button() == Qt.LeftButton:
+            self.zoom_reset.emit()
+            ev.accept()
             return
         super().mouseDoubleClickEvent(ev)
 

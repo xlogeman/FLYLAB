@@ -4,7 +4,6 @@
 // 链路: px4_msgs 直发 /fmu/in/*, 依赖 MicroXRCEAgent (udp4 -p 8888)
 // 与 tracker_mavros 共用 tracker_base.hpp 的控制逻辑,
 // 本文件只实现 uXRCE-DDS 传输层: setpoint 编码 / ENU->NED 转换 / 模式切换命令
-#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -25,7 +24,7 @@ public:
     : TrackerBase("tracker_uxrce_node", 50.0,
                   "PX4 + 轨迹跟踪混合控制节点已启动！(QGC 起飞后，在 RViz 中点击 2D Goal Pose 即接管，到达目标点后自动切回 AUTO_LOITER 交还 QGC)")
     {
-        // 和PX4通讯的QOS配置文件
+        // QoS: BEST_EFFORT + TRANSIENT_LOCAL, 与 px4_msgs 匹配
         rclcpp::QoS qos_profile(rclcpp::KeepLast(1));
         qos_profile.best_effort().transient_local();
 

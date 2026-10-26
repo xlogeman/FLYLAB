@@ -33,8 +33,7 @@ struct YoloPoseDetection
 };
 
 /// YOLO Pose (人体关键点) 估计器 —— 纯算法, 不含 ROS / 窗口显示。
-/// 推理后端为 onnxruntime (同 yolo_detector, 系统 OpenCV DNN 解析不了
-/// yolo26 的 attention Split 节点)。
+/// 推理后端为 onnxruntime (选型原因见 yolo_detector.hpp)。
 /// 模型: Ultralytics Pose ONNX 标准导出 (models/pose/yolo26s-pose.onnx)
 ///   输入  1x3xSxS (RGB, /255, letterbox)
 ///   输出  1x(5+3*nk)xA: 前 4 通道 = cx/cy/w/h (letterbox 输入坐标系, 像素),
