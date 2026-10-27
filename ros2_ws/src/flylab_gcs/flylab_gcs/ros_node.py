@@ -195,6 +195,14 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 降落朝向偏置同步发布器 (latched 约定见 config.LANDING_YAW_OFFSET_TOPIC)
+        self.landing_yaw_pub = self.create_publisher(
+            Float64, config.LANDING_YAW_OFFSET_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -337,6 +345,13 @@ class GroundStationNode(Node):
         msg = Float64()
         msg.data = float(length_m)
         self.marker_len_pub.publish(msg)
+
+    def publish_landing_yaw_offset(self, deg):
+        """发布降落朝向偏置 (度): 机头相对码 0° 方向的落点朝向, 供
+        aruco_landing_node 运行中同步 (修改后节点解锁航向重新对齐)。"""
+        msg = Float64()
+        msg.data = float(deg)
+        self.landing_yaw_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

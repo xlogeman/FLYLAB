@@ -38,6 +38,17 @@
     align_ref_alt: 2.5                       # 高度增益缩放基准高度 (m, 0=禁用)
     max_height_scale: 3.0                    # 高度缩放上限
 
+    # 降落航向对齐 (机头 → 码 0° 方向 + 偏置, 地面站右栏可运行中改偏置):
+    # 水平对齐达标后悬停原位转向, 偏差进容差连续 N 帧锁定航向再恢复下降
+    yaw_align: true                          # 关闭则对齐达标后直接调速下降 (原行为)
+    yaw_offset_deg: 0.0                      # 机头相对码 0° 方向 (角点 0→1, 码图案 x 轴) 的偏置 (度, 右正)
+    yaw_tol_deg: 5.0                         # 航向锁定容差 (度)
+    yaw_gain: 2.5                            # 偏航 P 增益 (°/s 每度偏差)
+    yaw_rate_max_deg: 30.0                   # 偏航角速率限幅 (°/s)
+    min_yaw_frames: 5                        # 偏差连续达标帧数 (20Hz, 0.25s)
+    yaw_timeout_sec: 30.0                    # 对齐悬置超时 (s, 超时按当前航向继续下降; 0=不超时)
+    yaw_offset_topic: /flylab/landing_yaw_offset  # 地面站朝向选择同步 (latched)
+
     # 下降速度调度
     far_descend_tol: 0.20                    # 未对齐时允许慢降的最大误差
     far_descend_area: 0.05                   # 仅远处 (面积小于此) 允许边对齐边降

@@ -210,14 +210,15 @@ class Grabber(threading.Thread):
             self._anim_t_prev = time.monotonic()
 
     def gimbal_pitch_bottom(self):
-        """俯仰平滑转到垂直向下限位 (视觉反控前自动摆位, 航向不变),
-        复用回中动画机制匀速转动。"""
+        """视觉反控前自动摆位: 俯仰平滑转到垂直向下限位, 同时偏航归中
+        (云台朝向机头方向) —— 稳定模式下偏航=相对机头的偏移, 归中后
+        画面上方即机头方向, 降落对中/对准时视角方向感一致;
+        复用回中动画机制匀速转动 (双轴同步)。"""
         with self.lock:
             if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
                 return
-            yaw, _ = self._gimbal
             self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
-            self._gimbal_anim = (yaw, config.GIMBAL_PITCH_MIN_DEG)
+            self._gimbal_anim = (0.0, config.GIMBAL_PITCH_MIN_DEG)
             self._anim_t_prev = time.monotonic()
 
     def airsim_connected(self):

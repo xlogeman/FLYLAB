@@ -2,17 +2,21 @@
 /// ArUco 视觉降落节点 —— 三态状态机
 ///
 ///   IDLE     等待 landing_start 指令, 不发任何飞控指令
-///   TRACKING 接管 offboard → 图像空间水平对齐 → 按目标面积调速下降
-///            → (对齐 + 面积阈值 + 降落趋势角) 连续 N 帧后进入 LANDING
+///   TRACKING 接管 offboard → 图像空间水平对齐 → 悬停转机头对齐码朝向
+///            (+可调偏置, 可关) → 按目标面积调速下降
+///            → (对齐 + 面积阈值 + 降落趋势角 + 航向锁定) 连续 N 帧后进入 LANDING
 ///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
-/// 只用 cx/cy/面积做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
+/// 只用 cx/cy/面积/码朝向角做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
+/// 码朝向测量: 码 0° 方向 (OpenCV 角点 c0→c1) 经云台姿态旋到机体系取水平方位,
+/// 与水平对齐同一姿态链; 机头对齐码 0° 方向 + 偏置 (yaw_offset, 地面站右栏可改)。
 /// 多尺度嵌套码支持: target_id 指定精准落点码 (小码), 不可见时回退跟踪画面
 /// 最大码 (高空大码), 指定码出现后自动切换对齐目标 (target_fallback:=false 关闭回退)。
 /// 执行层经 px4_offboard_client (link:=mavros|uxrce 选链路)。
 ///
 /// 话题: 图像 /flylab/display/image_raw (地面站转发帧, 需俯视看到码);
 ///       云台 /flylab/gimbal_state (相机相对机体姿态, 必需, 断流则悬停等待);
+///       朝向偏置 /flylab/landing_yaw_offset (地面站右栏选择, latched);
 ///       指令 /flylab/vision_cmd; 叠加 /flylab/annotations; 状态 /flylab/landing_status
 ///
 /// 使用前提: 已解锁升空, 相机画面垂直向下看到 ArUco 码。
@@ -90,6 +94,16 @@ double landing_angle_deg(const std::vector<cv::Point3d> & positions)
   return std::acos(cos_theta) * 180.0 / M_PI;
 }
 
+/// 角度归一化到 [-180, 180)
+double wrap180(double deg)
+{
+  deg = std::fmod(deg + 180.0, 360.0);
+  if (deg < 0.0) {
+    deg += 360.0;
+  }
+  return deg - 180.0;
+}
+
 }  // namespace
 
 class ArucoLandingNode : public rclcpp::Node
@@ -145,6 +159,18 @@ public:
     offboard_warmup_sec_ = declare_parameter<double>("offboard_warmup_sec", 1.0);
     offboard_retry_sec_ = declare_parameter<double>("offboard_retry_sec", 10.0);
     control_hz_ = declare_parameter<double>("control_hz", 20.0);
+
+    // 降落航向对齐: 水平对齐达标后悬停原位转机头, 对准码 0° 方向 + 偏置,
+    // 误差连续 N 帧达标锁定航向再恢复下降 (AUTO.LAND 保持切换瞬间航向)
+    yaw_align_ = declare_parameter<bool>("yaw_align", true);
+    yaw_offset_deg_ = declare_parameter<double>("yaw_offset_deg", 0.0);
+    yaw_tol_deg_ = declare_parameter<double>("yaw_tol_deg", 5.0);
+    yaw_gain_ = declare_parameter<double>("yaw_gain", 2.5);
+    yaw_rate_max_deg_ = declare_parameter<double>("yaw_rate_max_deg", 30.0);
+    min_yaw_frames_ = declare_parameter<int>("min_yaw_frames", 5);
+    yaw_timeout_sec_ = declare_parameter<double>("yaw_timeout_sec", 30.0);
+    const auto yaw_offset_topic = declare_parameter<std::string>(
+      "yaw_offset_topic", "/flylab/landing_yaw_offset");
 
     DetectorConfig cfg;
     cfg.dict_name = dict_name;
@@ -216,6 +242,14 @@ public:
     tracked_id_pub_ = create_publisher<std_msgs::msg::Int32>(
       tracked_id_topic, 10);
 
+    // ---------- 地面站降落朝向偏置同步 ----------
+    // 右栏面板选择机头相对码 0° 方向的落点朝向 (度, 右正); latched 话题
+    // (订阅端 transient_local, 后启动的节点一接入即收到最近值), 运行中
+    // 修改会解锁已锁定的航向、按新朝向重新对齐
+    yaw_offset_sub_ = create_subscription<std_msgs::msg::Float64>(
+      yaw_offset_topic, rclcpp::QoS(1).reliable().transient_local(),
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_yaw_offset(*msg);});
+
     // ---------- 右栏"算法输出"面板数据 ----------
     // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
     const auto info_topic =
@@ -283,6 +317,11 @@ private:
     ever_offboard_ = false;
     tracked_id_ = -1;      // 重新进入降落流程重新选目标
     lost_id_time_ = 0.0;
+    yaw_locked_ = false;   // 航向重新对齐
+    yaw_count_ = 0;
+    yaw_filt_init_ = false;
+    yaw_last_id_ = -1;
+    yaw_wait_t_ = 0.0;
     trend_angle_ = 90.0;
     positions_.clear();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -362,6 +401,18 @@ private:
     return d.bbox_wh.x * d.tvec[2] / fx;
   }
 
+  /// 码 0° 方向 (OpenCV 角点 c0→c1, 即码图案 x 轴) 在机体系的方位角
+  /// (度, 右正): 图像内平面方向 (0, dx, dy) 经云台姿态旋到机体系取水平
+  /// 方位 —— 与水平对齐同一姿态链, 不假设相机垂直向下。
+  /// 须在 gimbalFresh() 成立时调用 (tickTracking 已保证)
+  double markerYawDeg(const Detection & d) const
+  {
+    const double dx = d.corners[1].x - d.corners[0].x;
+    const double dy = d.corners[1].y - d.corners[0].y;
+    const cv::Point3d b = quat_rot(cam_ori_, 0.0, dx, dy);
+    return std::atan2(b.y, b.x) * 180.0 / M_PI;
+  }
+
   // ---------------- 地面站码边长同步 ----------------
   void on_marker_length(const std_msgs::msg::Float64 & msg)
   {
@@ -374,6 +425,24 @@ private:
     RCLCPP_INFO(
       get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
       msg.data);
+  }
+
+  // ---------------- 地面站降落朝向偏置同步 ----------------
+  void on_yaw_offset(const std_msgs::msg::Float64 & msg)
+  {
+    // 非法值/值未变化跳过
+    if (!std::isfinite(msg.data) || msg.data == yaw_offset_deg_) {
+      return;
+    }
+    yaw_offset_deg_ = msg.data;
+    // 偏置变化即重新对齐: 解锁航向、清滤波与计数 (IDLE 中仅存值)
+    yaw_locked_ = false;
+    yaw_count_ = 0;
+    yaw_filt_init_ = false;
+    yaw_wait_t_ = 0.0;
+    RCLCPP_INFO(
+      get_logger(),
+      "降落朝向偏置同步: %.1f° (来自地面站, 将按新朝向重新对齐)", msg.data);
   }
 
   // ---------------- 地面站视场角同步 ----------------
@@ -665,11 +734,65 @@ private:
       v_down = descendSchedule(area) * far_descend_scale_;
     }
 
+    // ---------------- 航向对齐 (机头 → 码 0° 方向 + 偏置) ----------------
+    // 测量逐帧 EMA 滤波; 目标码切换 (嵌套码接管/重选) 后朝向基准失效,
+    // 复位滤波/计数/锁定按新码重新对齐
+    if (tgt->id != yaw_last_id_) {
+      yaw_last_id_ = tgt->id;
+      yaw_filt_init_ = false;
+      yaw_count_ = 0;
+      yaw_locked_ = false;
+    }
+    double yaw_err = 0.0;
+    bool yaw_turning = false;
+    double yaw_rate = 0.0;
+    if (yaw_align_) {
+      const double e = wrap180(markerYawDeg(*tgt) - yaw_offset_deg_);
+      yaw_err = yaw_filt_init_ ?
+        wrap180(yaw_err_f_ + 0.4 * wrap180(e - yaw_err_f_)) : e;
+      yaw_err_f_ = yaw_err;
+      yaw_filt_init_ = true;
+      if (aligned && !yaw_locked_) {
+        // 水平已对齐: 悬停原位转向 (停降, 防旋转中出画/出位),
+        // 偏差进容差连续 N 帧后锁定, 之后恢复下降
+        v_down = 0.0;
+        if (std::fabs(yaw_err) <= yaw_tol_deg_) {
+          yaw_count_++;
+        } else {
+          yaw_count_ = 0;
+        }
+        if (yaw_count_ >= min_yaw_frames_) {
+          yaw_locked_ = true;
+          RCLCPP_INFO(
+            get_logger(),
+            "\033[32m航向已对齐锁定 (偏差 %.1f°, 偏置 %.0f°), 恢复下降\033[0m",
+            yaw_err, yaw_offset_deg_);
+        } else {
+          yaw_turning = true;
+          yaw_rate = clampd(
+            yaw_gain_ * yaw_err, yaw_rate_max_deg_) * M_PI / 180.0;
+          // 转向悬置超时保护: 长期收敛不了按当前航向继续 (人工介入排查)
+          yaw_wait_t_ += dt;
+          if (yaw_timeout_sec_ > 0.0 && yaw_wait_t_ > yaw_timeout_sec_) {
+            RCLCPP_WARN(
+              get_logger(),
+              "\033[33m航向对齐悬置超时 (%.0fs, 偏差 %.1f°), 放弃对齐继续下降"
+              " (可取消后检查 yaw_gain/容差/码是否被遮挡)\033[0m",
+              yaw_wait_t_, yaw_err);
+            yaw_locked_ = true;   // 仅放行后续流程, 不再重试对齐
+          }
+        }
+      }
+    }
+
     // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应)
     updateTrendAngle(area);
 
-    // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直, 连续 N 帧确认
-    if (aligned && area >= land_area_thresh_ && trend_angle_ < vertical_threshold_deg_) {
+    // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直 + 航向已锁定,
+    // 连续 N 帧确认
+    if (aligned && area >= land_area_thresh_ &&
+      trend_angle_ < vertical_threshold_deg_ && (!yaw_align_ || yaw_locked_))
+    {
       landing_count_++;
     } else {
       landing_count_ = 0;
@@ -685,7 +808,13 @@ private:
       return;
     }
 
-    px4_->sendVelocityFRD(v_fwd, v_right, v_down);
+    if (yaw_turning) {
+      // 悬停原位转向: 水平 P 维持对中 + 偏航角速率 (rad/s, 正=右转),
+      // 零下降速度; yaw 位置设定被屏蔽, 由角速率闭环接管机头
+      px4_->sendVelocityFRDYawRate(v_fwd, v_right, 0.0, yaw_rate);
+    } else {
+      px4_->sendVelocityFRD(v_fwd, v_right, v_down);
+    }
     // 右栏"算法输出"面板: 对齐下降状态摘要 (10Hz 限频)
     if (infoDue(now_t)) {
       const double h = pos.z_valid ? -pos.z : -1.0;
@@ -712,7 +841,16 @@ private:
          << std::setprecision(2)
          << ",\"vel\":[" << v_fwd << ',' << v_right << ',' << v_down << ']'
          << ",\"trigger\":" << landing_count_
-         << ",\"trigger_need\":" << min_landing_frames_ << '}';
+         << ",\"trigger_need\":" << min_landing_frames_;
+      // 航向对齐状态 (面板"航向"行; 未启用不发, 面板显示 '—')
+      if (yaw_align_) {
+        js << ",\"yaw_en\":true"
+           << ",\"yaw_err\":" << yaw_err
+           << std::setprecision(0)
+           << ",\"yaw_off\":" << yaw_offset_deg_
+           << ",\"yaw_locked\":" << (yaw_locked_ ? "true" : "false");
+      }
+      js << '}';
       publishInfo(js.str());
     }
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
@@ -720,11 +858,14 @@ private:
       get_logger(), *get_clock(), 1000,
       "[TRACKING][云台泛化] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
       "对齐误差=%.3f (容差%.3f%s 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
+      "航向=%.1f°(偏置%.0f° %s) "
       "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
       align_err, align_tol_, aligned ? "已对齐" : "未对齐", height_scale,
       trend_angle_, vertical_threshold_deg_,
+      yaw_align_ ? yaw_err : 0.0, yaw_offset_deg_,
+      !yaw_align_ ? "关闭" : (yaw_locked_ ? "已锁定" : (aligned ? "对齐中" : "待对齐")),
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
   }
 
@@ -897,12 +1038,24 @@ private:
   int min_landing_frames_, angle_window_min_, angle_window_max_;
   double lost_timeout_sec_, offboard_warmup_sec_, offboard_retry_sec_, control_hz_;
   double reacquire_sec_;
+  bool yaw_align_;
+  double yaw_offset_deg_, yaw_tol_deg_, yaw_gain_, yaw_rate_max_deg_, yaw_timeout_sec_;
+  int min_yaw_frames_;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长
   int landing_count_ = 0;           // 降落条件连续满足帧数
   double trend_angle_ = 90.0;       // 降落趋势角 (度)
   std::vector<cv::Point3d> positions_;  // 趋势角滑动窗口 (ENU)
+
+  // 航向对齐
+  bool yaw_locked_ = false;         // 航向已锁定 (转 AUTO.LAND 前提之一)
+  int yaw_count_ = 0;               // 航向偏差连续达标帧数
+  double yaw_err_f_ = 0.0;          // 航向偏差 EMA 滤波值 (度)
+  bool yaw_filt_init_ = false;      // 滤波器已初始化 (首帧直通)
+  int yaw_last_id_ = -1;            // 上次测向的目标码 ID (切换复位用)
+  double yaw_wait_t_ = 0.0;         // 转向悬置累计时长 (超时保护)
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr yaw_offset_sub_;
   bool land_confirmed_ = false;     // 已确认 AUTO.LAND (打一次日志)
   bool had_target_ = false;         // 目标捕获/丢失事件日志用
   bool ever_offboard_ = false;      // 本次流程曾进入过 OFFBOARD (判定外部接管用)

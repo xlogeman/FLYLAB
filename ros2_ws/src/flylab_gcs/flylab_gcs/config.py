@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.63, 0.74)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.63, 0.75)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -102,8 +102,19 @@ ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 ARUCO_MARKER_LENGTH_TOPIC = '/flylab/aruco_marker_length'
 ARUCO_MARKER_LENGTH_MIN = 0.1       # 米 (滑杆下限, 与步进对齐保证档位落在整数)
 ARUCO_MARKER_LENGTH_MAX = 2.00      # 米 (滑杆上限)
-ARUCO_MARKER_LENGTH_STEP = 0.1      # 米 (滑杆步进, 拖动按此跳档)
+ARUCO_MARKER_LENGTH_STEP = 0.05     # 米 (滑杆步进, 拖动按此跳档)
 ARUCO_MARKER_LENGTH_DEFAULT = 0.8   # 米 (与 aruco.yaml 默认一致)
+
+# ---------- 降落航向偏置同步 ----------
+# aruco_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的
+# 落点朝向偏置 (度, 右正)。latched 话题: 后启动的节点一接入即拿到当前值;
+# 未动过不发布 (与码边长同步同一约定), 节点用 aruco.yaml 的 yaw_offset_deg。
+# 运行中修改会解锁航向、按新朝向重新对齐。
+LANDING_YAW_OFFSET_TOPIC = '/flylab/landing_yaw_offset'
+LANDING_YAW_OFFSET_MIN = 0         # 度 (下限; 左转用大值表示, 如左 90° = 270)
+LANDING_YAW_OFFSET_MAX = 360       # 度 (上限)
+LANDING_YAW_OFFSET_STEP = 5        # 度 (上下箭头单步)
+LANDING_YAW_OFFSET_DEFAULT = 0     # 度 (初始显示值, 与 aruco.yaml 的 yaw_offset_deg 一致)
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）

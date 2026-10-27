@@ -25,7 +25,7 @@ import time
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QFormLayout, QGroupBox, \
-    QLabel, QSlider
+    QLabel, QSlider, QSpinBox, QWidget
 
 from . import config
 
@@ -83,6 +83,7 @@ def _landing_fields(data):
         '误差': None,
         '占比': None,
         '趋势角': None,
+        '航向': None,
         '速度': None,
         '计数': None,
     }
@@ -101,6 +102,13 @@ def _landing_fields(data):
         out['占比'] = f"{100.0 * data.get('area', 0.0):.1f}%"
         trend = data.get('trend')
         out['趋势角'] = f'{trend:.1f}°' if trend is not None else None
+        if data.get('yaw_en'):
+            if data.get('yaw_locked'):
+                out['航向'] = f"已锁定 (偏置 {data.get('yaw_off', 0.0):.0f}°)"
+            else:
+                out['航向'] = (
+                    f"{data.get('yaw_err', 0.0):+.1f}° "
+                    f"({'对齐中' if data.get('aligned') else '待对齐'})")
         vel = data.get('vel')
         out['速度'] = (
             f'({vel[0]:+.2f}, {vel[1]:+.2f}, {vel[2]:+.2f})' if vel else None)
@@ -139,6 +147,7 @@ SECTIONS = {
             ('占比', lambda d: _landing_fields(d)['占比']),
             ('误差', lambda d: _landing_fields(d)['误差']),
             ('趋势角', lambda d: _landing_fields(d)['趋势角']),
+            ('航向', lambda d: _landing_fields(d)['航向']),
             ('速度', lambda d: _landing_fields(d)['速度']),
             ('计数', lambda d: _landing_fields(d)['计数']),
         ],
@@ -203,7 +212,8 @@ class AlgoOutputPanel(QGroupBox):
     """右栏算法信息面板: set_active() 决定显示哪些分组 (随运行中算法变化),
     refresh() 按各分组最新数据刷新 (33ms 轮询驱动, 内部去重)。"""
 
-    def __init__(self, get_info, set_marker_length=None, parent=None):
+    def __init__(self, get_info, set_marker_length=None,
+                 set_landing_yaw=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -218,6 +228,24 @@ class AlgoOutputPanel(QGroupBox):
         self._marker_box = None
         if set_marker_length is not None:
             self._build_marker_slider(set_marker_length)
+        # 降落朝向选择 (常驻): 机头相对码 0° 方向的落点偏置,
+        # 视觉反控降落时运行中同步 aruco_landing_node yaw_offset_deg
+        self._yaw_box = None
+        if set_landing_yaw is not None:
+            self._build_yaw_spin(set_landing_yaw)
+        # 底部常驻行 (码边长滑杆 + 降落朝向选择并排): 装进一个横向容器,
+        # 整行横跨全部分组列 (见 _relayout); 两者都在才有意义, 单独存在也兼容
+        bottom = None
+        if self._marker_box is not None or self._yaw_box is not None:
+            bottom = QWidget()
+            row = QHBoxLayout(bottom)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            if self._marker_box is not None:
+                row.addWidget(self._marker_box, 2)   # 滑杆占更宽
+            if self._yaw_box is not None:
+                row.addWidget(self._yaw_box, 1)
+        self._bottom_row = bottom
 
     def _build_marker_slider(self, publish):
         """码边长滑杆: 值域/步进取 config; 拖动才发布 (未动过节点用
@@ -257,6 +285,31 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(val)
         self._marker_box = box
 
+    def _build_yaw_spin(self, publish):
+        """降落朝向选择 (QSpinBox): 机头相对码 0° 方向 (码角点 0→1) 的
+        落点朝向偏置 (度, 右正), 修改即发布 (latched); 未动过不发布,
+        节点用 aruco.yaml 的 yaw_offset_deg (与码边长同步同一约定)。
+        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
+        box = QGroupBox('降落朝向偏置 (°)')
+        box.setToolTip(
+            '视觉反控降落时机头相对码 0° 方向 (码角点 0→1, 即码图案 x 轴)\n'
+            '的落点朝向, 右转为正; 0 = 机头对齐码 0° 方向。\n'
+            '运行中修改立即生效: 飞机会悬停转到新朝向再继续下降')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        spin = QSpinBox()
+        spin.setRange(config.LANDING_YAW_OFFSET_MIN, config.LANDING_YAW_OFFSET_MAX)
+        spin.setSingleStep(config.LANDING_YAW_OFFSET_STEP)
+        spin.setSuffix('°')
+        spin.setKeyboardTracking(False)
+        # 初始显示默认值不发 (未动过不发布, 节点用 aruco.yaml 的值;
+        # setValue 放在 connect 之前, 不触发 valueChanged)
+        spin.setValue(config.LANDING_YAW_OFFSET_DEFAULT)
+        spin.valueChanged.connect(publish)
+        lay.addWidget(spin, 1)   # 必须加入布局, 否则游离控件不显示 (此前缺失)
+        self._yaw_spin = spin
+        self._yaw_box = box
+
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除。"""
         for key in list(self._sections):
@@ -286,11 +339,11 @@ class AlgoOutputPanel(QGroupBox):
 
     def _relayout(self):
         """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零;
-        码边长滑杆固定占下方一整行 (横跨全部分组列)。"""
+        底部常驻行 (码边长滑杆 + 降落朝向选择并排) 横跨全部分组列。"""
         for col, key in enumerate(self._order):
             self._lay.addWidget(self._sections[key], 0, col)
         for col in range(self._lay.columnCount()):
             self._lay.setColumnStretch(col, 1 if col < len(self._order) else 0)
-        if self._marker_box is not None:
+        if self._bottom_row is not None:
             self._lay.addWidget(
-                self._marker_box, 1, 0, 1, max(1, self._lay.columnCount()))
+                self._bottom_row, 1, 0, 1, max(1, self._lay.columnCount()))

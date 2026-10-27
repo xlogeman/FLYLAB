@@ -53,7 +53,8 @@ class ControlPanelsMixin:
 
     def _on_landing_toggle(self):
         if self.landing_btn.isChecked():
-            # 反控前自动把云台俯仰打到垂直向下, 省去每次手动调整
+            # 反控前自动摆位: 俯仰垂直向下 + 偏航归中朝向机头 (画面上方
+            # = 机头方向, 对中/对准降落全程方向感一致), 省去每次手动调整
             self.camera_tab.grabber.gimbal_pitch_bottom()
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'

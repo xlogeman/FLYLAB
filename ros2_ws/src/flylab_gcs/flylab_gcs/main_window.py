@@ -145,7 +145,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # (config.ALGORITHMS 的 'panel' 键 + 视觉反控降落); 带码边长滑杆,
         # 拖动经 latched 话题同步 aruco_node / aruco_landing_node
         self.algo_panel = AlgoOutputPanel(
-            self.node.get_aruco_info, self.node.publish_marker_length)
+            self.node.get_aruco_info, self.node.publish_marker_length,
+            self.node.publish_landing_yaw_offset)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         self.setCentralWidget(self.camera_tab)
