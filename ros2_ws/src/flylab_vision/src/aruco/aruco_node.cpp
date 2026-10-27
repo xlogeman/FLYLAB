@@ -177,10 +177,12 @@ private:
   }
 
   /// 右栏"算法输出"面板: 最大码摘要 JSON (10Hz 限频)。
-  /// {"src":"detect","count":N,"largest":{"id","area","w","h","dx","dy","dist","wm"}|null}
+  /// {"src":"detect","count":N,"largest":{"id","area","w","h","dx","dy","dist","wm","tvec"}|null}
   /// area=画面占比, w/h=外接框宽高 (原图像素), dx/dy=中心相对画面中心
   /// 偏移 (归一化, 右/下为正), dist=tvec z 前向距离 (米, 无位姿 -1),
-  /// wm=实际物理宽度 (米, 由像素宽+距离+内参换算, 无位姿 -1)
+  /// wm=实际物理宽度 (米, 由像素宽+距离+内参换算, 无位姿 -1),
+  /// tvec=[x,y,z] 码中心在相机坐标系位置 (x右 y下 z前, 米; 仅 has_pose 时有,
+  /// 否则缺省 —— 地面站显示 '— (无位姿)')
   void publishInfo(double img_w, double img_h, size_t count,
     const Detection * largest)
   {
@@ -206,8 +208,12 @@ private:
          << ",\"dx\":" << (largest->center_norm.x - 0.5)
          << ",\"dy\":" << (largest->center_norm.y - 0.5)
          << ",\"dist\":" << (largest->has_pose ? largest->tvec[2] : -1.0)
-         << ",\"wm\":" << physicalWidth(img_w, *largest)
-         << "}}";
+         << ",\"wm\":" << physicalWidth(img_w, *largest);
+      if (largest->has_pose) {
+        js << ",\"tvec\":[" << largest->tvec[0] << ',' << largest->tvec[1]
+           << ',' << largest->tvec[2] << ']';
+      }
+      js << "}}";
     }
     std_msgs::msg::String out;
     out.data = js.str();

@@ -696,8 +696,13 @@ private:
          << ",\"area\":" << area
          << ",\"w\":" << static_cast<int>(tgt->bbox_wh.x + 0.5)
          << ",\"h\":" << static_cast<int>(tgt->bbox_wh.y + 0.5)
-         << ",\"wm\":" << physicalWidth(*tgt)
-         << ",\"err\":" << align_err
+         << ",\"wm\":" << physicalWidth(*tgt);
+      // 码中心在相机坐标系位置 (x右 y下 z前, 米); 仅 has_pose 时有
+      if (tgt->has_pose) {
+        js << ",\"tvec\":[" << tgt->tvec[0] << ',' << tgt->tvec[1]
+           << ',' << tgt->tvec[2] << ']';
+      }
+      js << ",\"err\":" << align_err
          << ",\"aligned\":" << (aligned ? "true" : "false")
          << ",\"lost\":false"
          << std::setprecision(2)

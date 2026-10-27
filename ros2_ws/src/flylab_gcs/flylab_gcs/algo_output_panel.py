@@ -48,59 +48,65 @@ def _landing_state_text(data):
 
 def _detect_fields(data):
     """aruco_node 最大码摘要 -> {字段名: 文本|None}。"""
-    out = {'最大码': None, '尺寸': None, '画面占比': None, '中心偏移': None,
-           '距离': None, '实际宽度': None,
+    out = {'码号': None, '尺寸': None, '占比': None, '偏移': None,
+           '实宽': None, '位置': None,
            '检出': f"{data.get('count', 0)} 个"}
     largest = data.get('largest')
     if largest:
         dx, dy = largest.get('dx', 0.0), largest.get('dy', 0.0)
-        dist = largest.get('dist', -1.0)
         wm = largest.get('wm', -1.0)
-        out['最大码'] = f"id={largest.get('id', -1)}"
+        out['码号'] = f"id={largest.get('id', -1)}"
         out['尺寸'] = f"{largest.get('w', 0)}x{largest.get('h', 0)}px"
-        out['画面占比'] = f"{100.0 * largest.get('area', 0.0):.1f}%"
-        out['中心偏移'] = f'({dx:+.2f}, {dy:+.2f})'
-        out['距离'] = f'{dist:.2f}m' if dist and dist > 0 else '— (无位姿)'
-        out['实际宽度'] = f'{wm:.2f}m' if wm and wm > 0 else '— (无位姿)'
+        out['占比'] = f"{100.0 * largest.get('area', 0.0):.1f}%"
+        out['偏移'] = f'({dx:+.2f}, {dy:+.2f})'
+        out['实宽'] = f'{wm:.2f}m' if wm and wm > 0 else '— (无位姿)'
+        out['位置'] = _tvec_text(largest)
     return out
+
+
+def _tvec_text(data):
+    """tvec=[x,y,z] (相机系, x右 y下 z前, 米) -> 显示文本; 无位姿返回占位。"""
+    tvec = data.get('tvec')
+    if tvec and len(tvec) == 3:
+        return f'({tvec[0]:+.2f}, {tvec[1]:+.2f}, {tvec[2]:.2f})'
+    return '— (无位姿)'
 
 
 def _landing_fields(data):
     """aruco_landing_node 降落状态 -> {字段名: 文本|None}。"""
     state = data.get('state', 'IDLE')
     out = {
-        '跟踪码': None,
+        '码号': None,
         '尺寸': None,
-        '实际宽度': None,
-        '对齐误差': None,
-        '画面占比': None,
-        '高度': None,
+        '实宽': None,
+        '位置': None,
+        '误差': None,
+        '占比': None,
         '趋势角': None,
         '速度': None,
-        '触发计数': None,
+        '计数': None,
     }
     tid = data.get('tracked_id', -1)
-    out['跟踪码'] = f'id={tid}' if tid >= 0 else None
+    out['码号'] = f'id={tid}' if tid >= 0 else None
     if state == 'TRACKING' and not data.get('lost'):
         w, h_px = data.get('w', 0), data.get('h', 0)
         wm = data.get('wm', -1.0)
         if w and h_px:
             out['尺寸'] = f'{w}x{h_px}px'
-            out['实际宽度'] = f'{wm:.2f}m' if wm and wm > 0 else '— (无位姿)'
-        out['对齐误差'] = (
+            out['实宽'] = f'{wm:.2f}m' if wm and wm > 0 else '— (无位姿)'
+        out['位置'] = _tvec_text(data)
+        out['误差'] = (
             f"{data.get('err', 0.0):.3f} "
             f"({'达标' if data.get('aligned') else '未达标'})")
-        out['画面占比'] = f"{100.0 * data.get('area', 0.0):.1f}%"
+        out['占比'] = f"{100.0 * data.get('area', 0.0):.1f}%"
         trend = data.get('trend')
         out['趋势角'] = f'{trend:.1f}°' if trend is not None else None
         vel = data.get('vel')
         out['速度'] = (
             f'({vel[0]:+.2f}, {vel[1]:+.2f}, {vel[2]:+.2f})' if vel else None)
         need = data.get('trigger_need', 0)
-        out['触发计数'] = (
+        out['计数'] = (
             f"{data.get('trigger', 0)}/{need}" if need else None)
-    height = data.get('height', -1.0)
-    out['高度'] = f'{height:.2f}m' if height and height > 0 else None
     return out
 
 
@@ -111,12 +117,12 @@ SECTIONS = {
     'detect': {
         'title': 'ArUco 检测',
         'fields': [
-            ('最大码', lambda d: _detect_fields(d)['最大码']),
+            ('码号', lambda d: _detect_fields(d)['码号']),
             ('尺寸', lambda d: _detect_fields(d)['尺寸']),
-            ('实际宽度', lambda d: _detect_fields(d)['实际宽度']),
-            ('画面占比', lambda d: _detect_fields(d)['画面占比']),
-            ('中心偏移', lambda d: _detect_fields(d)['中心偏移']),
-            ('距离', lambda d: _detect_fields(d)['距离']),
+            ('实宽', lambda d: _detect_fields(d)['实宽']),
+            ('位置', lambda d: _detect_fields(d)['位置']),
+            ('占比', lambda d: _detect_fields(d)['占比']),
+            ('偏移', lambda d: _detect_fields(d)['偏移']),
             ('检出', lambda d: _detect_fields(d)['检出']),
         ],
     },
@@ -126,15 +132,15 @@ SECTIONS = {
         'title_fn': lambda d: (
             'ArUco 降落 · ' + _landing_state_text(d)) if d else 'ArUco 降落',
         'fields': [
-            ('跟踪码', lambda d: _landing_fields(d)['跟踪码']),
+            ('码号', lambda d: _landing_fields(d)['码号']),
             ('尺寸', lambda d: _landing_fields(d)['尺寸']),
-            ('实际宽度', lambda d: _landing_fields(d)['实际宽度']),
-            ('画面占比', lambda d: _landing_fields(d)['画面占比']),
-            ('对齐误差', lambda d: _landing_fields(d)['对齐误差']),
-            ('高度', lambda d: _landing_fields(d)['高度']),
+            ('实宽', lambda d: _landing_fields(d)['实宽']),
+            ('位置', lambda d: _landing_fields(d)['位置']),
+            ('占比', lambda d: _landing_fields(d)['占比']),
+            ('误差', lambda d: _landing_fields(d)['误差']),
             ('趋势角', lambda d: _landing_fields(d)['趋势角']),
             ('速度', lambda d: _landing_fields(d)['速度']),
-            ('触发计数', lambda d: _landing_fields(d)['触发计数']),
+            ('计数', lambda d: _landing_fields(d)['计数']),
         ],
     },
 }
@@ -155,7 +161,7 @@ class _Section(QGroupBox):
         self._extracts = []
         self._vals = []
         for lbl, extract in self._fields:
-            key = QLabel(lbl + ':')
+            key = QLabel(lbl + '：')
             val = QLabel('—')
             val.setStyleSheet('font-family: monospace;')
             form.addRow(key, val)
@@ -221,7 +227,8 @@ class AlgoOutputPanel(QGroupBox):
         box = QGroupBox('ArUco 码边长 (m)')
         box.setToolTip(
             '场景含多种尺寸码时拖动同步算法节点; 先把码摆到已知距离,\n'
-            '调到面板"实际宽度"≈码的真实边长, 此时"距离"显示即准确')
+            "调到面板\"实际宽度\"≈码的真实边长, 此时\"码位置\"\n"
+            '的 z 分量 (末位) 即准确距离')
         lay = QHBoxLayout(box)
         lay.setContentsMargins(6, 2, 6, 4)
         lo_cm = int(round(config.ARUCO_MARKER_LENGTH_MIN * 100))
