@@ -72,6 +72,11 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 视频源视图 (画面/底部日志框挂载点/右栏挂载点)
         self.camera_tab = CameraViewWidget(
             self.log.info, host, config.AIRSIM_RPC_PORT, side_panel=True)
+        # 航向跟随的算法通道转发 (反控算法 → 云台指令/跟随请求, 通道约定
+        # 见 config; 回调在 GUI 线程执行, 复用摇杆速率通道的锁)
+        self.node.set_gimbal_algo_forwarders(
+            self.camera_tab.grabber.note_algo_cmd,
+            self.camera_tab.grabber.set_algo_follow)
 
         # 日志框: TeeLogger 分流先挂上, 后续所有日志都能上屏
         self.log_panel = LogPanel()
@@ -247,6 +252,10 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._cam_ori_last = now_mono
             self.node.publish_cam_orientation(
                 self.camera_tab.grabber.get_cam_orientation())
+            # 航向跟随误差 (10Hz, latched): 反控算法据此注入自身偏航角
+            # 速率 (未跟随/过期发 NaN, 算法侧不注入)
+            self.node.publish_gimbal_yaw_err(
+                self.camera_tab.grabber.get_follow_error())
         # 视场角同步: 用户调整过 FOV 时变化即发布 (滑杆拖动靠轮询节流);
         # 未调整过时抓取线程连上 AirSim 后已采纳相机真实 FOV (见
         # Grabber._adopt_camera_fov), 这里照常发布, ArUco 等算法节点启动即同步

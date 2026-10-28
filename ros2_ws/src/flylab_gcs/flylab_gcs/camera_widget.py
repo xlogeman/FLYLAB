@@ -194,6 +194,20 @@ class CameraViewWidget(QWidget):
             '(FPV 手感)')
         btn_stab.toggled.connect(self.grabber.set_gimbal_stab)
 
+        btn_follow = QPushButton('跟随')
+        btn_follow.setFixedWidth(40)
+        btn_follow.setCheckable(True)
+        btn_follow.setEnabled(False)   # 可用性由接管控制门控刷新 (遥控接管中)
+        btn_follow.setStyleSheet(
+            'QPushButton:checked { background-color: #2d8a3e; color: white; }')
+        btn_follow.setToolTip(
+            '航向跟随: 转动云台偏航时机头跟着转向视线方向, 追上后云台偏航'
+            '自动回中 (限位变为最大超前角)。需先开启通信链路并接管手动遥控'
+            ' (指令走遥控 offboard 通道); 反控降落中不可用')
+        btn_follow.toggled.connect(self._on_follow_toggle)
+        self.btn_follow = btn_follow
+        self._follow_avail = False
+
         self.gimbal = QWidget()
         g = QGridLayout(self.gimbal)
         g.setContentsMargins(0, 0, 0, 0)
@@ -214,6 +228,7 @@ class CameraViewWidget(QWidget):
         side = QVBoxLayout()
         side.addWidget(btn_center)
         side.addWidget(btn_stab)
+        side.addWidget(btn_follow)
         side.addStretch(1)
         g.addLayout(side, 1, 1)
         angles = QHBoxLayout()
@@ -274,9 +289,22 @@ class CameraViewWidget(QWidget):
         self._zoom_sync_label(self.zoom_slider.value() / 100.0)
 
     def _on_gimbal_joy(self, x, y):
-        """云台摇杆偏转 → 角速度 (x=偏航右+, y=俯仰上+), 回中即停。"""
+        """云台摇杆偏转 → 角速度 (x=偏航右+, y=俯仰上+), 回中即停。
+        航向跟随中偏航分量由抓取线程改写世界方位锚点带动机头。"""
         rate = config.GIMBAL_JOY_RATE_DEG_S
         self.grabber.gimbal_set_rate(x * rate, y * rate)
+
+    def _on_follow_toggle(self, on):
+        """跟随开关 → 抓取线程 (方位锚点快照/冻结由其处理)。"""
+        self.grabber.set_follow(on)
+
+    def set_follow_available(self, ok):
+        """跟随按钮可用性 (接管控制 33ms 轮询门控): 需手动遥控接管中。
+        父面板置灰 (反控锁云台) 时按钮随父级, 解锁后按本标志恢复。"""
+        if ok == self._follow_avail:
+            return
+        self._follow_avail = ok
+        self.btn_follow.setEnabled(ok)
 
     def _on_fov_slider(self, value):
         """视场滑杆变化 → 下发 FOV (拖动中实时跟手, 节流靠抓取帧率)。
@@ -427,6 +455,11 @@ class CameraViewWidget(QWidget):
             self._gimbal_labels['yaw'].setText(f'航向 {yaw:+.0f}°')
             self._gimbal_labels['pitch'].setText(f'俯仰 {pitch:+.0f}°')
             self._update_gimbal_limit()
+            # 跟随按钮随抓取线程状态同步 (重连等外部因素强制退出时弹起)
+            if self.btn_follow.isChecked() != self.grabber.get_follow():
+                self.btn_follow.blockSignals(True)
+                self.btn_follow.setChecked(self.grabber.get_follow())
+                self.btn_follow.blockSignals(False)
             # 视场滑杆跟随当前相机 FOV; 用户拖动中不回写
             fov = self.grabber.get_fov()
             if fov is not None and not self.fov_slider.isSliderDown():

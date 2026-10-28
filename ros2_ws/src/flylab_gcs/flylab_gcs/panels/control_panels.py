@@ -52,6 +52,12 @@ class ControlPanelsMixin:
         self._set_btn_on(self.takeover_btn,
                          self.landing_act.isChecked()
                          or self.teleop_act.isChecked())
+        # 航向跟随按钮: 仅手动遥控接管成功 (offboard 通道可用) 且 AirSim
+        # 源在线时可开; 反控中云台父面板整体置灰, 此处只管按钮自身
+        follow_ok = (self._teleop_live
+                     and self.camera_tab.grabber.airsim_connected()
+                     and self.camera_tab.grabber.get_gimbal() is not None)
+        self.camera_tab.set_follow_available(follow_ok)
 
     def _on_landing_toggle(self):
         if self.landing_act.isChecked():
@@ -134,7 +140,8 @@ class ControlPanelsMixin:
     # ---------- 手动遥控 (执行节点 flylab_vision/teleop_node, 右栏双摇杆) ----------
 
     def _build_teleop_panel(self):
-        """右栏摇杆遥控板: 只放双摇杆 (开关在工具栏 接管控制 菜单)。"""
+        """右栏摇杆遥控板: 只放双摇杆 (开关在工具栏 接管控制 菜单)。
+        同时启动航向跟随外环定时器 (云台偏航误差 → 偏航角速率并入遥控量)。"""
         box = QGroupBox('手动遥控')
         box.setToolTip('开启方式: 工具栏 接管控制 → 手动遥控 '
                        '(需先开启通信链路)')
@@ -167,19 +174,51 @@ class ControlPanelsMixin:
         lay.addLayout(pads)
         for w in self._teleop_widgets:   # 默认置灰, 接管后解锁
             w.setEnabled(False)
+        # 航向跟随外环 (云台面板"跟随"开关, 见 camera_widget): 25Hz P 律,
+        # 指令并入 _teleop_publish 的 w 轴; _teleop_live 标记遥控接管中
+        self._follow_cmd = 0.0
+        self._teleop_live = False
+        self._follow_timer = QTimer(self)
+        self._follow_timer.timeout.connect(self._follow_tick)
+        self._follow_timer.start(int(round(1000.0 / config.GIMBAL_FOLLOW_HZ)))
         return box
+
+    def _follow_tick(self):
+        """航向跟随外环 (GIMBAL_FOLLOW_HZ, 界面定时器): 误差 = 反卷后的
+        云台偏航 (视线世界方位 − 航向, 右+), 死区外按 P 律折算偏航角速率,
+        归一化后并入遥控量 angular.z (符号取反: teleop 左转+)。内环是
+        teleop_node/PX4 的偏航角速率闭环。未接管遥控 / 数据过期发零
+        (跟随开关本身只在接管中可开, 这里兜底复位残留指令)。"""
+        cmd = 0.0
+        if self._teleop_live:
+            err = self.camera_tab.grabber.get_follow_error()
+            if err is not None and abs(err) > config.GIMBAL_FOLLOW_DEADBAND_DEG:
+                rate = min(abs(err) * config.GIMBAL_FOLLOW_KP,
+                           config.GIMBAL_FOLLOW_YAW_RATE_DEG_S)
+                cmd = -(rate / config.GIMBAL_FOLLOW_YAW_RATE_DEG_S) \
+                    * (1.0 if err > 0 else -1.0)
+        if cmd != self._follow_cmd:
+            self._follow_cmd = cmd
+            self._teleop_publish()
 
     def _teleop_axis(self, key, val):
         """更新单轴归一化量并立即下发 (摇杆拖动中实时跟手)。"""
         if not self.teleop_act.isChecked():
             return
         self._teleop_axes[key] = val
-        a = self._teleop_axes
-        self.node.publish_teleop_twist(a['x'], a['y'], a['z'], a['w'])
+        self._teleop_publish()
+
+    def _teleop_publish(self):
+        """合并下发遥控量: 双摇杆四轴 + 航向跟随偏航指令 (取和夹紧),
+        统一出口防止两个输入源互相覆盖。"""
+        a, f = self._teleop_axes, self._follow_cmd
+        w = max(-1.0, min(1.0, a['w'] + f))
+        self.node.publish_teleop_twist(a['x'], a['y'], a['z'], w)
 
     def _teleop_clear_axes(self):
         """界面侧全部回中 (交还/复位时调用), 防止残留遥控量。
         摇杆 reset 会经 changed 信号回写各轴, 最后统一发零。"""
+        self._follow_cmd = 0.0
         self._teleop_joy_l.reset()
         self._teleop_joy_r.reset()
         for key in self._teleop_axes:
@@ -256,6 +295,11 @@ class ControlPanelsMixin:
     def _set_teleop_controls_enabled(self, enabled):
         for w in self._teleop_widgets:
             w.setEnabled(enabled)
+        self._teleop_live = enabled   # 跟随外环只在接管成功 (engaged) 后工作
+        if not enabled:
+            # 交还/复位只退 UI 来源的跟随; 算法来源 (反控请求) 不受
+            # 遥控生命周期影响, 由算法自己退或 gimbal_cmd 心跳超时退
+            self.camera_tab.grabber.clear_ui_follow()
 
     # ---------- 接管控制 (工具栏下拉菜单 = 视觉反控 + 手动遥控) ----------
 

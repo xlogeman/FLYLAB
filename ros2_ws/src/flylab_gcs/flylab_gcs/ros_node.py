@@ -14,7 +14,7 @@ from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Bool, Float64, Float64MultiArray, String
 
 from . import config
 from .overlay import parse_message
@@ -230,6 +230,30 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.TELEOP_STATUS_TOPIC, self._teleop_status_cb, 10)
 
+        # 航向跟随的算法通道 (反控算法控制云台 + 机头跟随, 通道约定见
+        # config): offboard 单写者原则下, 反控期间的偏航指令由算法节点
+        # 自己注入, 地面站只提供师资与云台控制权。抓取器在界面侧构造,
+        # 由界面经 set_gimbal_algo_forwarders() 挂转发槽
+        self._gimbal_cmd_sink = None
+        self._gimbal_follow_sink = None
+        self.create_subscription(
+            Float64MultiArray, config.GIMBAL_CMD_TOPIC, self._gimbal_cmd_cb, 10)
+        self.create_subscription(
+            Bool, config.GIMBAL_FOLLOW_REQ_TOPIC, self._gimbal_follow_cb, 10)
+
+        # 跟随误差广播 (latched): 反卷后的云台偏航 (视线世界方位 − 航向,
+        # 右+; NaN=未跟随)。算法订阅后 yaw_rate = KP × err 注入自身
+        # sendVelocityFRDYawRate 即完成跟随接入, 后启动的节点一接入即
+        # 拿到当前值
+        self.gimbal_yaw_err_pub = self.create_publisher(
+            Float64, config.GIMBAL_YAW_ERR_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+        self._yaw_err_last = float('nan')
+        self._yaw_err_was_none = True
+
     def get_logger(self):
         """覆盖 Node.get_logger: 返回分流日志器 (终端照常 + 界面日志框)。"""
         return self._tee_logger
@@ -274,6 +298,49 @@ class GroundStationNode(Node):
     def get_teleop_status(self):
         """返回 (最新遥控状态, 事件序号); 序号变化 = 有新状态事件。"""
         return self._teleop_status, self._teleop_status_seq
+
+    # ---------- 航向跟随的算法通道 ----------
+
+    def set_gimbal_algo_forwarders(self, cmd_sink, follow_sink):
+        """界面注册算法通道转发槽 (抓取器方法, 回调在 GUI 线程执行):
+        cmd_sink(yaw_rate, pitch_rate) / follow_sink(on)。"""
+        self._gimbal_cmd_sink = cmd_sink
+        self._gimbal_follow_sink = follow_sink
+
+    def _gimbal_cmd_cb(self, msg):
+        """算法云台指令 [yaw_rate, pitch_rate] (°/s): 转发抓取器 (复用
+        摇杆速率通道与限位标红); 同时兼作算法 follow 的心跳。"""
+        if self._gimbal_cmd_sink is None or not msg.data:
+            return
+        data = list(msg.data)
+        self._gimbal_cmd_sink(float(data[0]),
+                              float(data[1]) if len(data) > 1 else 0.0)
+
+    def _gimbal_follow_cb(self, msg):
+        """算法跟随请求 (Bool): 转发抓取器开/关相机侧反卷。"""
+        if self._gimbal_follow_sink is None:
+            return
+        self._gimbal_follow_sink(bool(msg.data))
+        self.get_logger().info(
+            f'航向跟随请求 (算法来源): {"开启" if msg.data else "关闭"}')
+
+    def publish_gimbal_yaw_err(self, err):
+        """广播航向跟随误差 (度, 右+); err=None (未跟随/测量过期) 发 NaN。
+        变化才发布 (NaN 态只发一次); latched 让后启动的算法即拿当前值。"""
+        if err is None:
+            if self._yaw_err_was_none:
+                return
+            self._yaw_err_was_none = True
+            self._yaw_err_last = float('nan')
+        else:
+            val = float(err)
+            if not self._yaw_err_was_none and val == self._yaw_err_last:
+                return
+            self._yaw_err_was_none = False
+            self._yaw_err_last = val
+        m = Float64()
+        m.data = self._yaw_err_last
+        self.gimbal_yaw_err_pub.publish(m)
 
     def _anno_cb(self, msg):
         parsed = parse_message(msg.data)

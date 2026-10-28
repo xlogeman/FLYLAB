@@ -58,6 +58,32 @@ GIMBAL_YAW_LIMIT_DEG = 45.0      # 偏航 ±45°
 GIMBAL_PITCH_MIN_DEG = -90.0     # 俯仰下限 (垂直向下)
 GIMBAL_PITCH_MAX_DEG = 90.0      # 俯仰上限 (垂直向上)
 
+# ---------- 航向跟随 (云台偏航带动机头转向视线方向) ----------
+# 双环: 外环在地面站 —— 误差 = 反卷后的云台偏航 (视线世界方位 − 航向),
+# P 律转成偏航角速率并入遥控量 angular.z (走手动遥控 offboard 通道);
+# 内环是 PX4 偏航角速率闭环 (teleop_node sendVelocityFRDYawRate)。
+# 相机侧由抓取线程反卷: 航向转动多少, 存储的云台偏航就回卷多少,
+# 视线钉在世界系, 航向追上视线时云台偏航自然回中。
+# 前提: 通信链路已开 + 手动遥控接管中 (云台面板"跟随"按钮随之解锁)。
+GIMBAL_FOLLOW_HZ = 25.0                # 外环频率 (Hz, 界面定时器)
+GIMBAL_FOLLOW_KP = 0.8                 # P 增益 (1/s): 满速率对应误差 ≈ 速率/KP
+GIMBAL_FOLLOW_DEADBAND_DEG = 2.0       # 死区: 悬停姿态噪声不触发无限微转
+GIMBAL_FOLLOW_YAW_RATE_DEG_S = 30.0    # 偏航角速率上限 (须 = teleop yaw_rate_deg)
+GIMBAL_FOLLOW_FRESH_SEC = 0.5          # 航向测量新鲜度上限 (过期按误差 0 停转)
+
+# ---------- 航向跟随的算法通道 (视觉反控算法控制云台 + 机头跟随) ----------
+# offboard 单写者原则: 反控节点独占 setpoint 流时, 跟随指令必须由算法
+# 节点自己注入 (sendVelocityFRDYawRate), GCS 不再经 teleop 发偏航量。
+# 地面站只提供师资与云台控制权, 三个话题 (未来反控算法按需接入):
+#   gimbal_cmd    算法 → 云台 [yaw_rate, pitch_rate] (°/s), 兼作 follow 心跳
+#   gimbal_follow 算法请求相机侧反卷 (世界锁定 + 误差收敛回中), std_msgs/Bool
+#   gimbal_yaw_err 地面站广播反卷后的偏航误差 (度, 右+; NaN=未跟随),
+#                  latched —— 算法订阅后 yaw_rate = KP × err 即完成接入
+GIMBAL_CMD_TOPIC = '/flylab/gimbal_cmd'
+GIMBAL_FOLLOW_REQ_TOPIC = '/flylab/gimbal_follow'
+GIMBAL_YAW_ERR_TOPIC = '/flylab/gimbal_yaw_err'
+GIMBAL_FOLLOW_ALGO_TIMEOUT_SEC = 1.0   # 算法 follow 心跳超时 (gimbal_cmd 断流自动退)
+
 # ---------- 数字变焦 (显示层中心裁切, 不改 UE 相机 FOV) ----------
 # 在抓取层实现（裁切 1/z 后放回原分辨率），图传/转发/算法标注同一像素系。
 # 云台面板竖滑杆 / 滚轮步进 / 双击复位
