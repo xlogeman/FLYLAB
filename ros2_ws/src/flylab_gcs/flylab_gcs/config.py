@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.63, 0.75)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.63, 0.72)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致

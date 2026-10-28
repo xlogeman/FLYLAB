@@ -12,9 +12,3 @@ TOOL_BTN_STYLE = """
     QToolButton[on="true"] { background-color: #2d8a3e; color: white;
                              border-color: #2d8a3e; }
 """
-
-# QPushButton toggle 型 (手动遥控开关)
-LAND_BTN_STYLE = """
-    QPushButton { min-height: 32px; }
-    QPushButton:checked { background-color: #b03030; color: white; }
-"""

@@ -42,7 +42,7 @@ class FlightPanelMixin:
         menu.clear()
         cur = self.running_flight['name'] if self.running_flight else None
         link_ok = (self._selected_link() is not None
-                   and not self.teleop_btn.isChecked())
+                   and not self.teleop_act.isChecked())
         for link in config.FLIGHT_LINKS:
             act = menu.addAction(link['name'])
             act.setData(link['name'])

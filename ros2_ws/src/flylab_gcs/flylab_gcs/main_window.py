@@ -15,14 +15,14 @@
     panels/vehicle_panel.py  飞行控制命令菜单 (AirSim RPC 直发)
     panels/algo_panel.py     视觉算法启停
     panels/flight_panel.py   飞行链路一键 launch
-    panels/control_panels.py 视觉反控 (ArUco 降落) + 手动遥控 (offboard 互斥门控)
+    panels/control_panels.py 接管控制菜单 (视觉反控 ArUco降落 + 手动遥控 offboard 互斥门控)
   main_window.py      本文件: 工具栏/面板组装 + 33ms 轮询调度 + 门控汇总
 
 界面结构:
   顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 /
-  视觉算法 / 飞行链路 / 视觉反控, 全部下拉或 toggle 交互
+  视觉算法 / 飞行链路 / 接管控制, 全部下拉或 toggle 交互
   左侧画面 + 底部日志框 (camera_widget 内部布局)
-  右栏: 航线地图 + 罗盘 → 云台 (视场/变焦) → 手动遥控 (双摇杆)
+  右栏: 航线地图 + 罗盘 → 云台 (视场/变焦) → 手动遥控双摇杆
 """
 import os
 import time
@@ -61,7 +61,6 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
 
     # 工具栏按钮样式 (mixin 引用, 常量本体见 panels/ui_style.py)
     _TOOL_BTN_STYLE = ui_style.TOOL_BTN_STYLE
-    _LAND_BTN_STYLE = ui_style.LAND_BTN_STYLE
 
     def __init__(self, node):
         super().__init__()
@@ -126,7 +125,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.toolbar.addWidget(self._build_link_button())
         self.toolbar.addWidget(self._build_algo_button())
         self.toolbar.addWidget(self._build_flight_button())
-        self.toolbar.addWidget(self._build_landing_button())
+        self.toolbar.addWidget(self._build_takeover_button())
         self.addToolBar(self.toolbar)
 
         # 右栏布局 (自上而下): 航线地图 + 罗盘并排一行 → 云台 (视场角
@@ -197,7 +196,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         track, home = self.veh_ctrl.get_track()
         self.map_view.update_state(track, home, tele.get('hdg') or 0.0)
         # 标注门控: 仅算法运行中或降落进行中时显示, 其余情况清掉过期标注
-        if self.running_algo is None and not self.landing_btn.isChecked():
+        if self.running_algo is None and not self.landing_act.isChecked():
             if self.node.get_annotations():
                 self.node.clear_annotations()
             annos = []
@@ -216,7 +215,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             active.append(self.running_algo['panel'])
             if self.running_algo.get('enables_landing'):
                 active.append('landing')
-        if self.landing_btn.isChecked():
+        if self.landing_act.isChecked():
             active.append('landing')
         self.algo_panel.set_active(active)
         self.algo_panel.refresh()
@@ -227,16 +226,16 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 飞行控制按钮: 需 PX4 已启动 + RPC 已连通, 且未被遥控/视觉反控
         # 接管 (offboard 期间飞控命令会打断接管); 飞行中未被接管时点亮
         veh_ok = (self.px4.is_running() and self.veh_ctrl.is_connected()
-                  and not self.teleop_btn.isChecked()
-                  and not self.landing_btn.isChecked())
+                  and not self.teleop_act.isChecked()
+                  and not self.landing_act.isChecked())
         if self.veh_btn.isEnabled() != veh_ok:
             self.veh_btn.setEnabled(veh_ok)
         self._set_btn_on(self.veh_btn, veh_ok and self.veh_ctrl.is_flying()
-                         and not self.teleop_btn.isChecked()
-                         and not self.landing_btn.isChecked())
-        self._check_landing_status()  # 降落结果反馈 (成功/中止 → 按钮弹起)
-        self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 按钮与摇杆联动)
-        self._update_landing_btn()   # 降落(视觉反控)/遥控互斥门控
+                         and not self.teleop_act.isChecked()
+                         and not self.landing_act.isChecked())
+        self._check_landing_status()  # 降落结果反馈 (成功/中止 → 菜单项弹起)
+        self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 菜单项与摇杆联动)
+        self._update_takeover_gates()   # 降落(视觉反控)/遥控互斥门控
         # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
         if config.DISPLAY_IMAGE_HZ > 0:
             self._publish_display_frame()
@@ -288,10 +287,10 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._stop_algo()
         if self.running_flight is not None:
             self._stop_flight()          # 链路随地面站退出一并回收
-        if self.landing_btn.isChecked():
+        if self.landing_act.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
         self.land_proc.stop()
-        if self.teleop_btn.isChecked():
+        if self.teleop_act.isChecked():
             self.node.publish_cmd(config.TELEOP_STOP_CMD)   # 交还控制权再回收
         self.teleop_proc.stop()
         self._stop_px4()             # PX4 SITL 随地面站退出一并回收

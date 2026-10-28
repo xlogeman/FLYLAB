@@ -93,9 +93,9 @@ class AlgoPanelMixin:
         self.running_algo = None
         self._update_algo_state()   # 文字复位 + 熄灭状态灯
         # ArUco检测停止时视觉反控 (降落) 失去输入源, 自动一并取消
-        if algo.get('enables_landing') and self.landing_btn.isChecked():
+        if algo.get('enables_landing') and self.landing_act.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
-            self.landing_btn.setChecked(False)
+            self.landing_act.setChecked(False)
 
     def _reset_algo(self):
         """算法异常退出时复位状态 (不重复发停止指令)。"""

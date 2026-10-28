@@ -1,58 +1,63 @@
 #!/usr/bin/env python3
-"""视觉反控 (ArUco 降落) + 手动遥控面板 (MainWindow 的功能域 mixin)。
+"""接管控制下拉菜单 (视觉反控 + 手动遥控) 面板 (MainWindow 的功能域 mixin)。
 
 两者都走 offboard, 门控逻辑互相咬合 (互斥 + 遥控最高优先防炸机出口),
-故放在同一模块。样式常量 _TOOL_BTN_STYLE/_LAND_BTN_STYLE 定义在
-main_window (ui_style.py)。
+故放在同一模块。菜单项为常驻 QAction (勾选 = 运行中, 再点取消),
+门控状态由 33ms 轮询落在 QAction 的 enabled 上, 菜单展开即见最新。
+样式常量 _TOOL_BTN_STYLE 定义在 main_window (ui_style.py)。
 """
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QPushButton,
-                           QToolButton, QVBoxLayout)
+from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QMenu, QToolButton,
+                           QVBoxLayout)
 
 from .. import config
 from ..teleop_pad import VirtualJoystick
 
 
 class ControlPanelsMixin:
-    """MainWindow 的视觉反控 + 手动遥控功能域 (self.* 为主窗口属性)。"""
+    """MainWindow 的接管控制功能域 (self.* 为主窗口属性)。"""
 
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
-    def _update_landing_btn(self):
-        """offboard 功能互斥门控 (33ms 轮询):
+    def _update_takeover_gates(self):
+        """offboard 功能互斥门控 (33ms 轮询), 门控结果落在菜单项上:
         - 视觉反控: 需已解锁升空 + ArUco检测运行中 + AirSim 源 + 链路已开;
           进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口)
-        - 遥控: 仅需链路已开; 进行中锁链路与视觉反控"""
+        - 遥控: 仅需链路已开; 进行中仍可点视觉反控 (先取消遥控再反控)
+        同时维护接管按钮的状态灯 (任一功能运行中点亮)。"""
         link_ok = self._selected_link() is not None
-        # 进行中的按钮自身必须保持可点 (否则无法取消), 只锁定其余项
-        if self.teleop_btn.isChecked():
-            self.link_btn.setEnabled(False)
-            self.landing_btn.setEnabled(False)
-            self.camera_tab.set_gimbal_locked(False)
-            return
-        if self.landing_btn.isChecked():
-            self.link_btn.setEnabled(False)
-            self.camera_tab.set_gimbal_locked(True)
-            # 反控中允许开遥控抢回控制权 (防炸机): 接管时自动取消反控
-            if self.teleop_btn.isEnabled() != link_ok:
-                self.teleop_btn.setEnabled(link_ok)
-            return
-        self.camera_tab.set_gimbal_locked(False)
-        self.link_btn.setEnabled(True)
-        if self.teleop_btn.isEnabled() != link_ok:
-            self.teleop_btn.setEnabled(link_ok)
-        ok = False
+        # 视觉反控的完整门控条件 (进行中恒可点以便取消)
+        landing_ok = False
         algo = self.running_algo
         if algo is not None and algo.get('enables_landing') and link_ok:
             # 需已解锁且在空中 (地面/未解锁点反控无意义); 俯仰由点击时
             # 自动打到垂直向下, 只要求 AirSim 源 (有云台)
-            ok = (self.veh_ctrl.is_flying()
-                  and self.camera_tab.grabber.get_gimbal() is not None)
-        if self.landing_btn.isEnabled() != ok:
-            self.landing_btn.setEnabled(ok)
+            landing_ok = (self.veh_ctrl.is_flying()
+                          and self.camera_tab.grabber.get_gimbal() is not None)
+        if self.teleop_act.isChecked():
+            self.link_btn.setEnabled(False)
+            self.camera_tab.set_gimbal_locked(False)
+            # 遥控中仍可点视觉反控: 接管时自动取消遥控
+            self.landing_act.setEnabled(landing_ok)
+        elif self.landing_act.isChecked():
+            self.link_btn.setEnabled(False)
+            self.camera_tab.set_gimbal_locked(True)
+            # 反控中允许开遥控抢回控制权 (防炸机): 接管时自动取消反控
+            self.teleop_act.setEnabled(link_ok)
+        else:
+            self.camera_tab.set_gimbal_locked(False)
+            self.link_btn.setEnabled(True)
+            self.teleop_act.setEnabled(link_ok)
+            self.landing_act.setEnabled(landing_ok)
+        self._set_btn_on(self.takeover_btn,
+                         self.landing_act.isChecked()
+                         or self.teleop_act.isChecked())
 
     def _on_landing_toggle(self):
-        if self.landing_btn.isChecked():
+        if self.landing_act.isChecked():
+            # 反控接管优先: 先取消遥控, 节点交还 offboard 后反控再接管
+            if self.teleop_act.isChecked():
+                self.teleop_act.setChecked(False)
             # 反控前自动摆位: 俯仰垂直向下 + 偏航归中朝向机头 (画面上方
             # = 机头方向, 对中/对准降落全程方向感一致), 省去每次手动调整
             self.camera_tab.grabber.gimbal_pitch_bottom()
@@ -64,7 +69,7 @@ class ControlPanelsMixin:
             # 节点对重复 start 幂等
             QTimer.singleShot(1000, lambda: self._send_landing_start(6))
         else:
-            self.landing_btn.setText('视觉反控')
+            self.takeover_btn.setText('接管控制')
             self._stop_landing()
 
     def _check_landing_status(self):
@@ -78,10 +83,10 @@ class ControlPanelsMixin:
         if not status:
             return
         if status == 'tracking':
-            self.landing_btn.setText('反控中: 对准下降')
+            self.takeover_btn.setText('接管控制: 对准下降')
             return
         if status == 'landing':
-            self.landing_btn.setText('反控中: 自动降落')
+            self.takeover_btn.setText('接管控制: 自动降落')
             return
         if status == 'landed':
             self.log.info('\033[32mArUco 视觉降落完成, 飞机已上锁\033[0m')
@@ -90,22 +95,22 @@ class ControlPanelsMixin:
             self.log.info('降落流程已结束 (取消/中止), 按钮已复位')
         else:
             return
-        # 按钮弹起 (checked = 降落进行中) + 文字复位 + 回收降落节点进程
-        self.landing_btn.setChecked(False)
-        self.landing_btn.setText('视觉反控')
+        # 菜单项弹起 (checked = 降落进行中) + 文字复位 + 回收降落节点进程
+        self.landing_act.setChecked(False)
+        self.takeover_btn.setText('接管控制')
         self.land_proc.stop()
 
     def _flash_landing_btn(self, color):
         """按钮背景色闪烁提示, 1.5s 后恢复原样式。"""
-        self.landing_btn.setStyleSheet(
+        self.takeover_btn.setStyleSheet(
             self._TOOL_BTN_STYLE +
             f'\nQToolButton {{ background-color: {color}; color: white; }}')
-        QTimer.singleShot(1500, lambda: self.landing_btn.setStyleSheet(
+        QTimer.singleShot(1500, lambda: self.takeover_btn.setStyleSheet(
             self._TOOL_BTN_STYLE))
 
     def _send_landing_start(self, retries_left):
-        """触发降落并按 500ms 间隔重发; 按钮已抬起或节点进程已死则跳过。"""
-        if not self.landing_btn.isChecked():
+        """触发降落并按 500ms 间隔重发; 菜单项已抬起或节点进程已死则跳过。"""
+        if not self.landing_act.isChecked():
             return
         rc = self.land_proc.exited()
         if rc is not None:
@@ -113,8 +118,8 @@ class ControlPanelsMixin:
                 f'降落节点进程启动失败 (退出码 {rc}), '
                 f'检查编译: colcon build --packages-select flylab_vision')
             self.land_proc.clear()
-            self.landing_btn.setChecked(False)
-            self.landing_btn.setText('视觉反控')
+            self.landing_act.setChecked(False)
+            self.takeover_btn.setText('接管控制')
             return
         self.node.publish_cmd(config.LANDING_START_CMD)
         if retries_left > 0:
@@ -126,21 +131,15 @@ class ControlPanelsMixin:
         self.node.publish_cmd(config.LANDING_STOP_CMD)
         QTimer.singleShot(500, self.land_proc.stop)
 
-    # ---------- 手动遥控 (toggle + 双摇杆, 执行节点 flylab_vision/teleop_node) ----------
+    # ---------- 手动遥控 (执行节点 flylab_vision/teleop_node, 右栏双摇杆) ----------
 
     def _build_teleop_panel(self):
+        """右栏摇杆遥控板: 只放双摇杆 (开关在工具栏 接管控制 菜单)。"""
         box = QGroupBox('手动遥控')
+        box.setToolTip('开启方式: 工具栏 接管控制 → 手动遥控 '
+                       '(需先开启通信链路)')
         lay = QVBoxLayout(box)
         lay.setContentsMargins(6, 4, 6, 6)
-        self.teleop_btn = QPushButton('开启遥控')
-        self.teleop_btn.setCheckable(True)
-        self.teleop_btn.setEnabled(False)
-        self.teleop_btn.setStyleSheet(self._LAND_BTN_STYLE)
-        self.teleop_btn.setToolTip(
-            '需先: 1) 工具栏开启通信链路  2) 飞行控制起飞升空。'
-            '开启后接管 offboard, 摇杆控速度 (回中=悬停); 关闭交还控制权')
-        self.teleop_btn.toggled.connect(self._on_teleop_toggle)
-        lay.addWidget(self.teleop_btn)
         # 双摇杆 (同真实遥控器): 左 = 升降/偏航, 右 = 平移 (力度=偏离圆心距离)
         pads = QHBoxLayout()
         self._teleop_widgets = []
@@ -172,7 +171,7 @@ class ControlPanelsMixin:
 
     def _teleop_axis(self, key, val):
         """更新单轴归一化量并立即下发 (摇杆拖动中实时跟手)。"""
-        if not self.teleop_btn.isChecked():
+        if not self.teleop_act.isChecked():
             return
         self._teleop_axes[key] = val
         a = self._teleop_axes
@@ -188,11 +187,11 @@ class ControlPanelsMixin:
         self.node.publish_teleop_twist(0.0, 0.0, 0.0, 0.0)
 
     def _on_teleop_toggle(self):
-        if self.teleop_btn.isChecked():
+        if self.teleop_act.isChecked():
             # 遥控接管优先 (防炸机出口): 先取消反控, 降落节点交还 offboard
             # 后遥控再接管
-            if self.landing_btn.isChecked():
-                self.landing_btn.setChecked(False)
+            if self.landing_act.isChecked():
+                self.landing_act.setChecked(False)
             # 避障链路跟踪器同样走 offboard, 与遥控互斥, 先整链路退出
             if self.running_flight is not None and self.running_flight.get('need_link'):
                 self._stop_flight()
@@ -207,11 +206,11 @@ class ControlPanelsMixin:
             self.node.publish_cmd(config.TELEOP_STOP_CMD)
             self._teleop_clear_axes()
             self._set_teleop_controls_enabled(False)
-            self.teleop_btn.setText('交还控制权 ...')
+            self.takeover_btn.setText('接管控制: 交还中 ...')
             QTimer.singleShot(1500, self.teleop_proc.stop)   # 留时间走完交还流程
 
     def _send_teleop_start(self, retries_left):
-        if not self.teleop_btn.isChecked():
+        if not self.teleop_act.isChecked():
             return
         rc = self.teleop_proc.exited()
         if rc is not None:
@@ -226,7 +225,7 @@ class ControlPanelsMixin:
 
     def _check_teleop_status(self):
         """遥控节点状态事件: engaged=接管成功 (解锁摇杆), idle/failed/error=
-        已结束 (按钮弹起 + 回收进程)。状态带序号, 只处理新事件。"""
+        已结束 (菜单项弹起 + 回收进程)。状态带序号, 只处理新事件。"""
         status, seq = self.node.get_teleop_status()
         if seq == self._last_teleop_seq:
             return
@@ -234,12 +233,12 @@ class ControlPanelsMixin:
         if not status:
             return
         if status == 'engaged':
-            self.teleop_btn.setText('遥控中 (OFFBOARD)')
+            self.takeover_btn.setText('接管控制: 遥控中')
             self._set_teleop_controls_enabled(True)
         elif status == 'engaging':
-            self.teleop_btn.setText('接管中 ...')
+            self.takeover_btn.setText('接管控制: 接管中 ...')
         elif status == 'releasing':
-            self.teleop_btn.setText('交还控制权 ...')
+            self.takeover_btn.setText('接管控制: 交还中 ...')
         else:   # idle / failed / error:*
             if status.startswith('error:') or status == 'failed':
                 self.log.error(f'手动遥控: {status}')
@@ -248,29 +247,45 @@ class ControlPanelsMixin:
             self._teleop_reset()
 
     def _teleop_reset(self):
-        """按钮/摇杆复位为空闲态 (异常或流程结束调用)。"""
+        """菜单项/摇杆复位为空闲态 (异常或流程结束调用)。"""
         self._teleop_clear_axes()
         self._set_teleop_controls_enabled(False)
-        self.teleop_btn.setChecked(False)
-        self.teleop_btn.setText('开启遥控')
+        self.teleop_act.setChecked(False)
+        self.takeover_btn.setText('接管控制')
 
     def _set_teleop_controls_enabled(self, enabled):
         for w in self._teleop_widgets:
             w.setEnabled(enabled)
 
-    # ---------- 视觉反控 (工具栏 toggle = ArUco降落, 执行节点 aruco_landing_node) ----------
+    # ---------- 接管控制 (工具栏下拉菜单 = 视觉反控 + 手动遥控) ----------
 
-    def _build_landing_button(self):
-        """视觉反控工具按钮 (ArUco 视觉降落): 点击拉起 aruco_landing_node
-        并接管 offboard, 按视觉输出对准码并调速下降, 满足条件切 AUTO.LAND;
-        再点取消降落交还控制权。仅 ArUco检测运行中可点。"""
-        self.landing_btn = QToolButton()
-        self.landing_btn.setText('视觉反控')
-        self.landing_btn.setCheckable(True)
-        self.landing_btn.setEnabled(False)
-        self.landing_btn.setStyleSheet(self._TOOL_BTN_STYLE)
-        self.landing_btn.setToolTip(
-            '根据当前算法的视觉输出控制飞机; '
-            '开启手动遥控可随时抢回控制权')
-        self.landing_btn.toggled.connect(self._on_landing_toggle)
-        return self.landing_btn
+    def _build_takeover_button(self):
+        """接管控制下拉按钮: 两项均需先开通信链路 (走 offboard), 同一时刻
+        只运行一个, 点运行中的项即取消。
+        - 视觉反控: aruco_landing_node 按视觉输出对准码下降并切 AUTO.LAND
+        - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
+          遥控抢回控制权 (防炸机出口)"""
+        self.takeover_btn = QToolButton()
+        self.takeover_btn.setText('接管控制')
+        self.takeover_btn.setPopupMode(QToolButton.InstantPopup)
+        self.takeover_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.takeover_btn.setToolTip(
+            '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落; '
+            '手动遥控 = 摇杆控速度。均需先开启通信链路')
+        menu = QMenu(self.takeover_btn)
+        self.takeover_btn.setMenu(menu)
+        self.landing_act = menu.addAction('视觉反控')
+        self.landing_act.setCheckable(True)
+        self.landing_act.setEnabled(False)
+        self.landing_act.setToolTip(
+            '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开。'
+            '按视觉输出对准码下降并自动降落; 再点取消')
+        self.landing_act.toggled.connect(self._on_landing_toggle)
+        self.teleop_act = menu.addAction('手动遥控')
+        self.teleop_act.setCheckable(True)
+        self.teleop_act.setEnabled(False)
+        self.teleop_act.setToolTip(
+            '需先开启通信链路。开启后接管 offboard, 右栏摇杆控速度 '
+            '(回中=悬停); 再点交还控制权')
+        self.teleop_act.toggled.connect(self._on_teleop_toggle)
+        return self.takeover_btn

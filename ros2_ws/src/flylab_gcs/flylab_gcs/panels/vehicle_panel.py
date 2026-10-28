@@ -38,8 +38,8 @@ class VehiclePanelMixin:
         menu = self.veh_btn.menu()
         menu.clear()
         ok = (self.veh_ctrl.is_connected()
-              and not self.teleop_btn.isChecked()
-              and not self.landing_btn.isChecked())
+              and not self.teleop_act.isChecked()
+              and not self.landing_act.isChecked())
         for item in config.VEHICLE_CMDS:
             if item['cmd'] == 'disarm':
                 menu.addSeparator()      # 上锁前分隔 (飞行中误点会掉桨)
