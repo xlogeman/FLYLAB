@@ -38,16 +38,27 @@
     align_ref_alt: 2.5                       # 高度增益缩放基准高度 (m, 0=禁用)
     max_height_scale: 3.0                    # 高度缩放上限
 
-    # 降落航向对齐 (机头 → 码 0° 方向 + 偏置, 地面站右栏可运行中改偏置):
-    # 水平对齐达标后悬停原位转向, 偏差进容差连续 N 帧锁定航向再恢复下降
-    yaw_align: true                          # 关闭则对齐达标后直接调速下降 (原行为)
-    yaw_offset_deg: 0.0                      # 机头相对码 0° 方向 (角点 0→1, 码图案 x 轴) 的偏置 (度, 右正)
-    yaw_tol_deg: 5.0                         # 航向锁定容差 (度)
-    yaw_gain: 2.5                            # 偏航 P 增益 (°/s 每度偏差)
-    yaw_rate_max_deg: 30.0                   # 偏航角速率限幅 (°/s)
-    min_yaw_frames: 5                        # 偏差连续达标帧数 (20Hz, 0.25s)
-    yaw_timeout_sec: 30.0                    # 对齐悬置超时 (s, 超时按当前航向继续下降; 0=不超时)
+    # 降落朝向对齐 (云台 → 码 0° 方向 + 偏置, 地面站右栏可运行中改偏置):
+    # 水平对齐达标后悬停原位转云台, 对准后画面中码 0° 方向 (角点 0→1)
+    # 停在屏幕上方偏右 yaw_offset 处; 机头经跟随通道同步追随云台,
+    # 云台对准且机头跟上连续 N 帧锁定再恢复下降
+    gimbal_cmd_topic: /flylab/gimbal_cmd     # 算法云台指令 [yaw_rate, pitch_rate] (°/s)
+    yaw_align: true                          # 关闭则对齐达标后直接调速下降 (不转云台)
+    yaw_offset_deg: 0.0                      # 对准后码 0° 方向相对屏幕上方的偏置 (度, 右正)
+    yaw_tol_deg: 1.0                         # 云台对准锁定容差 (度)
+    yaw_gain: 1.0                            # 云台偏航 P 增益 (°/s 每度偏差)
+    yaw_rate_max_deg: 30.0                   # 云台偏航角速率限幅 (°/s)
+    min_yaw_frames: 5                        # 双对齐连续达标帧数 (20Hz, 0.25s)
+    yaw_timeout_sec: 30.0                    # 对齐悬置超时 (s, 超时按当前朝向继续下降; 0=不超时)
     yaw_offset_topic: /flylab/landing_yaw_offset  # 地面站朝向选择同步 (latched)
+
+    # 机头跟随云台 (对齐期间): 请求相机侧反卷 + 订阅反卷误差注入偏航角速率
+    follow_req_topic: /flylab/gimbal_follow  # 跟随请求 (Bool, 开相机侧反卷)
+    follow_err_topic: /flylab/gimbal_yaw_err # 跟随误差广播 (反卷后的云台偏航, latched)
+    follow_kp: 0.8                           # 跟随 P 增益 (°/s 每度误差, 与地面站 GIMBAL_FOLLOW_KP 一致)
+    follow_tol_deg: 5.0                      # 机头跟上云台的容差 (度)
+    follow_rate_max_deg: 30.0                # 跟随偏航角速率限幅 (°/s)
+    follow_fresh_sec: 1.5                    # 误差新鲜度上限 (s, 地面站 1s 保活 + 裕量)
 
     # 下降速度调度
     far_descend_tol: 0.20                    # 未对齐时允许慢降的最大误差

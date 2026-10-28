@@ -2,20 +2,26 @@
 /// ArUco 视觉降落节点 —— 三态状态机
 ///
 ///   IDLE     等待 landing_start 指令, 不发任何飞控指令
-///   TRACKING 接管 offboard → 图像空间水平对齐 → 悬停转机头对齐码朝向
-///            (+可调偏置, 可关) → 按目标面积调速下降
-///            → (对齐 + 面积阈值 + 降落趋势角 + 航向锁定) 连续 N 帧后进入 LANDING
+///   TRACKING 接管 offboard → 图像空间水平对齐 → 悬停转云台对准码朝向
+///            (+可调偏置, 可关), 机头经跟随通道同步追随云台 → 按目标面积调速下降
+///            → (对齐 + 面积阈值 + 降落趋势角 + 云台/机头双对齐锁定) 连续 N 帧后进入 LANDING
 ///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
 /// 只用 cx/cy/面积/码朝向角做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
 /// 码朝向测量: 码 0° 方向 (OpenCV 角点 c0→c1) 经云台姿态旋到机体系取水平方位,
-/// 与水平对齐同一姿态链; 机头对齐码 0° 方向 + 偏置 (yaw_offset, 地面站右栏可改)。
+/// 与水平对齐同一姿态链; 云台对准码 0° 方向 + 偏置 (yaw_offset, 地面站右栏可改),
+/// 对准后画面中码 0° 方向停在屏幕上方偏右 yaw_offset 处; 机头经跟随通道
+/// 追随云台 (请求相机侧反卷 + 订阅 gimbal_yaw_err 注入偏航角速率),
+/// 云台对准且机头跟上 (双对齐连续 N 帧) 后恢复下降。
 /// 多尺度嵌套码支持: target_id 指定精准落点码 (小码), 不可见时回退跟踪画面
 /// 最大码 (高空大码), 指定码出现后自动切换对齐目标 (target_fallback:=false 关闭回退)。
 /// 执行层经 px4_offboard_client (link:=mavros|uxrce 选链路)。
 ///
 /// 话题: 图像 /flylab/display/image_raw (地面站转发帧, 需俯视看到码);
 ///       云台 /flylab/gimbal_state (相机相对机体姿态, 必需, 断流则悬停等待);
+///       云台指令 /flylab/gimbal_cmd ([yaw_rate, pitch_rate] °/s, 地面站软云台);
+///       跟随请求 /flylab/gimbal_follow (开相机侧反卷, Bool 边沿触发);
+///       跟随误差 /flylab/gimbal_yaw_err (反卷后的云台偏航, latched);
 ///       朝向偏置 /flylab/landing_yaw_offset (地面站右栏选择, latched);
 ///       指令 /flylab/vision_cmd; 叠加 /flylab/annotations; 状态 /flylab/landing_status
 ///
@@ -35,7 +41,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -160,8 +168,9 @@ public:
     offboard_retry_sec_ = declare_parameter<double>("offboard_retry_sec", 10.0);
     control_hz_ = declare_parameter<double>("control_hz", 20.0);
 
-    // 降落航向对齐: 水平对齐达标后悬停原位转机头, 对准码 0° 方向 + 偏置,
-    // 误差连续 N 帧达标锁定航向再恢复下降 (AUTO.LAND 保持切换瞬间航向)
+    // 降落朝向对齐: 水平对齐达标后悬停原位转云台, 云台对准码 0° 方向 + 偏置,
+    // 机头经跟随通道同步追随云台; 云台对准且机头跟上连续 N 帧后锁定再恢复
+    // 下降 (AUTO.LAND 保持切换瞬间航向)
     yaw_align_ = declare_parameter<bool>("yaw_align", true);
     yaw_offset_deg_ = declare_parameter<double>("yaw_offset_deg", 0.0);
     yaw_tol_deg_ = declare_parameter<double>("yaw_tol_deg", 5.0);
@@ -171,6 +180,26 @@ public:
     yaw_timeout_sec_ = declare_parameter<double>("yaw_timeout_sec", 30.0);
     const auto yaw_offset_topic = declare_parameter<std::string>(
       "yaw_offset_topic", "/flylab/landing_yaw_offset");
+
+    // 算法云台通道 (地面站软云台): 朝向对齐经 [yaw_rate, pitch_rate] (°/s)
+    // 速率指令驱动, 复用摇杆速率通道与限位; 正偏航 = 视线方位右转
+    const auto gimbal_cmd_topic = declare_parameter<std::string>(
+      "gimbal_cmd_topic", "/flylab/gimbal_cmd");
+
+    // 机头跟随云台 (offboard 单写者原则: 偏航指令由本节点注入, 地面站只做
+    // 相机侧反卷与误差广播): 对齐中请求 /flylab/gimbal_follow 开反卷
+    // (世界锚定, 机体转动时相对偏航收敛), 订阅 /flylab/gimbal_yaw_err
+    // (反卷后的云台偏航 = 视线世界方位 − 航向, 右+, NaN=未跟随, 1s 保活),
+    // 注入偏航角速率 = follow_kp × err; 云台对准且机头跟上才恢复下降
+    follow_kp_ = declare_parameter<double>("follow_kp", 0.8);
+    follow_tol_deg_ = declare_parameter<double>("follow_tol_deg", 5.0);
+    follow_rate_max_deg_ =
+      declare_parameter<double>("follow_rate_max_deg", 30.0);
+    follow_fresh_sec_ = declare_parameter<double>("follow_fresh_sec", 1.5);
+    const auto follow_req_topic = declare_parameter<std::string>(
+      "follow_req_topic", "/flylab/gimbal_follow");
+    const auto follow_err_topic = declare_parameter<std::string>(
+      "follow_err_topic", "/flylab/gimbal_yaw_err");
 
     DetectorConfig cfg;
     cfg.dict_name = dict_name;
@@ -250,6 +279,20 @@ public:
       yaw_offset_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_yaw_offset(*msg);});
 
+    // ---------- 算法云台通道 ----------
+    // 朝向对齐的执行端: 地面站软云台速率指令 ([yaw_rate, pitch_rate] °/s,
+    // 反控中云台面板锁定只锁 UI, 算法通道不受影响)
+    gimbal_cmd_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+      gimbal_cmd_topic, 10);
+
+    // ---------- 机头跟随通道 ----------
+    // 跟随请求边沿触发 (变化才发, 防地面站日志刷屏); 误差广播 latched 订阅
+    // (后启动即拿当前值), 新鲜度靠地面站 1s 保活重发判定
+    follow_req_pub_ = create_publisher<std_msgs::msg::Bool>(follow_req_topic, 10);
+    follow_err_sub_ = create_subscription<std_msgs::msg::Float64>(
+      follow_err_topic, rclcpp::QoS(1).reliable().transient_local(),
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_follow_err(*msg);});
+
     // ---------- 右栏"算法输出"面板数据 ----------
     // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
     const auto info_topic =
@@ -322,6 +365,7 @@ private:
     yaw_filt_init_ = false;
     yaw_last_id_ = -1;
     yaw_wait_t_ = 0.0;
+    gimbal_follow_req_ = false;   // 跟随请求复位 (上次运行若遗留, 地面站心跳超时自退)
     trend_angle_ = 90.0;
     positions_.clear();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -353,6 +397,8 @@ private:
   {
     state_ = State::IDLE;
     start_pending_ = false;  // 取消/完成时丢弃尚未触发的挂起指令
+    gimbalYawRate(0.0);      // 停云台 (速率指令持续生效, 必须显式清零)
+    requestGimbalFollow(false);   // 停跟随 (相机切回跟随机头)
     if (notify) {
       publishStatus(kStatusIdle);
     }
@@ -411,6 +457,51 @@ private:
     const double dy = d.corners[1].y - d.corners[0].y;
     const cv::Point3d b = quat_rot(cam_ori_, 0.0, dx, dy);
     return std::atan2(b.y, b.x) * 180.0 / M_PI;
+  }
+
+  /// 算法云台通道: 偏航角速率指令 (°/s, 右正, 限幅), 俯仰恒 0 不动。
+  /// 地面站侧速率为持续语义 (置 0 才停): 值变化即发布; 跟随开启期间零值
+  /// 也按 0.5s 保活重发 (兼作 follow 心跳, 断流超时地面站自动退反卷);
+  /// 跟随关闭后停止只发一次零, 不再刷话题。
+  void gimbalYawRate(double yaw_rate_deg)
+  {
+    const double rate = clampd(yaw_rate_deg, yaw_rate_max_deg_);
+    const bool changed = std::fabs(rate - gimbal_rate_sent_) > 0.5;
+    const bool keep = (now() - gimbal_pub_t_).seconds() >= 0.5;
+    if (!changed && !(keep && (rate != 0.0 || gimbal_follow_req_))) {
+      return;
+    }
+    std_msgs::msg::Float64MultiArray msg;
+    msg.data = {rate, 0.0};
+    gimbal_cmd_pub_->publish(msg);
+    gimbal_rate_sent_ = rate;
+    gimbal_pub_t_ = now();
+  }
+
+  /// 机头跟随请求 (相机侧反卷, 世界锚定): 边沿触发发布, 防地面站日志刷屏。
+  void requestGimbalFollow(bool on)
+  {
+    if (on == gimbal_follow_req_) {
+      return;
+    }
+    std_msgs::msg::Bool msg;
+    msg.data = on;
+    follow_req_pub_->publish(msg);
+    gimbal_follow_req_ = on;
+  }
+
+  // ---------------- 地面站跟随误差广播 ----------------
+  void on_follow_err(const std_msgs::msg::Float64 & msg)
+  {
+    follow_err_valid_ = std::isfinite(msg.data);
+    follow_err_ = follow_err_valid_ ? msg.data : 0.0;
+    follow_err_t_ = now();
+  }
+
+  /// 跟随误差是否可用 (非 NaN 且在新鲜度内; 地面站 1s 保活 + 传输裕量)
+  bool followErrUsable() const
+  {
+    return follow_err_valid_ && (now() - follow_err_t_).seconds() <= follow_fresh_sec_;
   }
 
   // ---------------- 地面站码边长同步 ----------------
@@ -698,6 +789,7 @@ private:
     // 不假设相机垂直向下, 刚性/自稳/yaw 随动云台全适用
     if (!gimbalFresh()) {
       px4_->sendHover();
+      gimbalYawRate(0.0);   // 云台姿态过期, 方位测量不可信, 停转
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
         "\033[33m云台姿态数据不可用 (%s), 原地悬停等待, 数据恢复后自动继续降落\033[0m",
@@ -734,7 +826,11 @@ private:
       v_down = descendSchedule(area) * far_descend_scale_;
     }
 
-    // ---------------- 航向对齐 (机头 → 码 0° 方向 + 偏置) ----------------
+    // ---------------- 朝向对齐 (云台 → 码 0° 方向 + 偏置, 机头跟随云台) ----------------
+    // 目标: 云台方位 = 码方位 − yaw_offset, 对准后画面中码 0° 方向停在
+    // 屏幕上方偏右 yaw_offset 处 (右正); 机头经跟随通道同步追随云台
+    // (注入偏航角速率 = follow_kp × 反卷误差) —— 收敛态与直接转机头一致
+    // (码方位相对机头 = yaw_offset), 云台/机头双对齐才恢复下降。
     // 测量逐帧 EMA 滤波; 目标码切换 (嵌套码接管/重选) 后朝向基准失效,
     // 复位滤波/计数/锁定按新码重新对齐
     if (tgt->id != yaw_last_id_) {
@@ -744,46 +840,74 @@ private:
       yaw_locked_ = false;
     }
     double yaw_err = 0.0;
-    bool yaw_turning = false;
-    double yaw_rate = 0.0;
+    bool gimbal_turning = false;
+    double gimbal_rate = 0.0;
+    double yaw_rate_rad = 0.0;   // 机头跟随注入的偏航角速率 (rad/s, 正=右转)
     if (yaw_align_) {
-      const double e = wrap180(markerYawDeg(*tgt) - yaw_offset_deg_);
+      // 云台方位: 画面上方 (0,0,-1) 经云台姿态旋到机体系取水平方位,
+      // 与码方位同一姿态链, 不假设相机垂直向下
+      const cv::Point3d up_b = quat_rot(cam_ori_, 0.0, 0.0, -1.0);
+      const double gimbal_az = std::atan2(up_b.y, up_b.x) * 180.0 / M_PI;
+      const double e =
+        wrap180(markerYawDeg(*tgt) - yaw_offset_deg_ - gimbal_az);
       yaw_err = yaw_filt_init_ ?
         wrap180(yaw_err_f_ + 0.4 * wrap180(e - yaw_err_f_)) : e;
       yaw_err_f_ = yaw_err;
       yaw_filt_init_ = true;
       if (aligned && !yaw_locked_) {
-        // 水平已对齐: 悬停原位转向 (停降, 防旋转中出画/出位),
-        // 偏差进容差连续 N 帧后锁定, 之后恢复下降
+        // 水平已对齐: 悬停原位转云台 + 机头跟随 (停降, 防转动中出画/出位),
+        // 云台对准且机头跟上连续 N 帧后锁定, 之后恢复下降
         v_down = 0.0;
-        if (std::fabs(yaw_err) <= yaw_tol_deg_) {
+        // 跟随接入: 请求相机侧反卷 (边沿触发) + 订阅误差注入偏航角速率;
+        // 误差不可用 (非 AirSim 源 / 地面站挂掉) 时仅转云台不转机头,
+        // 机头跟不上则永远不满足锁定条件, 由超时保护兜底
+        requestGimbalFollow(true);
+        const bool follow_ok = followErrUsable();
+        if (!follow_ok) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "\033[33m机头跟随误差不可用 (需地面站 AirSim 相机源 + 跟随广播), "
+            "仅转云台不转机头\033[0m");
+        }
+        const bool aircraft_aligned =
+          follow_ok && std::fabs(follow_err_) <= follow_tol_deg_;
+        if (std::fabs(yaw_err) <= yaw_tol_deg_ && aircraft_aligned) {
           yaw_count_++;
         } else {
           yaw_count_ = 0;
         }
         if (yaw_count_ >= min_yaw_frames_) {
           yaw_locked_ = true;
+          requestGimbalFollow(false);   // 相机切回跟随机头, 视角连续不跳变
           RCLCPP_INFO(
             get_logger(),
-            "\033[32m航向已对齐锁定 (偏差 %.1f°, 偏置 %.0f°), 恢复下降\033[0m",
-            yaw_err, yaw_offset_deg_);
+            "\033[32m云台已对准码朝向且机头已跟随 (云台偏差 %.1f°, 跟随误差 %.1f°, "
+            "偏置 %.0f°), 恢复下降\033[0m",
+            yaw_err, follow_err_, yaw_offset_deg_);
         } else {
-          yaw_turning = true;
-          yaw_rate = clampd(
-            yaw_gain_ * yaw_err, yaw_rate_max_deg_) * M_PI / 180.0;
-          // 转向悬置超时保护: 长期收敛不了按当前航向继续 (人工介入排查)
+          gimbal_turning = true;
+          gimbal_rate = yaw_gain_ * yaw_err;
+          if (follow_ok) {
+            yaw_rate_rad = clampd(
+              follow_kp_ * follow_err_, follow_rate_max_deg_) * M_PI / 180.0;
+          }
+          // 转向悬置超时保护: 长期收敛不了按当前朝向继续 (人工介入排查)
           yaw_wait_t_ += dt;
           if (yaw_timeout_sec_ > 0.0 && yaw_wait_t_ > yaw_timeout_sec_) {
             RCLCPP_WARN(
               get_logger(),
-              "\033[33m航向对齐悬置超时 (%.0fs, 偏差 %.1f°), 放弃对齐继续下降"
-              " (可取消后检查 yaw_gain/容差/码是否被遮挡)\033[0m",
-              yaw_wait_t_, yaw_err);
+              "\033[33m朝向对齐悬置超时 (%.0fs, 云台偏差 %.1f°, 跟随误差 %.1f°), "
+              "放弃对齐继续下降 (可取消后检查 yaw_gain/follow_kp/容差/"
+              "码是否被遮挡/云台是否到限位)\033[0m",
+              yaw_wait_t_, yaw_err, follow_err_);
             yaw_locked_ = true;   // 仅放行后续流程, 不再重试对齐
+            requestGimbalFollow(false);
+            gimbal_turning = false;
           }
         }
       }
     }
+    gimbalYawRate(gimbal_turning ? gimbal_rate : 0.0);
 
     // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应)
     updateTrendAngle(area);
@@ -802,16 +926,20 @@ private:
         get_logger(),
         "\033[32m降落条件满足 (面积 %.3f, 对齐误差 %.3f, 趋势角 %.1f°), 切 PX4 AUTO.LAND\033[0m",
         area, align_err, trend_angle_);
+      gimbalYawRate(0.0);          // 停云台
+      requestGimbalFollow(false);  // 停跟随
       state_ = State::LANDING;
       last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       publishStatus(kStatusLanding);
       return;
     }
 
-    if (yaw_turning) {
-      // 悬停原位转向: 水平 P 维持对中 + 偏航角速率 (rad/s, 正=右转),
-      // 零下降速度; yaw 位置设定被屏蔽, 由角速率闭环接管机头
-      px4_->sendVelocityFRDYawRate(v_fwd, v_right, 0.0, yaw_rate);
+    if (gimbal_turning) {
+      // 悬停原位转云台 + 机头跟随: 水平 P 维持对中 + 零下降 +
+      // 偏航角速率 (rad/s, 正=右转) = follow_kp × 反卷跟随误差,
+      // 机头追上视线后云台相对偏航收敛回中, 与云台环共同收敛到
+      // "码方位相对机头 = yaw_offset" 的不动点
+      px4_->sendVelocityFRDYawRate(v_fwd, v_right, 0.0, yaw_rate_rad);
     } else {
       px4_->sendVelocityFRD(v_fwd, v_right, v_down);
     }
@@ -858,7 +986,7 @@ private:
       get_logger(), *get_clock(), 1000,
       "[TRACKING][云台泛化] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
       "对齐误差=%.3f (容差%.3f%s 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
-      "航向=%.1f°(偏置%.0f° %s) "
+      "云台对齐=%.1f°(偏置%.0f° %s) 跟随=%.1f°(%s) "
       "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
@@ -866,6 +994,8 @@ private:
       trend_angle_, vertical_threshold_deg_,
       yaw_align_ ? yaw_err : 0.0, yaw_offset_deg_,
       !yaw_align_ ? "关闭" : (yaw_locked_ ? "已锁定" : (aligned ? "对齐中" : "待对齐")),
+      yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
+      yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
   }
 
@@ -874,6 +1004,7 @@ private:
   {
     // 原地悬停, 超时交还控制权
     px4_->sendHover();
+    gimbalYawRate(0.0);   // 无码可测向, 停转防云台漂到限位
     lost_time_ += dt;
     // 右栏面板: 丢失状态 (10Hz 限频)
     if (infoDue(now())) {
@@ -1004,6 +1135,17 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr tracked_id_pub_;  // 跟踪码 ID 广播 (检测节点让位依据)
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;  // 右栏面板数据
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr gimbal_cmd_pub_;  // 算法云台通道
+  double gimbal_rate_sent_ = 0.0;                  // 最近下发的云台偏航速率 (°/s, 变化检测)
+  rclcpp::Time gimbal_pub_t_{0, 0, RCL_ROS_TIME};  // 最近下发时刻 (保活节流)
+
+  // 机头跟随通道 (云台对齐期间机头追随云台)
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_req_pub_;   // 反卷请求
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_err_sub_;
+  bool gimbal_follow_req_ = false;   // 已请求跟随 (防重发 + 云台指令保活判定)
+  bool follow_err_valid_ = false;    // 最近收到的跟随误差有效 (非 NaN)
+  double follow_err_ = 0.0;          // 最近收到的跟随误差 (度, 右+)
+  rclcpp::Time follow_err_t_{0, 0, RCL_ROS_TIME};  // 误差到达时刻 (新鲜度)
   rclcpp::Time last_info_pub_{0, 0, RCL_ROS_TIME};                // 10Hz 限频
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
@@ -1041,6 +1183,7 @@ private:
   bool yaw_align_;
   double yaw_offset_deg_, yaw_tol_deg_, yaw_gain_, yaw_rate_max_deg_, yaw_timeout_sec_;
   int min_yaw_frames_;
+  double follow_kp_, follow_tol_deg_, follow_rate_max_deg_, follow_fresh_sec_;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长

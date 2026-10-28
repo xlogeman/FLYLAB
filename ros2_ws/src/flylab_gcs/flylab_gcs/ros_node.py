@@ -253,6 +253,7 @@ class GroundStationNode(Node):
                 history=HistoryPolicy.KEEP_LAST, depth=1))
         self._yaw_err_last = float('nan')
         self._yaw_err_was_none = True
+        self._yaw_err_pub_t = 0.0   # 最近发布时刻 (保活节流)
 
     def get_logger(self):
         """覆盖 Node.get_logger: 返回分流日志器 (终端照常 + 界面日志框)。"""
@@ -326,21 +327,27 @@ class GroundStationNode(Node):
 
     def publish_gimbal_yaw_err(self, err):
         """广播航向跟随误差 (度, 右+); err=None (未跟随/测量过期) 发 NaN。
-        变化才发布 (NaN 态只发一次); latched 让后启动的算法即拿当前值。"""
+        变化即发布, 未变化每 1s 保活重发 (算法侧据此判新鲜度 —— 地面站
+        挂掉/轮询停摆不会留下永远"新鲜"的旧误差驱使飞机持续转向);
+        latched 让后启动的算法即拿当前值。"""
+        now_m = time.monotonic()
+        keep = now_m - self._yaw_err_pub_t >= 1.0
         if err is None:
-            if self._yaw_err_was_none:
+            if self._yaw_err_was_none and not keep:
                 return
             self._yaw_err_was_none = True
             self._yaw_err_last = float('nan')
         else:
             val = float(err)
-            if not self._yaw_err_was_none and val == self._yaw_err_last:
+            if not self._yaw_err_was_none and \
+                    val == self._yaw_err_last and not keep:
                 return
             self._yaw_err_was_none = False
             self._yaw_err_last = val
         m = Float64()
         m.data = self._yaw_err_last
         self.gimbal_yaw_err_pub.publish(m)
+        self._yaw_err_pub_t = now_m
 
     def _anno_cb(self, msg):
         parsed = parse_message(msg.data)

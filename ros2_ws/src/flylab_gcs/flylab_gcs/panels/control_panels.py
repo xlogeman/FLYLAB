@@ -64,8 +64,8 @@ class ControlPanelsMixin:
             # 反控接管优先: 先取消遥控, 节点交还 offboard 后反控再接管
             if self.teleop_act.isChecked():
                 self.teleop_act.setChecked(False)
-            # 反控前自动摆位: 俯仰垂直向下 + 偏航归中朝向机头 (画面上方
-            # = 机头方向, 对中/对准降落全程方向感一致), 省去每次手动调整
+            # 反控前自动摆位: 仅俯仰转垂直向下 (俯拍是降落几何前提),
+            # 偏航保持用户当前设置不动
             self.camera_tab.grabber.gimbal_pitch_bottom()
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'

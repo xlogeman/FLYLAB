@@ -74,7 +74,7 @@ GIMBAL_FOLLOW_FRESH_SEC = 0.5          # 航向测量新鲜度上限 (过期按�
 # ---------- 航向跟随的算法通道 (视觉反控算法控制云台 + 机头跟随) ----------
 # offboard 单写者原则: 反控节点独占 setpoint 流时, 跟随指令必须由算法
 # 节点自己注入 (sendVelocityFRDYawRate), GCS 不再经 teleop 发偏航量。
-# 地面站只提供师资与云台控制权, 三个话题 (未来反控算法按需接入):
+# 地面站只提供师资与云台控制权, 三个话题 (aruco_landing 已接入):
 #   gimbal_cmd    算法 → 云台 [yaw_rate, pitch_rate] (°/s), 兼作 follow 心跳
 #   gimbal_follow 算法请求相机侧反卷 (世界锁定 + 误差收敛回中), std_msgs/Bool
 #   gimbal_yaw_err 地面站广播反卷后的偏航误差 (度, 右+; NaN=未跟随),
