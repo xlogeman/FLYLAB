@@ -29,7 +29,7 @@ from .camera_sources import (LocalFileReader, colorize_depth,   # noqa: F401 (re
 from .gimbal import (APPLY_TOL_DEG, MountNotReady, clamp_gimbal,
                      capture_mount)
 from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,
-                        quat_mul, quat_yaw_el)
+                        quat_mul, quat_rot_vec, quat_yaw_el)
 
 VEHICLE = 'PX4'
 GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RPC往返延迟))
@@ -341,16 +341,24 @@ class Grabber(threading.Thread):
             return self._follow
 
     def get_follow_error(self):
-        """航向跟随误差 (度, 右+ = 视线在机头右侧) —— 即反卷后的云台偏航。
-        未跟随 / 航向测量过期 (断流, 抓取线程 RPC 异常等) 返回 None,
-        外环按 0 处理 (停止转向, 遥控量保持悬停)。"""
+        """航向跟随误差 (度, 右+ = 视线在机头右侧): 真实视线方位 − 航向。
+        取最近一次实际下发的相机机体系姿态 (_gimbal_last) 的"屏幕上方"
+        方位角, 而非存储云台角的模型值 —— 安装基准若被污染 (重采把已转动
+        的相机位姿采进去), 模型值与真实视线差一个基准偏移, 跟随会把机头
+        收敛到偏移后的航向 (图像与面板都显示对准、机头却不对准码朝向)。
+        未跟随 / 航向测量过期 / 相机姿态缺失 返回 None, 外环按 0 处理
+        (停止转向, 遥控量保持悬停)。"""
         with self.lock:
             if not self._follow or self._veh_yaw_t is None:
                 return None
             if time.monotonic() - self._veh_yaw_t \
                     > config.GIMBAL_FOLLOW_FRESH_SEC:
                 return None
-            return self._gimbal[0]
+            q = self._gimbal_last.get(self.camera)
+            if q is None:
+                return self._gimbal[0]   # 尚未下发过 (理论少见): 退回模型值
+            up = quat_rot_vec(q, airsim.Vector3r(0.0, 0.0, -1.0))
+            return math.degrees(math.atan2(up.y_val, up.x_val))
 
     def _follow_timeout_check(self):
         """算法来源跟随的心跳超时 (仅抓取线程调用): gimbal_cmd 断流
@@ -513,13 +521,15 @@ class Grabber(threading.Thread):
         return q_b
 
     def _reset_gimbal(self):
-        """连接建立时云台从头开始: 回中、清安装基准与下发记录 (重连/重 play
-        后按需重采), 限位标红复位。无持久化记忆可比对, 无条件重置。
-        航向跟随一并退出 (重连后航向/锚点均失效, 界面按钮随状态同步弹起)。"""
+        """连接建立时云台状态复核 (重连/重 play): 复位跟随/动画/限位标红,
+        置 dirty 触发重下发。安装基准、云台角与下发记录保留 —— RPC 断连
+        不会移动 UE 端相机, 保留的状态仍与实际一致, 重下发即恢复原视角
+        (无跳变, 降落中云台姿态也不会中断); 若按旧逻辑清基准重采, 会把
+        重连前已被转动的相机位姿污染进安装基准 —— 错位视觉上无感, 却让
+        跟随收敛到偏移的航向。UE 重 play 场景: 相机自己回到安装位, 保留
+        的基准仍然正确, 重下发同样一致。航向跟随一并退出 (重连后航向/
+        锚点均失效, 界面按钮随状态同步弹起)。"""
         with self.lock:
-            self._gimbal = (0.0, 0.0)
-            self._gimbal_mount = {}
-            self._gimbal_last = {}
             self._gimbal_anim = None
             self._gimbal_rate = (0.0, 0.0)
             self._gimbal_dirty = True
@@ -594,9 +604,11 @@ class Grabber(threading.Thread):
                 except Exception as e:
                     self.log(f'云台: {cam} 下发失败: {e}')
             if applied:
-                # 下发记录仅在成功后更新 (供切相机后的补发判定)
+                # 下发记录仅在成功后更新 (供切相机后的补发判定);
+                # 指纹同步更新 (悬停抖动容差内据此跳过下发)
                 with self.lock:
                     self._gimbal_last = applied
+                    self._gimbal_apply_key = (q_b, yaw_deg, pitch_deg, cam_cur)
         except Exception as e:
             # 失败不置回 dirty (避免每帧重试刷屏); 置空云台连接下拍惰性重建
             self.log(f'云台控制失败: {e}')
@@ -711,7 +723,8 @@ class Grabber(threading.Thread):
                     with self.lock:
                         self._airsim_ok = True
                     self.log(f'已连接 AirSim {self.host}:{self.port}')
-                    # 云台从头开始: 回中 + 重采安装基准 + 限位标红复位
+                    # 云台状态复核: 保留基准/角度, 复位跟随 + 限位标红,
+                    # 重下发恢复视角 (重采会污染安装基准, 见 _reset_gimbal)
                     self._reset_gimbal()
                     # 视场角: 置 dirty 触发 _apply_fov —— _fov 恒为 None
                     # (无记忆), 走查询相机真实 FOV 采纳路径, 算法节点启动即同步
