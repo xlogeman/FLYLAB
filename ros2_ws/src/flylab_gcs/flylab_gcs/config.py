@@ -66,9 +66,9 @@ GIMBAL_PITCH_MAX_DEG = 90.0      # 俯仰上限 (垂直向上)
 # 视线钉在世界系, 航向追上视线时云台偏航自然回中。
 # 前提: 通信链路已开 + 手动遥控接管中 (云台面板"跟随"按钮随之解锁)。
 GIMBAL_FOLLOW_HZ = 25.0                # 外环频率 (Hz, 界面定时器)
-GIMBAL_FOLLOW_KP = 0.8                 # P 增益 (1/s): 满速率对应误差 ≈ 速率/KP
+GIMBAL_FOLLOW_KP = 1.2                 # P 增益 (1/s): 满速率对应误差 ≈ 速率/KP
 GIMBAL_FOLLOW_DEADBAND_DEG = 2.0       # 死区: 悬停姿态噪声不触发无限微转
-GIMBAL_FOLLOW_YAW_RATE_DEG_S = 30.0    # 偏航角速率上限 (须 = teleop yaw_rate_deg)
+GIMBAL_FOLLOW_YAW_RATE_DEG_S = 45.0    # 偏航角速率上限 (须 = teleop yaw_rate_deg)
 GIMBAL_FOLLOW_FRESH_SEC = 0.5          # 航向测量新鲜度上限 (过期按误差 0 停转)
 
 # ---------- 航向跟随的算法通道 (视觉反控算法控制云台 + 机头跟随) ----------
@@ -171,7 +171,8 @@ TELEOP_CMD_TOPIC = '/flylab/teleop_cmd'
 TELEOP_STATUS_TOPIC = '/flylab/teleop_status'
 TELEOP_START_CMD = 'teleop_start'
 TELEOP_STOP_CMD = 'teleop_stop'
-TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node']
+TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node',
+              '--ros-args', '-p', 'yaw_rate_deg:=45.0']   # 须 = GIMBAL_FOLLOW_YAW_RATE_DEG_S
 
 # ---------- 通信链路 (地面站一键拉起) ----------
 # uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888, 供 tracker:=uxrce / aruco_landing 链路

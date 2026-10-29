@@ -236,6 +236,7 @@ class GroundStationNode(Node):
         # 由界面经 set_gimbal_algo_forwarders() 挂转发槽
         self._gimbal_cmd_sink = None
         self._gimbal_follow_sink = None
+        self._last_follow_req = None   # 最近一次跟随请求值 (日志只在变化时记)
         self.create_subscription(
             Float64MultiArray, config.GIMBAL_CMD_TOPIC, self._gimbal_cmd_cb, 10)
         self.create_subscription(
@@ -318,12 +319,15 @@ class GroundStationNode(Node):
                               float(data[1]) if len(data) > 1 else 0.0)
 
     def _gimbal_follow_cb(self, msg):
-        """算法跟随请求 (Bool): 转发抓取器开/关相机侧反卷。"""
+        """算法跟随请求 (Bool): 转发抓取器开/关相机侧反卷。请求含 0.5s
+        保活重发 (算法侧自愈地面站悄悄退出的失步), 日志只在变化时记。"""
         if self._gimbal_follow_sink is None:
             return
         self._gimbal_follow_sink(bool(msg.data))
-        self.get_logger().info(
-            f'航向跟随请求 (算法来源): {"开启" if msg.data else "关闭"}')
+        if bool(msg.data) != self._last_follow_req:
+            self._last_follow_req = bool(msg.data)
+            self.get_logger().info(
+                f'航向跟随请求 (算法来源): {"开启" if msg.data else "关闭"}')
 
     def publish_gimbal_yaw_err(self, err):
         """广播航向跟随误差 (度, 右+); err=None (未跟随/测量过期) 发 NaN。
