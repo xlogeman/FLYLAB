@@ -151,19 +151,6 @@ PX4_MODELS = [
     {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
 ]
 
-# ---------- AirSim 导出项目 (PX4 SITL 启动时联动拉起) ----------
-# 机型 → 专属 exe 映射（键 = PX4_MODELS 的 name），未命中回退默认；None = 不拉起
-AIRSIM_APP_DEFAULT = \
-    '/mnt/d/A_Code/MyProject/BeimingSim/BeimingSim_Build/Windows/BeimingSim.exe'
-AIRSIM_APP_FOR_MODEL = {
-    # '10016_none_iris': '/mnt/d/.../另一个导出项目/Windows/xxx.exe',
-}
-
-
-def airsim_app_for(model_name):
-    """机型对应的 AirSim 导出项目 exe (未配置用默认, None=不拉起)。"""
-    return AIRSIM_APP_FOR_MODEL.get(model_name, AIRSIM_APP_DEFAULT)
-
 # ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
 # 界面发归一化遥控量 (-1..1, Twist): linear.x=前后 linear.y=左右
 # linear.z=升降(升+) angular.z=偏航(左转+)；teleop_node 换算成机体系 FRD 速度

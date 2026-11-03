@@ -49,7 +49,9 @@ ActuatorEffectivenessCustom::getEffectivenessMatrix(Configuration &configuration
 	}
 
 	// Motors
-	_motors.enablePropellerTorque(false);
+	// BEIMING coax patch: 默认 Custom 机型禁用螺旋桨反扭矩 (KM),
+	// 但共轴双旋翼的偏航完全依赖上下桨 KM 差动, 此处保留 KM 生效
+	//_motors.enablePropellerTorque(false);
 	const bool motors_added_successfully = _motors.addActuators(configuration);
 	_motors_mask = _motors.getMotors();
 

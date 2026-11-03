@@ -94,3 +94,15 @@ add_custom_target(none_fucker_2000g_tw15
 		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70004_fucker_2000g_tw15
 	COMMENT "launching px4 none_fucker_2000g_tw15 (SYS_AUTOSTART=70004)"
 )
+
+# 自定义机型: make px4_sitl_default none_fucker_coax_x050
+# 共轴双旋翼 (需 BEIMING coax patch: ActuatorEffectivenessCustom 恢复 KM)
+add_custom_target(none_fucker_coax_x050
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70005 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70005_fucker_coax_x050
+	COMMENT "launching px4 none_fucker_coax_x050 (SYS_AUTOSTART=70005)"
+)

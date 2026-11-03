@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """PX4 SITL 工具按钮面板 (MainWindow 的功能域 mixin)。
 
-机型菜单选型即启动 (联动拉起 Windows 端 AirSim 导出项目), 再点即停,
-选其他机型停旧换新; 进程异常退出自动复位按钮。
+机型菜单选型即启动, 再点即停, 选其他机型停旧换新;
+进程异常退出自动复位按钮。
 样式常量 _TOOL_BTN_STYLE 定义在 main_window (ui_style.TOOL_BTN_STYLE)。
 """
-import os
-
 from PyQt5.QtWidgets import QMenu, QToolButton
 
 from .. import config
@@ -77,30 +75,11 @@ class Px4PanelMixin:
             return
         self.px4_btn.setText(f'PX4: {model["name"]}')
         self._set_btn_on(self.px4_btn, True)   # 机型运行中 → 按钮点亮
-        self._start_airsim_app(model)
-
-    def _start_airsim_app(self, model):
-        """联动拉起机型对应的 Windows 端 AirSim 导出项目 (WSL interop 直启
-        .exe, 与 PX4 按钮同生命周期: 停止/崩溃/退出时一并回收)。
-        路径缺失只告警不阻断 PX4 启动; 已在运行则跳过。"""
-        exe = config.airsim_app_for(model['name'])
-        if self.airsim_proc.is_running():
-            return
-        if not os.path.isfile(exe):
-            self.log.error(f'AirSim 导出项目不存在, 跳过拉起: {exe}')
-            return
-        # Windows 真实进程不随 Linux 侧中继死亡, 停止时按映像名 taskkill
-        # 补杀 (/T 连子进程; 按名会全杀, 若手动另开了同名项目会被一并关闭)
-        self.airsim_proc.kill_cmd = ['taskkill.exe', '/F', '/T', '/IM',
-                                     os.path.basename(exe)]
-        # 工作目录 = exe 所在目录 (打包项目按相对路径找资源)
-        self.airsim_proc.start([exe], cwd=os.path.dirname(exe))
 
     def _stop_px4(self):
         """停止 PX4 SITL: SIGTERM 整个进程组 (make → px4 整棵树), 超时 SIGKILL。"""
         title = self.px4_model['name'] if self.px4_model else ''
         self.px4.stop()
-        self.airsim_proc.stop()     # AirSim 项目窗口随 PX4 一并回收
         self._reset_px4_btn()
         if title:
             self.log.info(f'PX4 SITL 已停止: {title}')
@@ -118,5 +97,4 @@ class Px4PanelMixin:
         if rc is not None and self.px4_model is not None:
             self.log.error(f'PX4 SITL 进程退出 (退出码 {rc}), 请重新点击启动')
             self.px4.clear()
-            self.airsim_proc.stop()     # AirSim 项目窗口一并回收
             self._reset_px4_btn()
