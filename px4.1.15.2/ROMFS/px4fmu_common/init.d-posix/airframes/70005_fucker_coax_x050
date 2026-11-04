@@ -48,20 +48,22 @@ param set-default CA_ROTOR1_AZ -1.0
 param set-default CA_ROTOR1_KM -0.02            # 下桨反扭矩系数 (CW -> -yaw)
 
 # 倾转舵机 x2 (Type 12 = Custom, 三轴力矩系数可配):
-#   CS0 -> roll 倾转: TRQ_R=1 (正指令 -> 桨盘右倾 -> 右滚, 与 sim RotorActuator 绕机体 x 轴约定一致)
-#   CS1 -> pitch 倾转: TRQ_P=1 (正指令 -> 桨盘后倾 -> 抬头)
+#   CS0 -> roll 倾转, CS1 -> pitch 倾转; 效力 = 满舵力矩/单桨最大推力
+#   = mg·sin(MaxTiltAngle)·h / max_thrust = 14.72×sin(14°)×0.08/22.96 ≈ 0.013
+#   (必须与 KM=0.02 同量级且比例符合物理 roll:yaw ≈ 1:3, 设 1.0 会导致
+#    CA 各轴权限失配 25 倍 -> 偏航分配饱和自旋/姿态振荡)
 #   符号若与 sim 实测相反, 直接翻转对应 TRQ 参数即可, 无需改代码
 param set-default CA_SV_CS_COUNT 2
 
 param set-default CA_SV_CS0_TYPE 12             # Custom
-param set-default CA_SV_CS0_TRQ_R 1.0           # 滚转力矩系数
+param set-default CA_SV_CS0_TRQ_R 0.013         # 滚转力矩系数 (满舵 ≈0.29 N·m)
 param set-default CA_SV_CS0_TRQ_P 0.0
 param set-default CA_SV_CS0_TRQ_Y 0.0
 param set-default CA_SV_CS0_TRIM 0.0            # 0 -> 桨盘水平
 
 param set-default CA_SV_CS1_TYPE 12             # Custom
 param set-default CA_SV_CS1_TRQ_R 0.0
-param set-default CA_SV_CS1_TRQ_P 1.0           # 俯仰力矩系数
+param set-default CA_SV_CS1_TRQ_P 0.013         # 俯仰力矩系数
 param set-default CA_SV_CS1_TRQ_Y 0.0
 param set-default CA_SV_CS1_TRIM 0.0
 
@@ -89,7 +91,7 @@ param set MPC_TILTMAX_AIR 14.0
 
 
 # ==================================
-# 2. 速度与加速度限制 (按倾转能力 2.5 m/s² 折算, 远低于常规四轴)
+# 2. 速度与加速度限制 (按倾转能力 2.5 m/s² 折算)
 # ==================================
 param set MPC_XY_VEL_MAX 4.0
 param set MPC_Z_VEL_MAX_UP 3.0
@@ -101,49 +103,58 @@ param set MPC_ACC_DOWN_MAX 1.2
 
 # ==================================
 # 3. 位置控制器 (共轴机机动性弱, 增益温和防振荡)
+#    BEIMING 调参 2026-11-04: MPC_XY_P 0.8->0.5, 抑制位置保持绕圈(圆锥摆)
 # ==================================
-param set MPC_XY_P 0.8
+param set MPC_XY_P 0.5
 param set MPC_Z_P 1.0
 param set MPC_XY_ERR_MAX 2.0
 param set MPC_XY_TRAJ_P 0.4
 
 
 # ==================================
-# 4. 速度控制器 (默认增益即可, 倾转响应慢先不动)
+# 4. 速度控制器
+#    BEIMING 调参 2026-11-04: 速度积分器是位置保持"绕圈"的主要推手,
+#    0.4->0.15; 垂直积分器 2.0->1.0 抑制倾斜-推力耦合引起的上下浮动
 # ==================================
 param set MPC_XY_VEL_P_ACC 1.4
-param set MPC_XY_VEL_I_ACC 0.4
+param set MPC_XY_VEL_I_ACC 0.15
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 1.0
-param set MPC_Z_VEL_I_ACC 2.0
-param set MPC_Z_VEL_D_ACC 0.0
+# BEIMING 调参 2026-11-04: 旋翼油门->推力存在 ~0.2s 一阶滞后(AirSim 控制滤波),
+# 垂直环 P=1.0/I=1.0 偏热 => 悬停 ~0.5Hz 呼吸式浮动; 降 P/I 并引入 D 阻尼
+param set MPC_Z_VEL_P_ACC 0.8
+param set MPC_Z_VEL_I_ACC 0.5
+param set MPC_Z_VEL_D_ACC 0.2
 
 
 # ==================================
-# 5. 姿态与角速度控制器
-#    注意: 俯仰/滚转力矩来自倾转舵机 (舵机动力学 + 0.05s 低通 + 最大14°),
-#    比电机反扭矩响应慢且弱; 偏航来自转速差动也偏慢 -> 限速率 + 低增益起步
-#    理论力矩: 满舵滚转 ≈ mg·sin(14°)·h (h≈桨高差/2≈0.04m) ≈ 0.15 N·m, 量级远小于常规四轴
+# 5. 姿态与角速度控制器 (BEIMING 调参 2026-11-04)
+#    关键认知: 满舵力矩 0.15 N·m 看似弱, 但转动惯量仅 ~0.013 kg·m²,
+#    满舵角加速度 ≈ 11 rad/s² —— 权限不弱反而很猛。
+#    舵机指令 = 归一化力矩 / 0.013 (TRQ 效力), 放大 77 倍;
+#    原增益 (P=0.08) 开环增益 ~70 s⁻¹ + 倾转滤波 0.05s 滞后 => bang-bang 极限环。
+#    增益整体降一个量级, 目标开环穿越 ~10 rad/s (< 滞后稳定上界):
+#      P=0.012, I=0.02, FF=0 (FF=0.1 会直接把舵机打进饱和)
+#    调参方向: 持续 ±1 乒乓再减半; 迟钝则 +50%; 方向反翻 TRQ 符号 (见 §0)
 # ==================================
-param set MC_ROLL_P 8.0
-param set MC_PITCH_P 8.0
-param set MC_YAW_P 3.0
+param set MC_ROLL_P 4.0
+param set MC_PITCH_P 4.0
+param set MC_YAW_P 1.5
 param set MC_ROLLRATE_MAX 120.0
 param set MC_PITCHRATE_MAX 120.0
 param set MC_YAWRATE_MAX 60.0
 
-param set MC_ROLLRATE_FF 0.1
+param set MC_ROLLRATE_FF 0.0
 param set MC_ROLLRATE_K 1.0
-param set MC_ROLLRATE_P 0.08
-param set MC_ROLLRATE_I 0.15
-param set MC_ROLLRATE_D 0.001
-param set MC_PITCHRATE_FF 0.1
+param set MC_ROLLRATE_P 0.012
+param set MC_ROLLRATE_I 0.02
+param set MC_ROLLRATE_D 0.0
+param set MC_PITCHRATE_FF 0.0
 param set MC_PITCHRATE_K 1.0
-param set MC_PITCHRATE_P 0.08
-param set MC_PITCHRATE_I 0.15
-param set MC_PITCHRATE_D 0.001
+param set MC_PITCHRATE_P 0.012
+param set MC_PITCHRATE_I 0.02
+param set MC_PITCHRATE_D 0.0
 param set MC_YAWRATE_FF 0.0
 param set MC_YAWRATE_K 1.0
-param set MC_YAWRATE_P 0.2
-param set MC_YAWRATE_I 0.2
+param set MC_YAWRATE_P 0.05
+param set MC_YAWRATE_I 0.05
 param set MC_YAWRATE_D 0.00

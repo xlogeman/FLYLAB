@@ -3,7 +3,8 @@
   "_airframe": "70005_fucker_coax_x050 (SYS_AUTOSTART=70005, 启动: bash scripts/run-px4.sh none_fucker_coax_x050 --clean)",
   "_patches": {
     "BeimingSim(Windows)": "b26c7b1f 共轴物理层+simple_flight; MavLinkMultirotorApi 未提交修改(HIL_ACTUATOR_CONTROLS 通道2/3=倾转指令)",
-    "PX4(WSL)": "src/modules/control_allocator/ActuatorEffectiveness/ActuatorEffectivenessCustom.cpp 恢复 enablePropellerTorque (共轴偏航依赖 KM 差动)"
+    "PX4(WSL)": "① src/modules/control_allocator/ActuatorEffectiveness/ActuatorEffectivenessCustom.cpp 恢复 enablePropellerTorque (共轴偏航依赖 KM 差动); ② src/modules/control_allocator/ControlAllocator.cpp 弱权限轴阈值 0.05→0.005 (共轴 KM=0.02/TRQ=0.013 均低于默认阈值, 会被整行清零导致俯仰/滚转/偏航三轴力矩无法分配、HIL 通道2/3 恒0), 2026-11-04",
+    "调参备注(2026-11-04)": "舵机指令=力矩/0.013 放大 77 倍, 满舵角加速度≈11 rad/s², 原增益 P=0.08 开环 ~70 s⁻¹ + 0.05s 倾转滤波滞后 => bang-bang 极限环; 增益降一个量级后稳定 (P=0.012/I=0.02/FF=0, 姿态环 P=4, 偏航率 P=0.05)"
   },
   "_formulas": {
     "单桨最大推力N": "CT * 1.225 * (MaxRPM/60)^2 * PropDiameter^4 = 0.109919*1.225*106.61^2*0.35^4 ≈ 22.96",
@@ -21,9 +22,9 @@
     "CA_ROTOR1_KM": -0.02,
     "CA_SV_CS_COUNT": 2,
     "CA_SV_CS0_TYPE": 12,
-    "CA_SV_CS0_TRQ_R": 1.0,
+    "CA_SV_CS0_TRQ_R": 0.013,
     "CA_SV_CS1_TYPE": 12,
-    "CA_SV_CS1_TRQ_P": 1.0,
+    "CA_SV_CS1_TRQ_P": 0.013,
     "PWM_MAIN_FUNC1": 101,
     "PWM_MAIN_FUNC2": 102,
     "PWM_MAIN_FUNC3": 201,
@@ -38,9 +39,29 @@
     "MPC_ACC_DOWN_MAX": 1.2,
     "MPC_THR_MIN": 0.05,
     "MPC_THR_MAX": 0.95,
+    "MPC_XY_P": 0.5,
+    "MPC_XY_VEL_I_ACC": 0.15,
+    "MPC_Z_VEL_P_ACC": 0.8,
+    "MPC_Z_VEL_I_ACC": 0.5,
+    "MPC_Z_VEL_D_ACC": 0.2,
     "MC_ROLLRATE_MAX": 120.0,
     "MC_PITCHRATE_MAX": 120.0,
-    "MC_YAWRATE_MAX": 60.0
+    "MC_YAWRATE_MAX": 60.0,
+    "MC_ROLL_P": 4.0,
+    "MC_PITCH_P": 4.0,
+    "MC_YAW_P": 1.5,
+    "MC_ROLLRATE_FF": 0.0,
+    "MC_ROLLRATE_P": 0.012,
+    "MC_ROLLRATE_I": 0.02,
+    "MC_ROLLRATE_D": 0.0,
+    "MC_PITCHRATE_FF": 0.0,
+    "MC_PITCHRATE_P": 0.012,
+    "MC_PITCHRATE_I": 0.02,
+    "MC_PITCHRATE_D": 0.0,
+    "MC_YAWRATE_FF": 0.0,
+    "MC_YAWRATE_P": 0.05,
+    "MC_YAWRATE_I": 0.05,
+    "MC_YAWRATE_D": 0.0
   },
   "PhysicsParams": {
     "Mass": 1.500,

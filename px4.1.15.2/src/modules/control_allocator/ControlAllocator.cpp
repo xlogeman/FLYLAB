@@ -577,7 +577,11 @@ ControlAllocator::update_effectiveness_matrix_if_needed(EffectivenessUpdateReaso
 				bool all_entries_small = true;
 
 				for (int m = 0; m < config.num_actuators_matrix[i]; m++) {
-					if (fabsf(matrix(n, m)) > 0.05f) {
+					// BEIMING coax patch: 默认阈值 0.05 会把 KM=0.02 / TRQ=0.013 的
+					// 共轴双旋翼(70005_fucker_coax_x050)三个力矩轴全部判为弱权限而清零,
+					// 导致俯仰/滚转/偏航完全无法分配(HIL_ACTUATOR_CONTROLS 通道2/3恒0)。
+					// 共轴倾转架构权限天然偏低, 阈值降至 0.005 保留其力矩轴。
+					if (fabsf(matrix(n, m)) > 0.005f) {
 						all_entries_small = false;
 					}
 				}
