@@ -149,6 +149,10 @@ PX4_MODELS = [
     {'name': '10016_none_iris',       'target': 'none_iris'},
     {'name': '70003_fucker_3120g_tw23', 'target': 'none_fucker_3120g_tw23'},
     {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
+    {'name': '70005_fucker_coax_x050',  'target': 'none_fucker_coax_x050'},
+    {'name': '70006_fucker_coax_x100',  'target': 'none_fucker_coax_x100'},
+    {'name': '70007_fucker_coax_x300',  'target': 'none_fucker_coax_x300'},
+    {'name': '70008_fucker_x450',       'target': 'none_fucker_x450'},
 ]
 
 # ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------

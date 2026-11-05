@@ -49,21 +49,22 @@ param set-default CA_ROTOR1_KM -0.02            # 下桨反扭矩系数 (CW -> -
 
 # 倾转舵机 x2 (Type 12 = Custom, 三轴力矩系数可配):
 #   CS0 -> roll 倾转, CS1 -> pitch 倾转; 效力 = 满舵力矩/单桨最大推力
-#   = mg·sin(MaxTiltAngle)·h / max_thrust = 14.72×sin(14°)×0.08/22.96 ≈ 0.013
-#   (必须与 KM=0.02 同量级且比例符合物理 roll:yaw ≈ 1:3, 设 1.0 会导致
-#    CA 各轴权限失配 25 倍 -> 偏航分配饱和自旋/姿态振荡)
+#   = mg·sin(MaxTiltAngle)·h / max_thrust = 14.72×sin(25.2°)×0.08/22.96 ≈ 0.022
+#   (BEIMING 调参 2026-11-04: MaxTiltAngle 0.25→0.44rad 提速, TRQ 随 sin 同比放大)
+#   (必须与 KM=0.02 同量级且比例符合物理 roll:yaw 关系; 20+倍失配会导致
+#    CA 各轴权限失配 -> 偏航分配饱和自旋/姿态振荡)
 #   符号若与 sim 实测相反, 直接翻转对应 TRQ 参数即可, 无需改代码
 param set-default CA_SV_CS_COUNT 2
 
 param set-default CA_SV_CS0_TYPE 12             # Custom
-param set-default CA_SV_CS0_TRQ_R 0.013         # 滚转力矩系数 (满舵 ≈0.29 N·m)
+param set-default CA_SV_CS0_TRQ_R 0.022         # 滚转力矩系数 (满舵 ≈0.5 N·m)
 param set-default CA_SV_CS0_TRQ_P 0.0
 param set-default CA_SV_CS0_TRQ_Y 0.0
 param set-default CA_SV_CS0_TRIM 0.0            # 0 -> 桨盘水平
 
 param set-default CA_SV_CS1_TYPE 12             # Custom
 param set-default CA_SV_CS1_TRQ_R 0.0
-param set-default CA_SV_CS1_TRQ_P 0.013         # 俯仰力矩系数
+param set-default CA_SV_CS1_TRQ_P 0.022         # 俯仰力矩系数
 param set-default CA_SV_CS1_TRQ_Y 0.0
 param set-default CA_SV_CS1_TRIM 0.0
 
@@ -85,18 +86,24 @@ param set MPC_THR_HOVER 0.32
 param set MPC_THR_MIN 0.05
 param set MPC_THR_MAX 0.95
 
-# 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.25rad≈14.3°), 留 0.3° 裕量
-# 最大水平加速度 ≈ g·tan(14°) ≈ 2.5 m/s², 后续所有速度/加速度限制以此为上界
-param set MPC_TILTMAX_AIR 14.0
+# 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.44rad≈25.2°), 留 ~1° 裕量
+# 最大水平加速度 ≈ g·tan(24°) ≈ 4.4 m/s²
+# (BEIMING 调参 2026-11-04: 倾角 14°→24° 提速; 终端速度 = m·g·tanθ/DragCoef,
+#  24° 时 ≈ 1.5×9.81×tan24°/0.325 ≈ 20 m/s, 取 VEL_MAX=10 留大裕量)
+param set MPC_TILTMAX_AIR 24.0
 
 
 # ==================================
-# 2. 速度与加速度限制 (按倾转能力 2.5 m/s² 折算)
+# 2. 速度与加速度限制 (按倾转能力 4.4 m/s² 折算)
+#    (BEIMING 调参 2026-11-04: 目标平飞 10 m/s, VEL_MAX 4→10, ACC_HOR 2→3.5)
+#    注意: POSCTL 手动满杆限速是 MPC_VEL_MANUAL (默认4!), MPC_XY_VEL_MAX
+#    只管自动航线任务, 两者都要改; 侧向/后退另有 MPC_VEL_MAN_SIDE/BACK
 # ==================================
-param set MPC_XY_VEL_MAX 4.0
+param set MPC_VEL_MANUAL 10.0
+param set MPC_XY_VEL_MAX 10.0
 param set MPC_Z_VEL_MAX_UP 3.0
 param set MPC_Z_VEL_MAX_DN 1.5
-param set MPC_ACC_HOR_MAX 2.0
+param set MPC_ACC_HOR_MAX 3.5
 param set MPC_ACC_UP_MAX 2.0
 param set MPC_ACC_DOWN_MAX 1.2
 

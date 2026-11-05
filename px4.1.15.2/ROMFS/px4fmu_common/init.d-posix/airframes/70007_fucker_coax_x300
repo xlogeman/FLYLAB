@@ -1,0 +1,173 @@
+#!/bin/sh
+#
+# @name Fucker Coax X300 (共轴双旋翼机, 起飞重量4.0kg, 16寸桨, 推重比约2.4)
+#
+# @type Custom (Coaxial Twin-Rotor with Tilting Mounts)
+#
+# 布局: 上下两桨共轴叠放, 无机臂 (与 X050 同构放大)
+#   - 油门: 两桨同油门 (各承载一半升力)
+#   - 偏航: 上下桨转速差动 (上桨 CCW, 下桨 CW)
+#   - 俯仰/滚转: 倾转电机架 (roll/pitch 指令差动倾转上下桨, 最大 0.44rad ≈ 25.2°)
+#
+# 仿真端对应: BeimingSim/Plugins/AirSim (PhysicsParams RotorCount=2)
+#   settings_X300.json + MavLinkMultirotorApi (HIL_ACTUATOR_CONTROLS 通道 2/3 = 倾转指令)
+# 需配合 BEIMING coax patch: control_allocator/ActuatorEffectiveness/ActuatorEffectivenessCustom.cpp
+#   (恢复 KM 反扭矩, 否则 Custom 机型无偏航)
+#
+# 通道分配 (HIL_ACTUATOR_CONTROLS):
+#   controls[0] 上桨油门    controls[1] 下桨油门
+#   controls[2] roll 倾转   controls[3] pitch 倾转 ([-1,1] × MaxTiltAngle)
+#
+
+# 设置 VEHICLE_TYPE=mc 并启动多旋翼应用栈 (ekf2 / mc_pos_control / mc_att_control 等)
+. ${R}etc/init.d/rc.mc_defaults
+
+# ==================================================================================================================
+# 0. 控制分配 - Custom 机型: 2 电机 (KM 差动出偏航) + 2 舵机 (倾转出俯仰/滚转)
+#    物理参数与 settings_X300.json PhysicsParams 联动:
+#    KM = CP/CT * D/(2π) = 0.040164/0.109919 * 0.4064/(2π) ≈ 0.0236 (反扭矩系数)
+# ==================================================================================================================
+param set-default CA_AIRFRAME 9                 # Custom 布局; 9 = Custom (电机 + 自定义力矩舵机)
+param set-default CA_ROTOR_COUNT 2              # 共轴两桨
+
+# 两桨均在中轴上 (PX=PY=0 => 无俯仰/滚转力矩), 轴朝上
+param set-default CA_ROTOR0_PX 0.0              # 上桨 (CCW)
+param set-default CA_ROTOR0_PY 0.0
+param set-default CA_ROTOR0_PZ 0.0
+param set-default CA_ROTOR0_AX 0.0              # 旋翼轴 (0,0,-1) = 朝上 (NED)
+param set-default CA_ROTOR0_AY 0.0
+param set-default CA_ROTOR0_AZ -1.0
+param set-default CA_ROTOR0_KM 0.0236           # 上桨反扭矩系数 (CCW -> +yaw, 与 sim initializeRotorCoax 约定一致)
+
+param set-default CA_ROTOR1_PX 0.0              # 下桨 (CW)
+param set-default CA_ROTOR1_PY 0.0
+param set-default CA_ROTOR1_PZ 0.0
+param set-default CA_ROTOR1_AX 0.0
+param set-default CA_ROTOR1_AY 0.0
+param set-default CA_ROTOR1_AZ -1.0
+param set-default CA_ROTOR1_KM -0.0236          # 下桨反扭矩系数 (CW -> -yaw)
+
+# 倾转舵机 x2 (Type 12 = Custom, 三轴力矩系数可配):
+#   CS0 -> roll 倾转, CS1 -> pitch 倾转; 效力 = 满舵力矩/单桨最大推力
+#   = mg·sin(MaxTiltAngle)·h / max_thrust = 39.24×sin(25.2°)×0.09/47.2 ≈ 0.032
+#   (h = 上下桨间距 0.14-0.05 = 0.09)
+#   (必须与 KM 同量级且比例符合物理 roll:yaw 关系; 20+倍失配会导致
+#    CA 各轴权限失配 -> 偏航分配饱和自旋/姿态振荡)
+#   符号若与 sim 实测相反, 直接翻转对应 TRQ 参数即可, 无需改代码
+param set-default CA_SV_CS_COUNT 2
+
+param set-default CA_SV_CS0_TYPE 12             # Custom
+param set-default CA_SV_CS0_TRQ_R 0.032         # 滚转力矩系数 (满舵 ≈1.5 N·m)
+param set-default CA_SV_CS0_TRQ_P 0.0
+param set-default CA_SV_CS0_TRQ_Y 0.0
+param set-default CA_SV_CS0_TRIM 0.0            # 0 -> 桨盘水平
+
+param set-default CA_SV_CS1_TYPE 12             # Custom
+param set-default CA_SV_CS1_TRQ_R 0.0
+param set-default CA_SV_CS1_TRQ_P 0.032         # 俯仰力矩系数
+param set-default CA_SV_CS1_TRQ_Y 0.0
+param set-default CA_SV_CS1_TRIM 0.0
+
+# 输出映射: 通道 1/2 = 电机, 通道 3/4 = 倾转舵机 (顺序必须与 sim 端读取一致: 电机在前, 舵机紧随)
+param set-default PWM_MAIN_FUNC1 101            # Motor 1 (上桨)
+param set-default PWM_MAIN_FUNC2 102            # Motor 2 (下桨)
+param set-default PWM_MAIN_FUNC3 201            # Servo 1 (roll 倾转)
+param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
+
+
+# ==================================
+# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 油门【线性】, 源码 RotorActuator.hpp:
+#    thrust = control_signal * max_thrust, 与 PhysicsParams 联动:
+#    单桨最大推力 = CT×1.225×(MaxRPM/60)²×D⁴ = 0.109919×1.225×113.33²×0.4064⁴ ≈ 47.2N
+#    悬停油门 = 4.0×9.81/2 / 47.2 ≈ 0.42, 即 1/推重比, 推重比 = 2×47.2/(4.0×9.81) ≈ 2.40)
+#    BEIMING 调参 2026-11-05(五): 内环修好后精确实测 — 取 roll/pitch<3° 且 |vz|<0.3
+#    的悬停样本(n=1914), 悬停油门 mean 0.276 / HTE 收敛 0.292 / 推力指令均值 0.284,
+#    三路互证 ≈0.28 (此前 0.368 是姿态大幅振荡污染估计的假值)。
+#    前馈 0.38 虚高 36% -> 积分器常年背 -0.10 反向偏差 -> 0.14Hz 呼吸式浮动
+#    (z 峰峰 5.2m, 推力指令在 0.21~0.40 间摆动)。定版 0.28, 实测值勿再用理论
+# ==================================
+param set MPC_USE_HTE 0
+param set MPC_THR_HOVER 0.28
+param set MPC_THR_MIN 0.05
+param set MPC_THR_MAX 0.95
+
+# 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.44rad≈25.2°), 留 ~1° 裕量
+# 最大水平加速度 ≈ g·tan(24°) ≈ 4.4 m/s²
+# 理论平飞极速 = m·g·tanθ/DragCoef ≈ 4.0×9.81×tan(25.2°)/0.325 ≈ 55 m/s, 取 VEL_MAX=10 留大裕量
+param set MPC_TILTMAX_AIR 24.0
+
+
+# ==================================
+# 2. 速度与加速度限制 (按倾转能力 4.4 m/s² 折算, 目标平飞 10 m/s)
+#    注意: POSCTL 手动满杆限速是 MPC_VEL_MANUAL (默认4!), MPC_XY_VEL_MAX
+#    只管自动航线任务, 两者都要改; 侧向/后退另有 MPC_VEL_MAN_SIDE/BACK
+# ==================================
+param set MPC_VEL_MANUAL 10.0
+param set MPC_XY_VEL_MAX 10.0
+param set MPC_Z_VEL_MAX_UP 3.0
+param set MPC_Z_VEL_MAX_DN 1.5
+param set MPC_ACC_HOR_MAX 3.5
+param set MPC_ACC_UP_MAX 2.0
+param set MPC_ACC_DOWN_MAX 1.2
+
+
+# ==================================
+# 3. 位置控制器 (共轴机机动性弱, 增益温和防振荡)
+#    BEIMING 调参 2026-11-05: 起飞后圆锥摆加剧 (4kg/大桨后姿态-位置耦合更强),
+#    XY_P 0.5->0.4, TRAJ_P 0.4->0.3 (同 X050 0.8->0.5 的收敛路径)
+# ==================================
+param set MPC_XY_P 0.4
+param set MPC_Z_P 1.0
+param set MPC_XY_ERR_MAX 2.0
+param set MPC_XY_TRAJ_P 0.3
+
+
+# ==================================
+# 4. 速度控制器
+#    BEIMING 调参 2026-11-05(六) 回路辨识定论: 悬停油门 0.28 修正后仍 0.10Hz 呼吸
+#    (峰峰 7.6m), |L|=1 恰在 0.625 rad/s — Z 环自身临界失稳。执行链路推力滞后
+#    τ≈1s (地面恒指令下电机 10s 才爬到悬停值; X050 仅 0.2s), I=0.5 使回路成为
+#    双积分(低频相位 -180°) + 滞后越界 -> 极限环。
+#    修复: I 0.5->0.1 消除双积分, P 0.6->0.5 压带宽(0.5 rad/s << 滞后角),
+#    D 0.3->0.4 补相位裕度 (预计 PM≈42°, 不再极限环)
+# ==================================
+param set MPC_XY_VEL_P_ACC 1.2
+param set MPC_XY_VEL_I_ACC 0.1
+param set MPC_XY_VEL_D_ACC 0.2
+param set MPC_Z_VEL_P_ACC 0.5
+param set MPC_Z_VEL_I_ACC 0.1
+param set MPC_Z_VEL_D_ACC 0.4
+
+
+# ==================================
+# 5. 姿态与角速度控制器
+#    BEIMING 调参 2026-11-05(四) ulog 辨识定论: 0.67Hz 处姿态幅值比 0.8 / 滞后 78°,
+#    设定 -3.2° 实际 +26.1° -> 速率环开环增益过低, 姿态环带宽 << 圆锥摆频率,
+#    外环正反馈发散。满舵角加速度原估 30 rad/s² 未计电机/桨惯量, 实际权限
+#    ≈ X050 的 0.6 倍 (力矩随推力 ×2.3, 惯量随质量×尺寸² ×4)。
+#    对标 X050 (P=0.012) 折算: P = 0.012/0.6 ≈ 0.02, 取 0.015 / I=0.025 起步;
+#    YAW 权限比 ≈0.6, YAWRATE 0.05/0.6 ≈ 0.08, 取 0.07
+#    调参方向: 速率环仍迟钝(设定与实际差>10°) -> P 0.02; 乒乓振荡 -> 0.010
+# ==================================
+param set MC_ROLL_P 4.0
+param set MC_PITCH_P 4.0
+param set MC_YAW_P 1.0
+param set MC_ROLLRATE_MAX 120.0
+param set MC_PITCHRATE_MAX 120.0
+param set MC_YAWRATE_MAX 60.0
+
+param set MC_ROLLRATE_FF 0.0
+param set MC_ROLLRATE_K 1.0
+param set MC_ROLLRATE_P 0.015
+param set MC_ROLLRATE_I 0.025
+param set MC_ROLLRATE_D 0.0
+param set MC_PITCHRATE_FF 0.0
+param set MC_PITCHRATE_K 1.0
+param set MC_PITCHRATE_P 0.015
+param set MC_PITCHRATE_I 0.025
+param set MC_PITCHRATE_D 0.0
+param set MC_YAWRATE_FF 0.0
+param set MC_YAWRATE_K 1.0
+param set MC_YAWRATE_P 0.07
+param set MC_YAWRATE_I 0.07
+param set MC_YAWRATE_D 0.00

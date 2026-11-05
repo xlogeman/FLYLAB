@@ -109,4 +109,7 @@ px4_add_romfs_files(
 	70003_fucker_3120g_tw23
 	70004_fucker_2000g_tw15
 	70005_fucker_coax_x050
+	70006_fucker_coax_x100
+	70007_fucker_coax_x300
+	70008_fucker_x450
 )

@@ -106,3 +106,39 @@ add_custom_target(none_fucker_coax_x050
 		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70005_fucker_coax_x050
 	COMMENT "launching px4 none_fucker_coax_x050 (SYS_AUTOSTART=70005)"
 )
+
+# 自定义机型: make px4_sitl_default none_fucker_coax_x100
+# 共轴双旋翼, 参数同 X050 (需 BEIMING coax patch)
+add_custom_target(none_fucker_coax_x100
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70006 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70006_fucker_coax_x100
+	COMMENT "launching px4 none_fucker_coax_x100 (SYS_AUTOSTART=70006)"
+)
+
+# 自定义机型: make px4_sitl_default none_fucker_coax_x300
+# 共轴双旋翼 4kg/16寸桨 (需 BEIMING coax patch)
+add_custom_target(none_fucker_coax_x300
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70007 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70007_fucker_coax_x300
+	COMMENT "launching px4 none_fucker_coax_x300 (SYS_AUTOSTART=70007)"
+)
+
+# 自定义机型: make px4_sitl_default none_fucker_x450
+# 四旋翼 3.12kg, 限速 10 m/s
+add_custom_target(none_fucker_x450
+	COMMAND ${CMAKE_COMMAND} -E env PX4_SYS_AUTOSTART=70008 $<TARGET_FILE:px4>
+	WORKING_DIRECTORY ${SITL_WORKING_DIR}
+	USES_TERMINAL
+	DEPENDS
+		px4
+		${PX4_SOURCE_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/70008_fucker_x450
+	COMMENT "launching px4 none_fucker_x450 (SYS_AUTOSTART=70008)"
+)
