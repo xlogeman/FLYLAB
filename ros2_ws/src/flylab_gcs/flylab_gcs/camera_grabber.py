@@ -83,6 +83,7 @@ class Grabber(threading.Thread):
         self._fov = None           # 全局视场角 (度): 所有相机共用
         # (None=尚未采纳; 连接后查询相机真实 FOV 采纳, 见 _adopt_camera_fov)
         self._fov_dirty = False       # 视场角待下发/待采纳标记
+        self._fov_adopt_t = 0.0       # 最近一次 FOV 采纳尝试时刻 (失败重试退避)
         # 数字变焦 (抓取层中心裁切, 图传/转发/标注同一像素系);
         # _raw 留未变焦原帧, 档位变化时重提交
         self._zoom = 1.0
@@ -622,12 +623,14 @@ class Grabber(threading.Thread):
         真实 FOV 采纳为当前值 (见 _adopt_camera_fov), 不改动相机。"""
         with self.lock:
             fov = self._fov
-            if fov is None:
-                self._fov_dirty = False   # 先清标记: 查询失败不逐帧重试
-                adopt = True
-            else:
-                adopt = False
+            adopt = fov is None
         if adopt:
+            # 采纳失败自动重试 (5s 退避): 此前查询前就清 dirty, 一次失败
+            # 整个会话不再采纳/发布 FOV 话题, 算法节点只能用 yaml 默认值,
+            # 距离解算全程偏差 (表现为"拖一次视场滑杆才准")
+            if time.monotonic() - self._fov_adopt_t < 5.0:
+                return
+            self._fov_adopt_t = time.monotonic()
             self._adopt_camera_fov(client, cam)
             return
         try:

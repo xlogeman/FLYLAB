@@ -118,6 +118,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._cam_ori_last = 0.0
         # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)
         self._fov_pub_last = None
+        self._fov_pub_t = 0.0   # 上次发布时刻 (周期重发, 兜底 latched 漏收)
 
         # 顶部工具栏 (VS Code 风格): 工具按钮横排, 后续新功能往右加
         self.toolbar = QToolBar()
@@ -258,10 +259,14 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                 self.camera_tab.grabber.get_follow_error())
         # 视场角同步: 用户调整过 FOV 时变化即发布 (滑杆拖动靠轮询节流);
         # 未调整过时抓取线程连上 AirSim 后已采纳相机真实 FOV (见
-        # Grabber._adopt_camera_fov), 这里照常发布, ArUco 等算法节点启动即同步
+        # Grabber._adopt_camera_fov), 这里照常发布, ArUco 等算法节点启动即同步。
+        # 每 2s 周期重发兜底: latched 只在匹配瞬间投递一次, 任何漏收
+        # (DDS 匹配前发布/订阅端短暂掉线) 都会让节点停留在 yaml 默认 FOV
         fov = self.camera_tab.grabber.get_fov_applied()
-        if fov is not None and fov != self._fov_pub_last:
+        if fov is not None and (fov != self._fov_pub_last or
+                now_mono - self._fov_pub_t >= 2.0):
             self._fov_pub_last = fov
+            self._fov_pub_t = now_mono
             self.node.publish_camera_fov(fov)
 
     def _publish_display_frame(self):
