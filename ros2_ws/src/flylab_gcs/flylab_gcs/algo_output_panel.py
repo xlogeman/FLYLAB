@@ -24,8 +24,8 @@
 import time
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QFormLayout, QGroupBox, \
-    QLabel, QSlider, QSpinBox, QWidget
+from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
+    QGroupBox, QLabel, QSlider, QSpinBox, QWidget
 
 from . import config
 
@@ -213,7 +213,7 @@ class AlgoOutputPanel(QGroupBox):
     refresh() 按各分组最新数据刷新 (33ms 轮询驱动, 内部去重)。"""
 
     def __init__(self, get_info, set_marker_length=None,
-                 set_landing_yaw=None, parent=None):
+                 set_landing_yaw=None, set_aruco_dict=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -233,10 +233,16 @@ class AlgoOutputPanel(QGroupBox):
         self._yaw_box = None
         if set_landing_yaw is not None:
             self._build_yaw_spin(set_landing_yaw)
-        # 底部常驻行 (码边长滑杆 + 降落朝向选择并排): 装进一个横向容器,
-        # 整行横跨全部分组列 (见 _relayout); 两者都在才有意义, 单独存在也兼容
+        # 字典切换 (常驻): 运行中同步 aruco_node / aruco_landing_node 的
+        # dict_name (下一帧检测生效)
+        self._dict_box = None
+        if set_aruco_dict is not None:
+            self._build_dict_combo(set_aruco_dict)
+        # 底部常驻行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
+        # 横向容器, 整行横跨全部分组列 (见 _relayout); 任意存在都兼容
         bottom = None
-        if self._marker_box is not None or self._yaw_box is not None:
+        if self._marker_box is not None or self._yaw_box is not None or \
+                self._dict_box is not None:
             bottom = QWidget()
             row = QHBoxLayout(bottom)
             row.setContentsMargins(0, 0, 0, 0)
@@ -245,6 +251,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._marker_box, 2)   # 滑杆占更宽
             if self._yaw_box is not None:
                 row.addWidget(self._yaw_box, 1)
+            if self._dict_box is not None:
+                row.addWidget(self._dict_box, 1)
         self._bottom_row = bottom
 
     def _build_marker_slider(self, publish):
@@ -310,6 +318,26 @@ class AlgoOutputPanel(QGroupBox):
         self._yaw_spin = spin
         self._yaw_box = box
 
+    def _build_dict_combo(self, publish):
+        """ArUco 字典切换 (QComboBox): 候选取 config.ARUCO_DICTS, 选择即
+        发布 (latched); 未动过不发布, 节点用 aruco.yaml 的 dict_name
+        (与码边长同步同一约定)。激活信号过滤: 程序设初值不触发发布。"""
+        box = QGroupBox('ArUco 字典')
+        box.setToolTip(
+            '场景换了码的字典 (如 4x4 换 6x6) 时下拉切换, 运行中同步\n'
+            '检测/降落节点, 下一帧检测生效; 降落中切换会重新选择目标')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        combo = QComboBox()
+        combo.addItems(config.ARUCO_DICTS)
+        # 初始显示默认值不发 (未选择不发布, 节点用 aruco.yaml 的值;
+        # setCurrentText 放在 connect 之前, 不触发 activated)
+        combo.setCurrentText(config.ARUCO_DICT_DEFAULT)
+        combo.activated[str].connect(publish)   # 用户选择才发布 (含重复选择, 传字典名)
+        lay.addWidget(combo, 1)
+        self._dict_combo = combo
+        self._dict_box = box
+
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除。"""
         for key in list(self._sections):
@@ -339,7 +367,7 @@ class AlgoOutputPanel(QGroupBox):
 
     def _relayout(self):
         """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零;
-        底部常驻行 (码边长滑杆 + 降落朝向选择并排) 横跨全部分组列。"""
+        底部常驻行 (码边长滑杆 + 降落朝向选择 + 字典切换并排) 横跨全部分组列。"""
         for col, key in enumerate(self._order):
             self._lay.addWidget(self._sections[key], 0, col)
         for col in range(self._lay.columnCount()):

@@ -39,6 +39,10 @@ struct DetectorConfig
   cv::Mat D;                                // 畸变系数; 空 = 无畸变
 };
 
+/// 字典名 -> 预定义字典; 未知名字抛 std::invalid_argument (前置声明供
+/// ArucoDetector::set_dictionary 头文件内联使用)
+cv::Ptr<cv::aruco::Dictionary> make_dictionary(const std::string & name);
+
 /// ArUco 检测器 —— 纯算法, 不含 ROS / 窗口显示。
 /// 单实例单线程使用; 检测与绘制可分开调用。
 class ArucoDetector
@@ -62,6 +66,15 @@ public:
   /// 运行中更新码边长 (米): 场景含多种尺寸码时, 地面站滑杆同步过来,
   /// 下一帧位姿解算即用新尺度 (tvec 随边长线性缩放); 检测本身不受影响
   void set_marker_length(double length_m) {config_.marker_length = length_m;}
+
+  /// 运行中更新字典: 地面站下拉选择同步过来, 下一帧即用新字典检测
+  /// (旧字典下已锁定的目标码可能消失, 由上层按目标丢失逻辑自行处理)。
+  /// 未知名字抛 std::invalid_argument, 调用方须自行处理 (保持原字典不变)
+  void set_dictionary(const std::string & name)
+  {
+    dictionary_ = make_dictionary(name);
+    config_.dict_name = name;
+  }
 
 
 private:

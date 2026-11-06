@@ -131,6 +131,25 @@ ARUCO_MARKER_LENGTH_MAX = 2.00      # 米 (滑杆上限)
 ARUCO_MARKER_LENGTH_STEP = 0.05     # 米 (滑杆步进, 拖动按此跳档)
 ARUCO_MARKER_LENGTH_DEFAULT = 0.8   # 米 (与 aruco.yaml 默认一致)
 
+# ---------- ArUco 字典运行时切换 (右栏"算法信息"面板下拉框) ----------
+# 场景换了码的字典 (如 4x4 换 6x6) 时, 下拉选择运行中同步 aruco_node /
+# aruco_landing_node 的 dict_name (下一帧检测生效)。latched 话题: 后启动的
+# 节点一接入即拿到当前值; 未选择过不发布 (与码边长同步同一约定), 节点用
+# aruco.yaml 的 dict_name。默认值应与该 yaml 保持一致。
+# 可选名字 = OpenCV 预定义字典 (与 flylab_vision ArucoDetector 的
+# dict_table 一致, 未知名字节点拒绝并保持原字典)。
+ARUCO_DICT_TOPIC = '/flylab/aruco_dict'
+ARUCO_DICTS = [
+    'DICT_4X4_50', 'DICT_4X4_100', 'DICT_4X4_250', 'DICT_4X4_1000',
+    'DICT_5X5_50', 'DICT_5X5_100', 'DICT_5X5_250', 'DICT_5X5_1000',
+    'DICT_6X6_50', 'DICT_6X6_100', 'DICT_6X6_250', 'DICT_6X6_1000',
+    'DICT_7X7_50', 'DICT_7X7_100', 'DICT_7X7_250', 'DICT_7X7_1000',
+    'DICT_ARUCO_ORIGINAL',
+    'DICT_APRILTAG_16h5', 'DICT_APRILTAG_25h9',
+    'DICT_APRILTAG_36h10', 'DICT_APRILTAG_36h11',
+]
+ARUCO_DICT_DEFAULT = 'DICT_4X4_1000'   # 与 aruco.yaml 默认一致
+
 # ---------- 降落航向偏置同步 ----------
 # aruco_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的
 # 落点朝向偏置 (度, 右正)。latched 话题: 后启动的节点一接入即拿到当前值;

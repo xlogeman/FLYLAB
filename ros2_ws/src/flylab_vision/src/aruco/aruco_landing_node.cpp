@@ -250,8 +250,19 @@ public:
       "marker_length_topic", "/flylab/aruco_marker_length");
     marker_length_ = marker_length;
     marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
-      marker_len_topic, 10,
+      marker_len_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_marker_length(*msg);});
+
+    // ---------- 地面站字典同步 ----------
+    // 地面站右栏下拉切换 ArUco 字典即发布 (latched, 后启动的节点一接入即收到
+    // 最近值); 运行中换字典后锁定目标码可能不在新字典里, 重选目标并复位
+    // 朝向滤波按新字典重新对齐。话题名可用参数覆盖。
+    const auto dict_topic = declare_parameter<std::string>(
+      "dict_topic", "/flylab/aruco_dict");
+    dict_name_ = dict_name;
+    dict_sub_ = create_subscription<std_msgs::msg::String>(
+      dict_topic, rclcpp::QoS(1).reliable().transient_local(),
+      [this](const std_msgs::msg::String::SharedPtr msg) {on_dict(*msg);});
 
     // ---------- 地面站视场角同步 ----------
     // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
@@ -260,7 +271,7 @@ public:
       declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
     fov_deg_ = fov_deg;
     fov_sub_ = create_subscription<std_msgs::msg::Float64>(
-      fov_topic, 10,
+      fov_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
 
     // ---------- 跟踪码 ID 广播 ----------
@@ -524,6 +535,35 @@ private:
     RCLCPP_INFO(
       get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
       msg.data);
+  }
+
+  // ---------------- 地面站字典同步 ----------------
+  void on_dict(const std_msgs::msg::String & msg)
+  {
+    // 非法值/值未变化跳过 (下拉重复选择降噪)
+    if (msg.data.empty() || msg.data == dict_name_) {
+      return;
+    }
+    try {
+      detector_->set_dictionary(msg.data);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(
+        get_logger(), "忽略无效字典 '%s': %s", msg.data.c_str(), e.what());
+      return;
+    }
+    dict_name_ = msg.data;
+    RCLCPP_INFO(
+      get_logger(), "字典同步: %s (下一帧检测生效, 来自地面站)",
+      dict_name_.c_str());
+    // 锁定目标码在新字典下可能不存在: 丢弃锁定重新选目标, 并复位
+    // 朝向滤波/计数/锁定 (码 ID 集合变了, 朝向基准失效)
+    tracked_id_ = -1;
+    lost_id_time_ = 0.0;
+    yaw_last_id_ = -1;
+    yaw_filt_init_ = false;
+    yaw_count_ = 0;
+    yaw_locked_ = false;
+    yaw_wait_t_ = 0.0;
   }
 
   // ---------------- 地面站降落朝向偏置同步 ----------------
@@ -1181,6 +1221,8 @@ private:
   double fov_deg_ = 60.0;   // 当前生效的 FOV (视场角同步去重用)
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr marker_len_sub_;
   double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr dict_sub_;
+  std::string dict_name_;       // 当前生效的字典 (同步去重用)
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻
@@ -1199,7 +1241,7 @@ private:
   // 调参项
   int target_id_;
   bool target_fallback_;
-  double land_cx_, land_cy_, vel_gain_, max_h_vel_;
+  double land_cx_, land_cy_, vel_gain_, max_h_vel_;   
   double align_ref_alt_, max_height_scale_;
   double align_tol_, land_area_thresh_, vertical_threshold_deg_;
   double descend_close_, descend_far_, area_s_thresh_;

@@ -13,6 +13,7 @@
     # ---------- 检测参数 (aruco_node / aruco_landing_node 共用) ----------
     image_topic: /flylab/display/image_raw   # 算法图像输入 (默认地面站转发帧)
     dict_name: DICT_4X4_1000                 # 字典; Prometheus 6x6 码用 DICT_6X6_250
+    dict_topic: /flylab/aruco_dict           # 地面站"ArUco 字典"下拉运行中同步 (latched)
     marker_length: 0.8                       # 码物理边长 (米), 影响 3D 位姿解算尺度
     fov_deg: 90.0                            # 初始视场角估算 (无标定时); 地面站调整 FOV 滑杆后经 /flylab/camera_fov 自动同步覆盖
     calib: ""                                # 相机标定 yaml 路径; 空 = 按 FOV 估算 (位姿仅供参考)

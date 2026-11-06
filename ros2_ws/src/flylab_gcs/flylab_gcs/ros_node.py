@@ -203,6 +203,14 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # ArUco 字典同步发布器 (latched 约定见 config.ARUCO_DICT_TOPIC)
+        self.aruco_dict_pub = self.create_publisher(
+            String, config.ARUCO_DICT_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -430,6 +438,13 @@ class GroundStationNode(Node):
         msg = Float64()
         msg.data = float(deg)
         self.landing_yaw_pub.publish(msg)
+
+    def publish_aruco_dict(self, name):
+        """发布 ArUco 字典名, 供 aruco_node / aruco_landing_node 运行中
+        同步 dict_name (下一帧检测生效)。"""
+        msg = String()
+        msg.data = str(name)
+        self.aruco_dict_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

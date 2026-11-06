@@ -151,7 +151,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 拖动经 latched 话题同步 aruco_node / aruco_landing_node
         self.algo_panel = AlgoOutputPanel(
             self.node.get_aruco_info, self.node.publish_marker_length,
-            self.node.publish_landing_yaw_offset)
+            self.node.publish_landing_yaw_offset,
+            set_aruco_dict=self.node.publish_aruco_dict)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         self.setCentralWidget(self.camera_tab)

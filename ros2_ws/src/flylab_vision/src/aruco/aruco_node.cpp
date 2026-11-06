@@ -21,6 +21,7 @@
 
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
 #include "aruco/aruco_detector.hpp"
@@ -63,7 +64,7 @@ public:
       declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
     fov_deg_ = fov_deg;
     fov_sub_ = create_subscription<std_msgs::msg::Float64>(
-      fov_topic, 10,
+      fov_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
 
     // ---------- 地面站码边长同步 ----------
@@ -74,8 +75,18 @@ public:
       "marker_length_topic", "/flylab/aruco_marker_length");
     marker_length_ = marker_length;
     marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
-      marker_len_topic, 10,
+      marker_len_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {on_marker_length(*msg);});
+
+    // ---------- 地面站字典同步 ----------
+    // 地面站右栏下拉切换 ArUco 字典即发布 (latched, 后启动的节点一接入即收到
+    // 最近值); 运行中换字典下一帧生效。话题名可用参数覆盖。
+    const auto dict_topic = declare_parameter<std::string>(
+      "dict_topic", "/flylab/aruco_dict");
+    dict_name_ = dict_name;
+    dict_sub_ = create_subscription<std_msgs::msg::String>(
+      dict_topic, rclcpp::QoS(1).reliable().transient_local(),
+      [this](const std_msgs::msg::String::SharedPtr msg) {on_dict(*msg);});
 
     // ---------- 降落节点跟踪码同步 (MAX 让位) ----------
     // 降落中每帧广播正在跟踪的码 ID: 若恰为画面最大码, 本节点不画洋红
@@ -164,6 +175,24 @@ private:
       msg.data);
   }
 
+  /// 地面站字典下拉同步: 换字典下一帧生效; 未知名字拒绝并保持原字典
+  void on_dict(const std_msgs::msg::String & msg)
+  {
+    if (msg.data.empty() || msg.data == dict_name_) {
+      return;
+    }
+    try {
+      detector_->set_dictionary(msg.data);
+      dict_name_ = msg.data;
+      RCLCPP_INFO(
+        get_logger(), "字典同步: %s (下一帧检测生效, 来自地面站)",
+        dict_name_.c_str());
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(
+        get_logger(), "忽略无效字典 '%s': %s", msg.data.c_str(), e.what());
+    }
+  }
+
   /// 码的实际物理宽度 (米): w_px × Z / fx (针孔模型), 无位姿返回 -1。
   /// fx 与检测器同源: 有标定用标定 K, 否则按当前同步 FOV 估算
   double physicalWidth(double img_w, const Detection & d) const
@@ -225,6 +254,8 @@ private:
   double fov_deg_ = 60.0;   // 当前生效的 FOV (同步去重用)
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr marker_len_sub_;
   double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr dict_sub_;
+  std::string dict_name_;       // 当前生效的字典 (同步去重用)
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr tracked_id_sub_;
   int tracked_id_rx_ = -1;  // 降落节点正在跟踪的码 ID (最新广播值)
   rclcpp::Time tracked_id_rx_time_{0, 0, RCL_ROS_TIME};  // 广播到达时刻 (有效期判定)
