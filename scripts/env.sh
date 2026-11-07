@@ -33,6 +33,10 @@ fi
 # AirSim 所在的 Windows 宿主机 (WSL 默认网关)
 export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
 
+# Fast DDS: 同机大图 (900KB 显示帧转发等) 走 SHM 零拷贝, 避开 UDP 分片
+# 背压 (实测 30Hz 原始图转发 publish 阻塞 ~80ms/帧, 见 fastrtps_shm.xml 头注)
+export FASTRTPS_DEFAULT_PROFILES_FILE=/root/flylab/scripts/fastrtps_shm.xml
+
 # rviz/ORB 走软件渲染 (WSL 无独显穿透)
 export LIBGL_ALWAYS_SOFTWARE=1
 export DISPLAY=${DISPLAY:-:0}

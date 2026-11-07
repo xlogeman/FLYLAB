@@ -21,11 +21,16 @@ AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
 # 当前显示帧发布到此话题，算法节点订阅即处理用户正在看的画面（深度伪彩帧除外）。
 # 分辨率保持原图，保证标注坐标对齐。
 DISPLAY_IMAGE_TOPIC = '/flylab/display/image_raw'
-DISPLAY_IMAGE_HZ = 30
+DISPLAY_IMAGE_HZ = 15
+# 注意: 此值必须低于算法节点的消费能力 (yolo 单线程约 28 帧/s), 否则接收端
+# 积压后 SHM/UDP 传输层都会背压阻塞发布端 (实测 30Hz 时 publish 被拖到 ~80ms,
+# 反过来把抓取线程也拖慢)。15Hz 对检测/降落类算法足够
 # 转发 QoS: True=RELIABLE 不丢帧但写端可能等 ACK；False=BEST_EFFORT 吞吐满速可能丢帧。
 # 实测转发稳定低于源帧率时改 False
 DISPLAY_IMAGE_RELIABLE = False
-# Scene 图传走 PNG 压缩（线上体积约 1/3，净赚帧率）；False = 始终原始传输
+# Scene 图传是否走 PNG 压缩（线上体积约 1/3）。实测关闭：UE 服务端的
+# PNG 编码是单线程且比省下的传输更贵（640x480 下 RPC 反而多 ~30ms），
+# 640x480 原始传输 ~900KB 对 WSL 链路无压力
 DISPLAY_SCENE_COMPRESS = False
 
 # 算法启停指令：按钮按下/抬起时发布 std_msgs/String

@@ -2,7 +2,10 @@
 #ifndef FLYLAB_VISION__COMMON__DISPLAY_VISION_NODE_HPP_
 #define FLYLAB_VISION__COMMON__DISPLAY_VISION_NODE_HPP_
 
+#include <atomic>
 #include <chrono>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #include <opencv2/core.hpp>
@@ -66,9 +69,25 @@ public:
     cmd_sub_ = create_subscription<std_msgs::msg::String>(
       cmd_topic, 10,
       [this](const std_msgs::msg::String::SharedPtr msg) {on_cmd(*msg);});
+    // 收帧/推理双回调组 (须配 MultiThreadedExecutor, 见各节点 main):
+    // 推理一帧耗时可达几十 ms, 若与收帧同线程, SHM 传输的 buffer 要等
+    // take 才归还, 发布端会被背压阻塞 (实测拖慢地面站抓取线程)。
+    // 故收帧回调只缓存最新帧引用立即释放, 推理由 proc 定时器驱动、
+    // 永远处理最新帧 (慢了就丢帧, 与图传语义一致)
+    img_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    proc_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions img_opts;
+    img_opts.callback_group = img_group_;
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
       image_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
-      [this](const sensor_msgs::msg::Image::SharedPtr msg) {on_image(*msg);});
+      [this](const sensor_msgs::msg::Image::SharedPtr msg) {on_image(msg);},
+      img_opts);
+
+    // 推理驱动: 10ms 轮询最新帧 (推理慢时每轮只做一次, 不排队)
+    process_timer_ = create_wall_timer(
+      std::chrono::milliseconds(10),
+      [this]() {process_tick();},
+      proc_group_);
 
     // 诊断: 每 2 秒检查收帧情况, 收不到帧时主动告警
     stats_timer_ = create_wall_timer(std::chrono::seconds(2), [this]() {
@@ -125,7 +144,7 @@ private:
     }
   }
 
-  void on_image(const sensor_msgs::msg::Image & msg)
+  void on_image(const sensor_msgs::msg::Image::SharedPtr msg)
   {
     if (!enabled_) {
       return;
@@ -134,17 +153,38 @@ private:
       got_first_frame_ = true;
       RCLCPP_INFO(
         get_logger(), "收到首帧图像: %ux%u (%s)",
-        msg.width, msg.height, msg.encoding.c_str());
+        msg->width, msg->height, msg->encoding.c_str());
     }
-    const cv::Mat bgr = to_bgr(msg);
+    // 只缓存引用 (O(1)), SHM buffer 由 rclcpp take 后立即归还发布端;
+    // 真正的转码/推理在 process_tick (独立回调组)
+    {
+      std::lock_guard<std::mutex> lk(latest_mutex_);
+      latest_ = msg;
+    }
+    rx_since_log_ += 1;
+  }
+
+  /// 推理驱动回调 (proc_group_): 取最新帧做转码+推理+发标注。
+  /// 每轮只处理一帧, 推理慢时自动丢帧积压, 永远追最新画面
+  void process_tick()
+  {
+    sensor_msgs::msg::Image::SharedPtr msg;
+    {
+      std::lock_guard<std::mutex> lk(latest_mutex_);
+      msg = std::move(latest_);   // 取走即清槽, 下一帧到达即可覆盖
+    }
+    if (!msg || !enabled_) {
+      return;
+    }
+    const cv::Mat bgr = to_bgr(*msg);
     if (bgr.empty()) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
-        "图像数据不完整或编码不支持 (%s), 跳过", msg.encoding.c_str());
+        "图像数据不完整或编码不支持 (%s), 跳过", msg->encoding.c_str());
       return;
     }
     const auto t0 = std::chrono::steady_clock::now();
-    const std::string json = process(bgr, static_cast<int>(msg.width));
+    const std::string json = process(bgr, static_cast<int>(msg->width));
     if (!first_infer_done_) {
       first_infer_done_ = true;
       if (hooks_.log_first_infer) {
@@ -154,7 +194,6 @@ private:
         log_first_infer(static_cast<long>(ms));
       }
     }
-    rx_since_log_ += 1;
     if (json.empty()) {
       return;
     }
@@ -167,10 +206,15 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
+  rclcpp::CallbackGroup::SharedPtr img_group_;
+  rclcpp::CallbackGroup::SharedPtr proc_group_;
+  rclcpp::TimerBase::SharedPtr process_timer_;
   rclcpp::TimerBase::SharedPtr stats_timer_;
   std::string image_topic_;
-  uint32_t rx_since_log_ = 0;   // 距上次统计周期收到的帧数
-  bool enabled_ = false;
+  sensor_msgs::msg::Image::SharedPtr latest_;
+  std::mutex latest_mutex_;
+  std::atomic<uint32_t> rx_since_log_{0};   // 距上次统计周期收到的帧数
+  std::atomic<bool> enabled_{false};
   bool got_first_frame_ = false;
   bool first_infer_done_ = false;
 };

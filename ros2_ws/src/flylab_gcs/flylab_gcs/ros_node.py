@@ -7,6 +7,7 @@
 import json
 import threading
 import time
+from array import array
 
 import rclpy
 from geometry_msgs.msg import Quaternion, Twist
@@ -93,6 +94,13 @@ class DisplayForwarder(threading.Thread):
         self._frame = None        # 最新待发帧 (ndarray 引用)
         self._publishing = False  # 上一帧是否仍在发送中 (阻塞时跳帧)
         self.fwd_count = 0        # 2s 统计窗口内的实际发布帧数 (供界面告警)
+        self._tomsg_ms = 0.0      # 窗口内构消息耗时累计 (tobytes/字段填充)
+        self._tobytes_ms = 0.0    # 窗口内 tobytes 耗时累计 (定位非连续数组慢拷贝)
+        self._arr_info = None     # 最近一帧的 (shape, strides, C连续) 内存布局
+        self._pub_ms = 0.0        # 窗口内大图 publish 耗时累计 (rmw+传输)
+        self._probe_ms = 0.0      # 窗口内小消息 publish 耗时累计 (对照)
+        self._pub_ms_n = 0
+        self._stat_t = time.monotonic()
         self._running = True
 
     def set_frame(self, arr):
@@ -100,23 +108,44 @@ class DisplayForwarder(threading.Thread):
         with self._lock:
             self._frame = arr
 
-    def take_fwd_count(self):
-        """取出并清零统计窗口计数 (界面每 2s 取一次)。"""
+    def take_fwd_stats(self):
+        """取出并清零统计窗口 (帧数, tobytes/构消息其余/大图/小消息均值 ms,
+        窗口秒, 数组内存布局)。"""
         with self._lock:
             count, self.fwd_count = self.fwd_count, 0
-        return count
+            tobytes_ms, tomsg_ms, pub_ms, probe_ms, n = (
+                self._tobytes_ms, self._tomsg_ms, self._pub_ms,
+                self._probe_ms, self._pub_ms_n)
+            self._tobytes_ms, self._tomsg_ms = 0.0, 0.0
+            self._pub_ms, self._probe_ms, self._pub_ms_n = 0.0, 0.0, 0
+            arr_info = self._arr_info
+            dt = time.monotonic() - self._stat_t
+            self._stat_t = time.monotonic()
+        div = n if n else 1
+        return (count, tobytes_ms / div, (tomsg_ms - tobytes_ms) / div,
+                pub_ms / div, probe_ms / div, dt, arr_info)
 
     def stop(self):
         self._running = False
 
     def _to_msg(self, arr):
+        # 关键: msg.data 必须赋 array.array('B') —— 赋 bytes 会触发 rclpy
+        # 字段 setter 对 900K 元素做逐元素校验 (实测 ~50ms/帧), array.array
+        # 走类型快路 (<0.01ms)。参见构建耗时隔离测试 (2026-11-07)
+        t_b = time.monotonic()
+        data = array('B', arr.tobytes())
+        t_b = (time.monotonic() - t_b) * 1000.0
         msg = Image()
         msg.height, msg.width = arr.shape[:2]
         msg.encoding = 'bgr8'
         msg.step = int(arr.strides[0])
         msg.header.frame_id = 'display'
         msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.data = arr.tobytes()
+        msg.data = data
+        with self._lock:
+            self._tobytes_ms += t_b
+            self._arr_info = (tuple(arr.shape), tuple(arr.strides),
+                              bool(arr.flags['C_CONTIGUOUS']))
         return msg
 
     def run(self):
@@ -130,6 +159,11 @@ class DisplayForwarder(threading.Thread):
             history=HistoryPolicy.KEEP_LAST, depth=2)
         pub = self._node.create_publisher(
             Image, config.DISPLAY_IMAGE_TOPIC, qos)
+        # 小消息对照探针: 与大图同进程同 DDS 事件循环, 用于区分
+        # "进程级/事件循环级卡顿" 与 "大图序列化/传输专属卡顿"
+        probe_pub = self._node.create_publisher(String, '/flylab/display_probe', 10)
+        probe_msg = String()
+        probe_msg.data = 'x'
         period = 1.0 / max(config.DISPLAY_IMAGE_HZ, 1)
         try:
             while self._running and rclpy.ok():
@@ -143,8 +177,21 @@ class DisplayForwarder(threading.Thread):
                         and pub.get_subscription_count() > 0):
                     self._publishing = True
                     try:
-                        pub.publish(self._to_msg(frame))
-                        self.fwd_count += 1
+                        t_msg = time.monotonic()
+                        msg = self._to_msg(frame)
+                        t_msg = time.monotonic() - t_msg
+                        t_pub = time.monotonic()
+                        pub.publish(msg)
+                        t_pub = time.monotonic() - t_pub
+                        t_probe = time.monotonic()
+                        probe_pub.publish(probe_msg)
+                        t_probe = time.monotonic() - t_probe
+                        with self._lock:
+                            self.fwd_count += 1
+                            self._tomsg_ms += t_msg * 1000.0
+                            self._pub_ms += t_pub * 1000.0
+                            self._probe_ms += t_probe * 1000.0
+                            self._pub_ms_n += 1
                     except Exception:
                         # 退出竞态: shutdown 作废上下文时正好在 publish, 静默吞掉
                         pass
@@ -451,9 +498,9 @@ class GroundStationNode(Node):
         真正的 tobytes/序列化/publish 在 DisplayForwarder 线程完成。"""
         self.display_forwarder.set_frame(arr)
 
-    def take_fwd_count(self):
-        """取 2s 统计窗口内的实际转发帧数 (取后清零)。"""
-        return self.display_forwarder.take_fwd_count()
+    def take_fwd_stats(self):
+        """取 2s 统计窗口内的 (转发帧数, publish 均值 ms, 窗口秒) (取后清零)。"""
+        return self.display_forwarder.take_fwd_stats()
 
     def shutdown(self):
         """停止转发线程 (先于 rclpy.shutdown(), 等线程退出防止退出栈 RCLError)。"""

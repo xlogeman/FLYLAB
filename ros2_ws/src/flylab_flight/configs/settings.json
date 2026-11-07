@@ -7,6 +7,7 @@
   "ApiServerPort": 41451,
   "LogMessagesVisible": true,
   "EngineSound": false,
+  "SubWindows": [],
   "OriginGeopoint": {
     "Latitude": 47.641468,
     "Longitude": -122.140165,

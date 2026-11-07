@@ -288,9 +288,24 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         if now - self._fwd_last < 2.0:
             return
         self._fwd_last = now
-        cnt = self.node.take_fwd_count()
+        cnt = self.node.take_fwd_stats()[0]
         if self.running_algo is None:
             return
+        # 分段诊断日志 (默认关闭, 取消注释即恢复): tobytes / 构消息其余 /
+        # 大图 publish / 小消息对照 + 数组内存布局 —— 曾据此定位
+        # rclpy msg.data=bytes 逐元素校验 ~50ms/帧的元凶
+        # (cnt, tobytes_ms, tomsg_ms, pub_ms, probe_ms, dt,
+        #  arr_info) = self.node.take_fwd_stats()
+        # if cnt > 0:
+        #     info = ''
+        #     if arr_info:
+        #         shape, strides, contig = arr_info
+        #         info = (f' [shape={shape} strides={strides} '
+        #                 f'C连续={contig}]')
+        #     self.log.info(
+        #         f'画面转发: {cnt} 帧/{dt:.1f}s, tobytes {tobytes_ms:.1f}ms / '
+        #         f'构消息其余 {tomsg_ms:.1f}ms / 大图 publish {pub_ms:.1f}ms / '
+        #         f'小消息对照 {probe_ms:.2f}ms{info}')
         # 启动后 3s 是 DDS 发现窗口, 计数 0 属正常不告警
         if cnt == 0 and now - self._algo_started_at > 3.0:
             self.log.warning(
