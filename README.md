@@ -65,7 +65,7 @@ cd ~/flylab/ros2_ws && colcon build --parallel-workers 2 && source install/setup
 
 # 2. 场景配置: configs/ 下对应 json 复制到 Windows 端 Documents\AirSim\settings.json，重启 UE
 bash /root/flylab/scripts/run-px4.sh                                # PX4 SITL (默认 none_iris)
-bash /root/flylab/scripts/run-px4.sh none_fucker_3120g_tw23 --clean # 指定机型 (--clean 清参数缓存)
+bash /root/flylab/scripts/run-px4.sh none_fucker_x450 --clean # 指定机型 (--clean 清参数缓存)
 bash /root/flylab/scripts/sync-airsim-ip.sh                         # WSL IP 变了先跑这个
 
 MicroXRCEAgent udp4 -p 8888
@@ -192,8 +192,7 @@ ros2 run flylab_vision aruco_node --ros-args \
 | 配置文件 | 构型 | 推重比 | 悬停油门 | PX4 机型 |
 |---|---|---|---|---|
 | `airsim_default_1000g_tw17.json` | F450，GWS 9x5 桨+MT2212，1.0kg | 1.70 | 0.59 | `10016_none_iris` |
-| `fucker_3120g_tw23.json` | 450 轴距，2814 电机+12寸桨(4S)，3.12kg | 2.31 | 0.43 | `70003_fucker_3120g_tw23` |
-| `fucker_2.00kg_tw15.json` | 450 轴距，2212 电机+10寸桨(3S)，2.0kg | 1.50 | 0.67 | `70004_fucker_2000g_tw15` |
+| `fucker_x450.json` | 450 轴距，28系电机+12寸桨(4S)，3.12kg | 2.31 | 0.43 | `70006_fucker_x450` |
 
 **新增机型**：① `airframes/700XX_<机型名>`（**文件名禁止含点号**——rcS 会把带点文件当 `xxx.post` 忽略，小数点去掉如 `tw23`）② `airframes/CMakeLists.txt` 注册 ③ `simulator_mavlink/CMakeLists.txt` 加 `add_custom_target(none_<机型名>)` ④ `configs/vehicles/` 存档 ⑤ `cd px4.1.15.2 && make px4_sitl_default`
 

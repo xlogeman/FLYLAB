@@ -1,6 +1,6 @@
 {
-  "_description": "X100 共轴双旋翼试验机: 与 X050 完全同参数 (起飞重量1.5kg, 14寸桨, 推重比3.1), 仅独立机型档案便于地面站选择。上下两桨共轴叠放(无机臂), 偏航靠上下桨转速差动, 俯仰/滚转靠倾转电机架(最大0.44rad≈25.2°)。使用方法: 把 PhysicsParams 段复制进 settings.json 的 Vehicles.PX4 下替换现有 PhysicsParams, 重启 UE 生效; PX4 侧用机型文件 70006_fucker_coax_x100 (依赖与 X050 相同的 BEIMING coax patch, 已含)。",
-  "_airframe": "70006_fucker_coax_x100 (SYS_AUTOSTART=70006, 启动: bash scripts/run-px4.sh none_fucker_coax_x100 --clean)",
+  "_description": "X100 共轴双旋翼试验机: 与 X050 完全同参数 (起飞重量1.5kg, 14寸桨, 推重比3.1), 仅独立机型档案便于地面站选择。上下两桨共轴叠放(无机臂), 偏航靠上下桨转速差动, 俯仰/滚转靠倾转电机架(最大0.44rad≈25.2°)。使用方法: 把 PhysicsParams 段复制进 settings.json 的 Vehicles.PX4 下替换现有 PhysicsParams, 重启 UE 生效; PX4 侧用机型文件 70004_fucker_coax_x100 (依赖与 X050 相同的 BEIMING coax patch, 已含)。",
+  "_airframe": "70004_fucker_coax_x100 (SYS_AUTOSTART=70004, 启动: bash scripts/run-px4.sh none_fucker_coax_x100 --clean)",
   "_patches": {
     "BeimingSim(Windows)": "同 X050: b26c7b1f 共轴物理层+simple_flight; MavLinkMultirotorApi 未提交修改(HIL_ACTUATOR_CONTROLS 通道2/3=倾转指令)",
     "PX4(WSL)": "同 X050: ① ActuatorEffectivenessCustom.cpp 恢复 enablePropellerTorque; ② ControlAllocator.cpp 弱权限轴阈值 0.05→0.005 (2026-11-04)"

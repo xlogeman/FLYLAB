@@ -166,12 +166,10 @@ LANDING_YAW_OFFSET_DEFAULT = 0     # 度 (初始显示值, 与 aruco.yaml 的 ya
 PX4_SCRIPT = '/root/flylab/scripts/run-px4.sh'
 PX4_MODELS = [
     {'name': '10016_none_iris',       'target': 'none_iris'},
-    {'name': '70003_fucker_3120g_tw23', 'target': 'none_fucker_3120g_tw23'},
-    {'name': '70004_fucker_2000g_tw15', 'target': 'none_fucker_2000g_tw15'},
-    {'name': '70005_fucker_coax_x050',  'target': 'none_fucker_coax_x050'},
-    {'name': '70006_fucker_coax_x100',  'target': 'none_fucker_coax_x100'},
-    {'name': '70007_fucker_coax_x300',  'target': 'none_fucker_coax_x300'},
-    {'name': '70008_fucker_x450',       'target': 'none_fucker_x450'},
+    {'name': '70003_fucker_coax_x050',  'target': 'none_fucker_coax_x050'},
+    {'name': '70004_fucker_coax_x100',  'target': 'none_fucker_coax_x100'},
+    {'name': '70005_fucker_coax_x300',  'target': 'none_fucker_coax_x300'},
+    {'name': '70006_fucker_x450',       'target': 'none_fucker_x450'},
 ]
 
 # ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
@@ -182,7 +180,10 @@ TELEOP_STATUS_TOPIC = '/flylab/teleop_status'
 TELEOP_START_CMD = 'teleop_start'
 TELEOP_STOP_CMD = 'teleop_stop'
 TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node',
-              '--ros-args', '-p', 'yaw_rate_deg:=45.0']   # 须 = GIMBAL_FOLLOW_YAW_RATE_DEG_S
+              '--ros-args',
+              '-p', 'v_xy:=10.0',          # 平移速度上限 m/s (默认5.0; 飞控按 MPC_XY_VEL_MAX 二次夹紧)
+              '-p', 'v_z:=3.0',            # 升降速度上限 m/s (默认2.0; 飞控按 MPC_Z_VEL_MAX_UP/DN 二次夹紧)
+              '-p', 'yaw_rate_deg:=45.0']  # 须 = GIMBAL_FOLLOW_YAW_RATE_DEG_S
 
 # ---------- 通信链路 (地面站一键拉起) ----------
 # uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888, 供 tracker:=uxrce / aruco_landing 链路

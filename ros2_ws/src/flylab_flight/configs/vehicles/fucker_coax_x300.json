@@ -1,6 +1,6 @@
 {
-  "_description": "X300 共轴双旋翼机: 起飞重量4.0kg, 16寸桨(PropDiameter 0.4064), CT/CP 沿用 X050 共轴默认值, MaxRPM 提到 6800, 推重比 2.4。共轴布局同 X050: 上下两桨叠放, 偏航靠转速差动, 俯仰/滚转靠倾转电机架(最大0.44rad≈25.2°)。平飞 10 m/s 需求: 24° 倾角理论极速 m·g·tanθ/Cd ≈ 54 m/s, 裕量充足; 限制速度靠 MPC_XY_VEL_MAX=10。使用方法: PhysicsParams 复制进 settings.json Vehicles.PX4, 重启 UE 生效; PX4 侧用机型文件 70007_fucker_coax_x300 (依赖 X050 的 BEIMING coax patch, 已含)。",
-  "_airframe": "70007_fucker_coax_x300 (SYS_AUTOSTART=70007, 启动: bash scripts/run-px4.sh none_fucker_coax_x300 --clean)",
+  "_description": "X300 共轴双旋翼机: 起飞重量4.0kg, 16寸桨(PropDiameter 0.4064), CT/CP 沿用 X050 共轴默认值, MaxRPM 提到 6800, 推重比 2.4。共轴布局同 X050: 上下两桨叠放, 偏航靠转速差动, 俯仰/滚转靠倾转电机架(最大0.44rad≈25.2°)。平飞 10 m/s 需求: 24° 倾角理论极速 m·g·tanθ/Cd ≈ 54 m/s, 裕量充足; 限制速度靠 MPC_XY_VEL_MAX=10。使用方法: PhysicsParams 复制进 settings.json Vehicles.PX4, 重启 UE 生效; PX4 侧用机型文件 70005_fucker_coax_x300 (依赖 X050 的 BEIMING coax patch, 已含)。",
+  "_airframe": "70005_fucker_coax_x300 (SYS_AUTOSTART=70005, 启动: bash scripts/run-px4.sh none_fucker_coax_x300 --clean)",
   "_patches": {
     "BeimingSim(Windows)": "同 X050: b26c7b1f 共轴物理层+simple_flight; MavLinkMultirotorApi 未提交修改(HIL_ACTUATOR_CONTROLS 通道2/3=倾转指令)",
     "PX4(WSL)": "同 X050: ① ActuatorEffectivenessCustom.cpp 恢复 enablePropellerTorque; ② ControlAllocator.cpp 弱权限轴阈值 0.05→0.005 (KM=0.0236 低于默认阈值会被清零)",

@@ -1,6 +1,6 @@
 {
-  "_description": "X050 共轴双旋翼试验机: 起飞重量1.5kg, 14寸桨(PropDiameter 0.35), CT/CP/MaxRPM 用 RotorParams 默认值。上下两桨共轴叠放(无机臂), 偏航靠上下桨转速差动, 俯仰/滚转靠倾转电机架(最大0.25rad≈14.3°)。特性: 推重比高(3.1)但姿态权限弱、响应慢, 最大水平加速度仅≈2.5 m/s²。使用方法: 把 PhysicsParams 段复制进 settings.json 的 Vehicles.PX4 下替换现有 PhysicsParams, 重启 UE 生效; PX4 侧用机型文件 70005_fucker_coax_x050 (需 BEIMING coax patch 恢复 Custom 机型 KM 反扭矩)。",
-  "_airframe": "70005_fucker_coax_x050 (SYS_AUTOSTART=70005, 启动: bash scripts/run-px4.sh none_fucker_coax_x050 --clean)",
+  "_description": "X050 共轴双旋翼试验机: 起飞重量1.5kg, 14寸桨(PropDiameter 0.35), CT/CP/MaxRPM 用 RotorParams 默认值。上下两桨共轴叠放(无机臂), 偏航靠上下桨转速差动, 俯仰/滚转靠倾转电机架(最大0.25rad≈14.3°)。特性: 推重比高(3.1)但姿态权限弱、响应慢, 最大水平加速度仅≈2.5 m/s²。使用方法: 把 PhysicsParams 段复制进 settings.json 的 Vehicles.PX4 下替换现有 PhysicsParams, 重启 UE 生效; PX4 侧用机型文件 70003_fucker_coax_x050 (需 BEIMING coax patch 恢复 Custom 机型 KM 反扭矩)。",
+  "_airframe": "70003_fucker_coax_x050 (SYS_AUTOSTART=70003, 启动: bash scripts/run-px4.sh none_fucker_coax_x050 --clean)",
   "_patches": {
     "BeimingSim(Windows)": "b26c7b1f 共轴物理层+simple_flight; MavLinkMultirotorApi 未提交修改(HIL_ACTUATOR_CONTROLS 通道2/3=倾转指令)",
     "PX4(WSL)": "① src/modules/control_allocator/ActuatorEffectiveness/ActuatorEffectivenessCustom.cpp 恢复 enablePropellerTorque (共轴偏航依赖 KM 差动); ② src/modules/control_allocator/ControlAllocator.cpp 弱权限轴阈值 0.05→0.005 (共轴 KM=0.02/TRQ=0.013 均低于默认阈值, 会被整行清零导致俯仰/滚转/偏航三轴力矩无法分配、HIL 通道2/3 恒0), 2026-11-04",

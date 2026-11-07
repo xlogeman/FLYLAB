@@ -119,6 +119,22 @@ protected:
   std::string process(const cv::Mat & bgr, int /*frame_width*/) override
   {
     auto results = detector_->detect(bgr);
+    // 每帧终端日志 (检出绿色/未检出红色) —— 默认注释掉, 30Hz 刷屏;
+    // if (results.empty()) {
+    //   RCLCPP_INFO(get_logger(), "\033[31m本帧未检测到码\033[0m");
+    // } else {
+    //   std::ostringstream ids;
+    //   for (size_t i = 0; i < results.size(); ++i) {
+    //     ids << (i ? ", " : "") << "id=" << results[i].id;
+    //     if (results[i].has_pose) {
+    //       ids << '(' << std::fixed << std::setprecision(2)
+    //           << results[i].tvec[2] << "m)";
+    //     }
+    //   }
+    //   RCLCPP_INFO(
+    //     get_logger(), "\033[32m检出 %zu 个码: %s\033[0m",
+    //     results.size(), ids.str().c_str());
+    // }
     // 画面最大码 (真实最大; 让位只影响可视化, 不影响面板摘要)
     const Detection * largest = nullptr;
     double largest_area = -1.0;

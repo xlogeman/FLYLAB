@@ -4,7 +4,7 @@
 #
 # @type Custom (Coaxial Twin-Rotor with Tilting Mounts)
 #
-# 与 70005_fucker_coax_x050 完全同参数, 仅独立机型编号便于地面站选择。
+# 与 70003_fucker_coax_x050 完全同参数, 仅独立机型编号便于地面站选择。
 #
 # 布局: 上下两桨共轴叠放, 无机臂
 #   - 油门: 两桨同油门 (各承载一半升力)
