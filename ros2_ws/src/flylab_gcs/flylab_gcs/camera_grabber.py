@@ -38,8 +38,10 @@ GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RP
 # AirSim 拉图流水线 worker 数: 每个 worker 独立 RPC 连接并发拉图。
 # 单连接每帧串行等完整 RPC 往返 (实测 55~75ms -> 13~18fps), 帧率 =
 # 1000/RPC; 多连接让"上一帧回传/解码"与"下一帧服务端出图"重叠, 服务端
-# rpclib 多线程处理并发请求 (云台独立连接已验证可行), 有效帧率提升 ~N 倍
-AIRSIM_FETCH_THREADS = 2
+# rpclib 多线程处理并发请求 (云台独立连接已验证可行), 有效帧率提升 ~N 倍。
+# 2026-11-09: 2 worker 实测 RPC 79ms -> 源头 25.7fps 封顶, 算法端输出仅
+# ~17fps; 提到 3 worker (~37fps 源头) 对冲成对帧坍缩损耗
+AIRSIM_FETCH_THREADS = 3
 LOCAL_HZ = 30       # 本机摄像头拉取频率上限
 # 云台线程循环节拍: 摇杆步进/回中动画的推进频率 (下发频率仍由
 # GIMBAL_HOLD_HZ 节流; RPC 与拉图分离, 姿态跟随重下发不占抓取往返)
@@ -691,9 +693,11 @@ class Grabber(threading.Thread):
             now = time.time()
             if now - s['t'] >= 2.0 and s['n'] > 0:
                 n = s['n']
+                # 帧率排查 (2026-11-09, 排查完毕已注释): RPC 往返是源头帧率
+                # 上限的直接依据 (单连接 1000/RPC); 解码异常变慢也在此暴露
                 # self.log(f'图传分段: RPC {s["rpc"]/n*1000:.0f}ms '
                 #          f'/ 解码 {s["dec"]/n*1000:.1f}ms '
-                #          f'(近{n}帧, 帧率 {n/(now-s["t"]):.1f}fps)')
+                #          f'(近{n}帧, 提交帧率 {n/(now-s["t"]):.1f}fps)')
                 s.update({'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': now})
 
     def _commit(self, arr, is_depth, gen):

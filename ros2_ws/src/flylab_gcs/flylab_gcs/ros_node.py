@@ -5,6 +5,7 @@
 不直接接触任何 rclpy 对象。将来加订阅/发布只改这里。
 """
 import json
+# import os            # 仅转发环境诊断日志用 (见 run 内注释, 恢复时一并打开)
 import threading
 import time
 from array import array
@@ -154,6 +155,19 @@ class DisplayForwarder(threading.Thread):
 
     def run(self):
         self._node = rclpy.create_node('ground_station_display')
+        # 链路诊断 (2026-11-09, 排查完毕已注释, 恢复需连带顶部 import os):
+        # 启动时打一次 DDS 环境 —— SHM profile 是否生效 (未 source env.sh 时
+        # FASTRTPS profile 缺失, 大图退回 UDP 分片, best-effort 下丢帧 40%+),
+        # RMW 实现与转发 QoS。排查帧率先看这条, 再看 2s 一条的"链路帧率"日志
+        # self._node.get_logger().info(
+        #     '转发环境: RMW=%s, FASTRTPS_DEFAULT_PROFILES_FILE=%s%s, '
+        #     '转发QoS=%s, 订阅QoS(算法侧默认)=KeepLast(1)+BEST_EFFORT' % (
+        #         os.environ.get('RMW_IMPLEMENTATION', '(未设置,rmw_fastrtps)'),
+        #         '已设置' if os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE')
+        #         else '未设置',
+        #         f'({os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"]})'
+        #         if os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE') else '',
+        #         'RELIABLE' if config.DISPLAY_IMAGE_RELIABLE else 'BEST_EFFORT'))
         # reliable: best-effort 下大图 UDP 分片丢一个整帧就没 (实测丢帧 40%+);
         # 若 ACK 等待限制吞吐, 改 config.DISPLAY_IMAGE_RELIABLE = False
         qos = QoSProfile(

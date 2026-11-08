@@ -199,9 +199,16 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
 
     def _poll_once(self):
         self._poll_ticks += 1
-        # 驱动 ROS 收包 (节点无独立 spin 线程, 回调因此天然在主线程执行)
+        # 驱动 ROS 收包 (节点无独立 spin 线程, 回调因此天然在主线程执行)。
+        # 2026-11-09: 单次 spin_once 只执行一个就绪回调, 33ms 一拍上限
+        # 30 个/秒还要与其他订阅分摊 —— 算法节点 30fps 标注成簇回传
+        # (帧队列排空后 2~3 帧标注同一 tick 连发), 每拍只收下第一条,
+        # HUD 解算帧率被腰斩 (实测 30fps 回传只显示 15)。改为每拍最多
+        # 排空 16 个就绪回调 (240/s 吞吐, rclpy Humble 的 spin_once 无法
+        # 探测"还有无剩余工作", 固定预算兜底; 空转一拍 ~0.1ms 可忽略)
         try:
-            rclpy.spin_once(self.node, timeout_sec=0)
+            for _ in range(16):
+                rclpy.spin_once(self.node, timeout_sec=0)
         except Exception:
             pass
         # 遥测条 + 罗盘 + 航线地图刷新 (数据随 0.5s 飞控心跳采样)

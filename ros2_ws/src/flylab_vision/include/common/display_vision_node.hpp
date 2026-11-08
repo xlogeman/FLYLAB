@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -72,18 +73,21 @@ public:
     // 收帧/推理双回调组 (须配 MultiThreadedExecutor, 见各节点 main):
     // 推理一帧耗时可达几十 ms, 若与收帧同线程, SHM 传输的 buffer 要等
     // take 才归还, 发布端会被背压阻塞 (实测拖慢地面站抓取线程)。
-    // 故收帧回调只缓存最新帧引用立即释放, 推理由 proc 定时器驱动、
-    // 永远处理最新帧 (慢了就丢帧, 与图传语义一致)
+    // 故收帧回调只缓存帧引用立即释放, 推理由 proc 定时器驱动。
+    // 2026-11-09: 缓存由单槽 latest_ 改为深度 2 队列 + tick 排空 ——
+    // 地面站 3 worker 并发拉图回包常成簇 (2ms 内两帧到达), 单槽会把
+    // 一对帧坍缩成一帧推理 (实测收 38fps 只推出 21fps); 队列排空后
+    // 成对帧全走推理, 输出 ≈ min(收帧, 推理能力)
     img_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     proc_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions img_opts;
     img_opts.callback_group = img_group_;
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      image_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+      image_topic_, rclcpp::QoS(rclcpp::KeepLast(2)).best_effort(),
       [this](const sensor_msgs::msg::Image::SharedPtr msg) {on_image(msg);},
       img_opts);
 
-    // 推理驱动: 10ms 轮询最新帧 (推理慢时每轮只做一次, 不排队)
+    // 推理驱动: 10ms 轮询排空帧队列 (推理慢时自动丢帧积压, 永远追最新画面)
     process_timer_ = create_wall_timer(
       std::chrono::milliseconds(10),
       [this]() {process_tick();},
@@ -113,13 +117,14 @@ public:
             image_topic_.c_str());
           return;
         }
-        // 帧龄: 最新缓存帧距现在多久, 持续偏大说明推理消费不过来
+        // 帧龄: 队列头帧距现在多久 (空队列 = -1), 持续偏大说明推理消费不过来
         double age_ms = -1.0;
         {
           std::lock_guard<std::mutex> lk(latest_mutex_);
-          if (latest_) {
-            age_ms = (get_clock()->now() - latest_->header.stamp).seconds() *
-              1000.0;
+          if (!frame_queue_.empty()) {
+            age_ms =
+              (get_clock()->now() - frame_queue_.front()->header.stamp)
+              .seconds() * 1000.0;
           }
         }
         const uint32_t tick = tick_since_log_.exchange(0);
@@ -189,70 +194,83 @@ private:
         msg->width, msg->height, msg->encoding.c_str());
     }
     // 只缓存引用 (O(1)), SHM buffer 由 rclcpp take 后立即归还发布端;
-    // 真正的转码/推理在 process_tick (独立回调组)
+    // 真正的转码/推理在 process_tick (独立回调组)。队列限深 2 与订阅
+    // KeepLast(2) 对齐, 超出丢最旧 (旧帧价值低于新帧)
     {
       std::lock_guard<std::mutex> lk(latest_mutex_);
-      latest_ = msg;
+      frame_queue_.push_back(msg);
+      if (frame_queue_.size() > 2) {
+        frame_queue_.pop_front();
+      }
     }
     rx_since_log_ += 1;
   }
 
-  /// 推理驱动回调 (proc_group_): 取最新帧做转码+推理+发标注。
-  /// 每轮只处理一帧, 推理慢时自动丢帧积压, 永远追最新画面
+  /// 推理驱动回调 (proc_group_): 排空帧队列, 逐帧转码+推理+发标注。
+  /// 推理慢时队列只进 2 帧, 多余的自然丢, 永远追最新画面
   void process_tick()
   {
     const auto tick_t0 = std::chrono::steady_clock::now();
-    sensor_msgs::msg::Image::SharedPtr msg;
-    {
-      std::lock_guard<std::mutex> lk(latest_mutex_);
-      msg = std::move(latest_);   // 取走即清槽, 下一帧到达即可覆盖
-    }
-    if (!msg || !enabled_) {
-      return;
-    }
-    const auto t_bgr0 = std::chrono::steady_clock::now();
-    const cv::Mat bgr = to_bgr(*msg);
-    if (bgr.empty()) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 5000,
-        "图像数据不完整或编码不支持 (%s), 跳过", msg->encoding.c_str());
-      return;
-    }
-    const auto t0 = std::chrono::steady_clock::now();
-    const std::string json = process(bgr, static_cast<int>(msg->width));
-    {
-      const double ms =
-        std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - t0).count();
-      // 仅 proc_group_ 单回调组写, store 规避 C++17 浮点原子无 fetch_add
-      infer_ms_total_.store(infer_ms_total_.load() + ms);
-      proc_since_log_ += 1;
-    }
-    if (!first_infer_done_) {
-      first_infer_done_ = true;
-      if (hooks_.log_first_infer) {
-        const auto ms =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - t0).count();
-        log_first_infer(static_cast<long>(ms));
+    bool processed_any = false;
+    for (;;) {
+      sensor_msgs::msg::Image::SharedPtr msg;
+      {
+        std::lock_guard<std::mutex> lk(latest_mutex_);
+        if (frame_queue_.empty() || !enabled_) {
+          break;
+        }
+        msg = frame_queue_.front();
+        frame_queue_.pop_front();
       }
+      const auto t_bgr0 = std::chrono::steady_clock::now();
+      const cv::Mat bgr = to_bgr(*msg);
+      if (bgr.empty()) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "图像数据不完整或编码不支持 (%s), 跳过", msg->encoding.c_str());
+        continue;
+      }
+      const auto t0 = std::chrono::steady_clock::now();
+      const std::string json = process(bgr, static_cast<int>(msg->width));
+      {
+        const double ms =
+          std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - t0).count();
+        // 仅 proc_group_ 单回调组写, store 规避 C++17 浮点原子无 fetch_add
+        infer_ms_total_.store(infer_ms_total_.load() + ms);
+        proc_since_log_ += 1;
+      }
+      if (!first_infer_done_) {
+        first_infer_done_ = true;
+        if (hooks_.log_first_infer) {
+          const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+          log_first_infer(static_cast<long>(ms));
+        }
+      }
+      const auto t_pub0 = std::chrono::steady_clock::now();
+      if (!json.empty()) {
+        std_msgs::msg::String out;
+        out.data = json;
+        anno_pub_->publish(out);
+      }
+      // 转码/发布分段按帧累计 —— 推理吞吐低于收帧速率时, 差额在这里
+      bgr_ms_total_.store(bgr_ms_total_.load() +
+        std::chrono::duration<double, std::milli>(t0 - t_bgr0).count());
+      pub_ms_total_.store(pub_ms_total_.load() +
+        std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t_pub0).count());
+      processed_any = true;
     }
-    const auto t_pub0 = std::chrono::steady_clock::now();
-    if (!json.empty()) {
-      std_msgs::msg::String out;
-      out.data = json;
-      anno_pub_->publish(out);
+    if (!processed_any) {
+      return;
     }
-    // tick 分段累计: 周期 (含回调调度等待) / 转码 / 发布 —— 推理吞吐
-    // 低于收帧速率时, 差额就在这三段里
-    const auto tick_t1 = std::chrono::steady_clock::now();
+    // tick 全周期 (整轮排空耗时) 只累计一次, 与 tick_since_log_ 对齐
     tick_since_log_ += 1;
     tick_ms_total_.store(tick_ms_total_.load() +
-      std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
-    bgr_ms_total_.store(bgr_ms_total_.load() +
-      std::chrono::duration<double, std::milli>(t0 - t_bgr0).count());
-    pub_ms_total_.store(pub_ms_total_.load() +
-      std::chrono::duration<double, std::milli>(tick_t1 - t_pub0).count());
+      std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - tick_t0).count());
   }
 
   const Hooks hooks_;
@@ -264,7 +282,7 @@ private:
   rclcpp::TimerBase::SharedPtr process_timer_;
   rclcpp::TimerBase::SharedPtr stats_timer_;
   std::string image_topic_;
-  sensor_msgs::msg::Image::SharedPtr latest_;
+  std::deque<sensor_msgs::msg::Image::SharedPtr> frame_queue_;  // 待推理帧 (限深 2)
   std::mutex latest_mutex_;
   std::atomic<uint32_t> rx_since_log_{0};   // 距上次统计周期收到的帧数
   std::atomic<uint32_t> proc_since_log_{0}; // 距上次统计周期实际推理的帧数
