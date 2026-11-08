@@ -100,6 +100,8 @@ class DisplayForwarder(threading.Thread):
         self._pub_ms = 0.0        # 窗口内大图 publish 耗时累计 (rmw+传输)
         self._probe_ms = 0.0      # 窗口内小消息 publish 耗时累计 (对照)
         self._pub_ms_n = 0
+        self._wake_empty = 0      # 窗口内醒来但单槽无新帧的次数 (上游提交不足)
+        self._wake_busy = 0       # 窗口内上一帧未发完跳过的次数
         self._stat_t = time.monotonic()
         self._running = True
 
@@ -118,12 +120,14 @@ class DisplayForwarder(threading.Thread):
                 self._probe_ms, self._pub_ms_n)
             self._tobytes_ms, self._tomsg_ms = 0.0, 0.0
             self._pub_ms, self._probe_ms, self._pub_ms_n = 0.0, 0.0, 0
+            empty, busy = self._wake_empty, self._wake_busy
+            self._wake_empty, self._wake_busy = 0, 0
             arr_info = self._arr_info
             dt = time.monotonic() - self._stat_t
             self._stat_t = time.monotonic()
         div = n if n else 1
         return (count, tobytes_ms / div, (tomsg_ms - tobytes_ms) / div,
-                pub_ms / div, probe_ms / div, dt, arr_info)
+                pub_ms / div, probe_ms / div, dt, arr_info, empty, busy)
 
     def stop(self):
         self._running = False
@@ -164,7 +168,11 @@ class DisplayForwarder(threading.Thread):
         probe_pub = self._node.create_publisher(String, '/flylab/display_probe', 10)
         probe_msg = String()
         probe_msg.data = 'x'
-        period = 1.0 / max(config.DISPLAY_IMAGE_HZ, 1)
+        # 2ms 唤醒: 帧到达即发布 (提交点直挂回调后帧成对到达, 28Hz 节拍
+        # 会把一对帧坍缩成 ~1 帧 -> 发布速率只有提交的一半)。放宽节拍后
+        # 发布速率=提交速率, 接收端 KeepLast(1)+最新帧语义自会丢积压;
+        # 单次 publish 仅 ~0.7ms, 空转开销可忽略
+        period = 0.002
         try:
             while self._running and rclpy.ok():
                 t0 = time.monotonic()
@@ -172,6 +180,10 @@ class DisplayForwarder(threading.Thread):
                     frame = self._frame
                     self._frame = None
                     busy = self._publishing
+                    if frame is None:
+                        self._wake_empty += 1
+                    elif busy:
+                        self._wake_busy += 1
                 # 无订阅者/上一帧未发完: 跳过, 新帧留在单槽里等下一轮
                 if (frame is not None and not busy
                         and pub.get_subscription_count() > 0):
@@ -499,7 +511,8 @@ class GroundStationNode(Node):
         self.display_forwarder.set_frame(arr)
 
     def take_fwd_stats(self):
-        """取 2s 统计窗口内的 (转发帧数, publish 均值 ms, 窗口秒) (取后清零)。"""
+        """取 2s 统计窗口内的 (转发帧数, 各段均值 ms, 窗口秒, 空槽/忙跳次数)
+        (取后清零)。"""
         return self.display_forwarder.take_fwd_stats()
 
     def shutdown(self):

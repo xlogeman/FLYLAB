@@ -35,6 +35,11 @@ from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,
 
 VEHICLE = 'PX4'
 GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RPC往返延迟))
+# AirSim 拉图流水线 worker 数: 每个 worker 独立 RPC 连接并发拉图。
+# 单连接每帧串行等完整 RPC 往返 (实测 55~75ms -> 13~18fps), 帧率 =
+# 1000/RPC; 多连接让"上一帧回传/解码"与"下一帧服务端出图"重叠, 服务端
+# rpclib 多线程处理并发请求 (云台独立连接已验证可行), 有效帧率提升 ~N 倍
+AIRSIM_FETCH_THREADS = 2
 LOCAL_HZ = 30       # 本机摄像头拉取频率上限
 # 云台线程循环节拍: 摇杆步进/回中动画的推进频率 (下发频率仍由
 # GIMBAL_HOLD_HZ 节流; RPC 与拉图分离, 姿态跟随重下发不占抓取往返)
@@ -77,6 +82,14 @@ class Grabber(threading.Thread):
         self._gen = 0          # 切源代数: 阻塞读取期间切源, 旧源的帧作废
         self.fps = 0.0
         self.n, self.t_prev = 0, time.time()
+        # 场景帧提交后回调 (O(1) 引用, 由 main_window 挂到转发器): 转发
+        # 与 GUI 轮询解耦 —— 多 worker 成对回包时 33ms 轮询采样会漏采近
+        # 一半 (实测提交 ~11/s vs 抓取 ~21/s), 见 _commit 内说明
+        self.forward_hook = None
+        # 多 worker 拉图: 连接纪元计数 (0->1 触发重连初始化)
+        self._conn_gate = threading.Lock()
+        self._conn_count = 0          # 已连接的 worker 数
+        self._conn_last_log = 0.0     # 上次"等待 AirSim"日志时刻 (10s 节流)
         # 本机摄像头/视频文件设备 IO (见 camera_sources.LocalFileReader;
         # 设备仅在抓取线程访问, 播放控制标志位由界面线程设置)
         self.reader = LocalFileReader(log)
@@ -114,6 +127,7 @@ class Grabber(threading.Thread):
         # 图传分段耗时累计 (rpc= simGetImages 往返, dec=解码/转换),
         # 每 2 秒汇总, 日志默认关闭 (见 _stat_tick, 排查帧率问题时打开)
         self._stat = {'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': time.time()}
+        self._stat_lock = threading.Lock()   # 多 worker 线程并发累计
         self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
         # 航向跟随 (云台偏航带动机头): _follow 开启后偏航语义从"跟随机头"
         # 翻转为"世界系锚定" —— 偏航输入写世界方位锚点 _az_target, 抓取
@@ -667,23 +681,28 @@ class Grabber(threading.Thread):
 
     def _stat_tick(self, rpc_s, dec_s):
         """分段耗时累计: 每 2 秒汇总一条日志 (rpc 均值/解码均值/帧数),
-        定位帧率瓶颈在 UE 渲染+RPC 往返还是本地解码。
-        日志默认关闭 (图传已优化完毕), 需要再排查时取消注释即可。"""
-        s = self._stat
-        s['rpc'] += rpc_s
-        s['dec'] += dec_s
-        s['n'] += 1
-        now = time.time()
-        if now - s['t'] >= 2.0 and s['n'] > 0:
-            # n = s['n']
-            # self.log(f'图传分段: RPC {s["rpc"]/n*1000:.0f}ms '
-            #          f'/ 解码 {s["dec"]/n*1000:.1f}ms '
-            #          f'(近{n}帧, 帧率 {n/(now-s["t"]):.1f}fps)')
-            s.update({'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': now})
+        定位帧率瓶颈在 UE 渲染+RPC 往返还是本地解码 (多 worker 并发累计)。
+        日志已按需注释 (2026-11-09, 链路排查完毕), 需要时取消注释恢复。"""
+        with self._stat_lock:
+            s = self._stat
+            s['rpc'] += rpc_s
+            s['dec'] += dec_s
+            s['n'] += 1
+            now = time.time()
+            if now - s['t'] >= 2.0 and s['n'] > 0:
+                n = s['n']
+                # self.log(f'图传分段: RPC {s["rpc"]/n*1000:.0f}ms '
+                #          f'/ 解码 {s["dec"]/n*1000:.1f}ms '
+                #          f'(近{n}帧, 帧率 {n/(now-s["t"]):.1f}fps)')
+                s.update({'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': now})
 
     def _commit(self, arr, is_depth, gen):
         """写入最新帧并统计 fps。切源代数不符 (读取阻塞期间切了源) 时
-        丢弃, 否则旧源最后一帧会在切源后回填。"""
+        丢弃, 否则旧源最后一帧会在切源后回填。
+        注: 多 worker 并发拉图不做"发出时刻"防乱序拒绝 —— 服务端串行
+        处理 RPC, 后发请求的响应内容是处理时刻拷贝的最新渲染帧 (比先发
+        的上一帧更新), 按发出时刻判旧会误杀近一半帧 (实测 28fps 拉回
+        15fps 提交); 响应内容与其到达顺序基本一致, 直接按到达顺序提交。"""
         with self.lock:
             if gen != self._gen:
                 return
@@ -696,6 +715,13 @@ class Grabber(threading.Thread):
                 return
             self.frame = (arr, is_depth)
         self.n += 1
+        # 场景帧 (非深度) 提交后直接触发转发: 帧内容与界面显示一致 (变焦
+        # 已裁切)。暂停的视频源无新提交即无转发, 语义与 GUI 轮询采样等价;
+        # 算法节点未订阅时转发器自会跳过 publish
+        if not is_depth and arr.ndim == 3:
+            hook = self.forward_hook
+            if hook is not None:
+                hook(arr)
         now = time.time()
         if now - self.t_prev >= 1.0:
             self.fps = self.n / (now - self.t_prev)
@@ -707,60 +733,92 @@ class Grabber(threading.Thread):
         # 后者还触发 UE 重渲染), 图传帧率会被拉低一半以上
         threading.Thread(target=self._gimbal_loop, daemon=True,
                          name='gimbal-rpc').start()
+        # AirSim 拉图流水线: N 个 worker 各持独立 RPC 连接并发拉图 (见
+        # AIRSIM_FETCH_THREADS 注释); 本机/文件源仍由本线程处理
+        for i in range(AIRSIM_FETCH_THREADS):
+            threading.Thread(target=self._airsim_fetch_loop, args=(i,),
+                             daemon=True, name=f'airsim-fetch-{i}').start()
+        while self.running:
+            t_start = time.monotonic()
+            with self.lock:
+                cam = self.camera
+                gen = self._gen
+            if cam.startswith(LOCAL_PREFIX):    # 本机摄像头: 不经 AirSim
+                arr = self.reader.read_local(cam[len(LOCAL_PREFIX):])
+                if arr is not None:
+                    self._commit(arr, False, gen)
+                time.sleep(max(0.0, 1.0 / LOCAL_HZ - (time.monotonic() - t_start)))
+                continue
+            if cam.startswith(FILE_PREFIX):     # 视频文件: 按文件帧率循环播放
+                arr = self.reader.read_file(cam[len(FILE_PREFIX):])
+                if arr is not None:
+                    self._commit(arr, False, gen)
+                time.sleep(max(0.0, self.reader.interval - (time.monotonic() - t_start)))
+                continue
+            self.reader.close()                 # 切回 AirSim 相机时释放本机设备
+            # AirSim 源的连接与拉取在 _airsim_fetch_* 线程, 这里只等待
+            time.sleep(0.05)
+
+    def _airsim_connect(self):
+        """独立连接 (每 worker 一个)。探测必须用短超时探针: VehicleClient
+        默认 RPC 超时 3600s, UE 未 play 时 ping 会把线程长期阻塞。
+        返回 VehicleClient; 未连上返回 None (内部已节流重试)。
+        连接纪元 (连接数 0->1) 执行一次云台复核/FOV 重采, N 个 worker
+        先后连上只触发一次。"""
+        try:
+            probe = airsim.VehicleClient(
+                ip=self.host, port=self.port, timeout_value=0.5)
+            probe.ping()
+        except Exception as e:
+            # 未连接状态持续重试: 节流到每 10 秒一条, 不刷屏
+            if time.monotonic() - self._conn_last_log > 10.0:
+                self.log(f'等待 AirSim {self.host}:{self.port}: {e}')
+                self._conn_last_log = time.monotonic()
+            with self.lock:
+                self._airsim_ok = False
+            time.sleep(1.0)
+            return None
+        # 正式连接带 3s 超时: 默认 3600s 下 UE 卡顿会把拉图线程
+        # 冻结成图传假死, 超时抛异常走重连
+        client = airsim.VehicleClient(
+            ip=self.host, port=self.port, timeout_value=3.0)
+        with self._conn_gate:
+            first = self._conn_count == 0
+            self._conn_count += 1
+        with self.lock:
+            self._airsim_ok = True
+        self.log(f'已连接 AirSim {self.host}:{self.port}')
+        if first:
+            # 云台状态复核: 保留基准/角度, 复位跟随 + 限位标红,
+            # 重下发恢复视角 (重采会污染安装基准, 见 _reset_gimbal)
+            self._reset_gimbal()
+            # 视场角: 置 dirty 触发 _apply_fov —— _fov 恒为 None
+            # (无记忆), 走查询相机真实 FOV 采纳路径, 算法节点启动即同步
+            with self.lock:
+                self._fov_dirty = True
+        return client
+
+    def _airsim_fetch_loop(self, worker_id):
+        """AirSim 拉图 worker: 独立 RPC 连接并发拉图 (见 AIRSIM_FETCH_THREADS)。
+        循环: 读当前相机 -> simGetImages -> 解码 -> 提交 (带拍摄时刻,
+        过期帧丢弃防乱序回包旧帧覆盖新帧)。"""
         client = None
         while self.running:
             try:
-                t_start = time.monotonic()
                 with self.lock:
                     cam = self.camera
                     gen = self._gen   # 本轮帧的切源代数, 提交时校验
-                if cam.startswith(LOCAL_PREFIX):    # 本机摄像头: 不经 AirSim
-                    arr = self.reader.read_local(cam[len(LOCAL_PREFIX):])
-                    if arr is not None:
-                        self._commit(arr, False, gen)
-                    time.sleep(max(0.0, 1.0 / LOCAL_HZ - (time.monotonic() - t_start)))
+                if cam.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                    time.sleep(0.1)   # 本机/文件源由 run() 线程处理
                     continue
-                if cam.startswith(FILE_PREFIX):     # 视频文件: 按文件帧率循环播放
-                    arr = self.reader.read_file(cam[len(FILE_PREFIX):])
-                    if arr is not None:
-                        self._commit(arr, False, gen)
-                    time.sleep(max(0.0, self.reader.interval - (time.monotonic() - t_start)))
-                    continue
-                self.reader.close()                 # 切回 AirSim 相机时释放本机设备
                 if client is None:
-                    # 连接探测必须用短超时探针: VehicleClient 默认 RPC 超时
-                    # 3600s, UE 未 play 时 ping 会把抓取线程长期阻塞在这里
-                    try:
-                        probe = airsim.VehicleClient(
-                            ip=self.host, port=self.port, timeout_value=0.5)
-                        probe.ping()
-                    except Exception as e:
-                        # 未连接状态持续重试: 节流到每 10 秒一条, 不刷屏
-                        if time.monotonic() - self._conn_last_log > 10.0:
-                            self.log(f'等待 AirSim {self.host}:{self.port}: {e}')
-                            self._conn_last_log = time.monotonic()
-                        with self.lock:
-                            self._airsim_ok = False
-                        time.sleep(1.0)
+                    client = self._airsim_connect()
+                    if client is None:
                         continue
-                    # 正式连接带 3s 超时: 默认 3600s 下 UE 卡顿会把抓图线程
-                    # 冻结成图传假死, 超时抛异常走重连
-                    client = airsim.VehicleClient(
-                        ip=self.host, port=self.port, timeout_value=3.0)
-                    with self.lock:
-                        self._airsim_ok = True
-                    self.log(f'已连接 AirSim {self.host}:{self.port}')
-                    # 云台状态复核: 保留基准/角度, 复位跟随 + 限位标红,
-                    # 重下发恢复视角 (重采会污染安装基准, 见 _reset_gimbal)
-                    self._reset_gimbal()
-                    # 视场角: 置 dirty 触发 _apply_fov —— _fov 恒为 None
-                    # (无记忆), 走查询相机真实 FOV 采纳路径, 算法节点启动即同步
-                    with self.lock:
-                        self._fov_dirty = True
-
+                t_start = time.monotonic()
                 is_depth = 'depth' in cam.lower()
                 # 云台/FOV/跟随 RPC 全部在 _gimbal_loop 线程处理 (独立连接),
-                # 抓取循环只剩 simGetImages —— 机体运动时的姿态跟随重下发
+                # 拉图循环只剩 simGetImages —— 机体运动时的姿态跟随重下发
                 # 不再与拉图串行, 否则每拍多 2 次串行 RPC 会把帧率拉低一半
                 if is_depth:
                     # 深度必须用 DepthPlanar: Scene+float 读回会触发 D3D12
@@ -776,37 +834,45 @@ class Grabber(threading.Thread):
                 t_rpc = time.monotonic() - t_rpc
 
                 t_dec = time.monotonic()
-                if resp and resp[0].width > 0:
-                    r = resp[0]
-                    if is_depth:   # DepthPlanar, 单位米
-                        arr = _to_np(
-                            r.image_data_float, np.float32).reshape(r.height, r.width)
-                    else:          # BGR (compress=False) 或 PNG (compress=True)
-                        data = _to_np(r.image_data_uint8, np.uint8)
-                        arr = None
-                        if self._scene_compress:
-                            arr = cv2.imdecode(data, cv2.IMREAD_COLOR)
-                            if arr is None:
-                                # 服务端没按 PNG 返回 (版本差异/异常数据):
-                                # 本会话回退原始传输, 下一拍走原始解码路径
-                                self._scene_compress = False
-                                self.log('图传: 服务端未按 PNG 返回, 回退原始传输')
-                        if arr is None and not self._scene_compress:
-                            # 服务端原始字节是 RGB 序, 显示约定 BGR —— 翻转通道
-                            arr = np.ascontiguousarray(
-                                data.reshape(r.height, r.width, 3)[..., ::-1])
-                    if arr is not None:
-                        self._commit(arr, is_depth, gen)
-                    else:
-                        time.sleep(0.05)
+                arr = self._decode_response(resp, is_depth)
+                if arr is not None:
+                    self._commit(arr, is_depth, gen)
+                else:
+                    time.sleep(0.05)
                 t_dec = time.monotonic() - t_dec
                 self._stat_tick(t_rpc, t_dec)
                 # 自适应节流: 扣除 RPC 往返后补足剩余间隔
                 time.sleep(max(0.0, 1.0 / GRAB_HZ - (time.monotonic() - t_start)))
             except Exception as e:
-                self.log(f'连接中断: {e}，1 秒后重连...')
+                self.log(f'拉图连接中断 (worker {worker_id}): {e}，1 秒后重连...')
                 client = None
+                with self._conn_gate:
+                    self._conn_count = max(0, self._conn_count - 1)
                 time.sleep(1.0)
+
+    def _decode_response(self, resp, is_depth):
+        """simGetImages 响应 -> 帧数组 (深度 float32 米 / BGR uint8), 无效返回 None。"""
+        if not resp or resp[0].width <= 0:
+            return None
+        r = resp[0]
+        if is_depth:
+            return _to_np(
+                r.image_data_float, np.float32).reshape(r.height, r.width)
+        # BGR (compress=False) 或 PNG (compress=True)
+        data = _to_np(r.image_data_uint8, np.uint8)
+        arr = None
+        if self._scene_compress:
+            arr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if arr is None:
+                # 服务端没按 PNG 返回 (版本差异/异常数据):
+                # 本会话回退原始传输, 下一拍走原始解码路径
+                self._scene_compress = False
+                self.log('图传: 服务端未按 PNG 返回, 回退原始传输')
+        if arr is None and not self._scene_compress:
+            # 服务端原始字节是 RGB 序, 显示约定 BGR —— 翻转通道
+            arr = np.ascontiguousarray(
+                data.reshape(r.height, r.width, 3)[..., ::-1])
+        return arr
 
     def _gimbal_loop(self):
         """云台/FOV/航向跟随后台线程 (独立 RPC 连接): 与拉图线程分离,

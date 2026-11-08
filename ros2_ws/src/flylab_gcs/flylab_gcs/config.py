@@ -21,10 +21,11 @@ AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
 # 当前显示帧发布到此话题，算法节点订阅即处理用户正在看的画面（深度伪彩帧除外）。
 # 分辨率保持原图，保证标注坐标对齐。
 DISPLAY_IMAGE_TOPIC = '/flylab/display/image_raw'
-DISPLAY_IMAGE_HZ = 15
-# 注意: 此值必须低于算法节点的消费能力 (yolo 单线程约 28 帧/s), 否则接收端
-# 积压后 SHM/UDP 传输层都会背压阻塞发布端 (实测 30Hz 时 publish 被拖到 ~80ms,
-# 反过来把抓取线程也拖慢)。15Hz 对检测/降落类算法足够
+# 2026-11-08 起转发器改为"帧到即发" (2ms 唤醒, 见 ros_node.DisplayForwarder):
+# 发布速率=提交速率, 接收端 KeepLast(1) 最新帧语义不会积压。
+# 历史结论存档: 双 worker 流水线抓取 ~25fps / yolo+cuda 推理 17~25ms
+# (40fps+ 能力) / yolo+cpu 推理 236~250ms (attention 结构 CPU 跑不动);
+# 旧的 DISPLAY_IMAGE_HZ 转发节流已随"帧到即发"一并移除
 # 转发 QoS: True=RELIABLE 不丢帧但写端可能等 ACK；False=BEST_EFFORT 吞吐满速可能丢帧。
 # 实测转发稳定低于源帧率时改 False
 DISPLAY_IMAGE_RELIABLE = False
@@ -222,6 +223,10 @@ ALGORITHMS = [
     {'name': '目标检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detector_node',
              '--ros-args', '-p', 'device:=cuda'],
+     # device 对照结论 (2026-11-08 A/B 实测): CPU 推理 236~250ms/帧
+     # (yolo26s attention 结构 CPU 跑不动, 4fps), cuda 17~25ms (40fps+,
+     # 且与 UE 渲染争用 4060 仅拖慢 RPC 55→73ms) —— 检测类必须用 cuda,
+     # 整链输出 ≈ 抓取帧率 ~25fps, 再往上需动抓取侧而非推理侧
      'start': 'detect_start', 'stop': 'detect_stop'},
     {'name': '图像分类',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_cls_node',

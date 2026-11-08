@@ -113,6 +113,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._fwd_last = time.monotonic()
         self._algo_started_at = 0.0    # 算法进程启动时刻 (发现窗口内不告警)
         self._last_src = ''
+        self._poll_ticks = 0           # 统计窗口内主轮询拍数 (定位轮询变慢)
+        self._fwd_submits = 0          # 统计窗口内实际提交给转发器的帧数
         self._poll_err_last = 0.0   # 上次轮询异常上屏时刻 (限频用)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
@@ -155,6 +157,11 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             set_aruco_dict=self.node.publish_aruco_dict)
         self.camera_tab.add_side_widget(self.algo_panel)
 
+        # 显示画面转发挂到帧提交点: 抓取线程提交场景帧后直接把引用交给
+        # 转发器 (O(1)), 与 GUI 轮询解耦 —— 多 worker 成对回包下 33ms
+        # 轮询采样会漏采近一半帧 (见 camera_grabber._commit 注释)
+        self.camera_tab.grabber.forward_hook = self._forward_frame
+
         self.setCentralWidget(self.camera_tab)
 
         # 33ms 主轮询: 标注上屏/进程存活/按钮门控/画面转发 (见 _poll_annotations)
@@ -191,6 +198,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                        + traceback.format_exc())
 
     def _poll_once(self):
+        self._poll_ticks += 1
         # 驱动 ROS 收包 (节点无独立 spin 线程, 回调因此天然在主线程执行)
         try:
             rclpy.spin_once(self.node, timeout_sec=0)
@@ -243,9 +251,6 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 菜单项弹起)
         self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 菜单项与摇杆联动)
         self._update_takeover_gates()   # 降落(视觉反控)/遥控互斥门控
-        # 显示画面转发: 有算法节点订阅时, 把当前显示的帧发给它
-        if config.DISPLAY_IMAGE_HZ > 0:
-            self._publish_display_frame()
         self._log_forward_stats()   # 转发断流告警 (2s 一次, 计数在转发线程)
         # 相机机体系姿态 (10Hz): 供 aruco_landing 做云台泛化的方向映射;
         # 非 AirSim 源 get_cam_orientation() 返回 None, 不发布
@@ -270,16 +275,11 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._fov_pub_t = now_mono
             self.node.publish_camera_fov(fov)
 
-    def _publish_display_frame(self):
-        """取当前显示帧交给转发线程 (深度伪彩帧跳过)。
-        仅 O(1) 引用传递, 序列化/publish 在 DisplayForwarder 线程完成。"""
-        frame, src, fps = self.camera_tab.grabber.get()
-        if frame is None:
-            return
-        self._last_src = src
-        arr, is_depth = frame
-        if is_depth or arr.ndim != 3:
-            return
+    def _forward_frame(self, arr):
+        """帧提交点回调 (抓取线程): 把场景帧引用交给转发器 (O(1))。
+        序列化/publish 在 DisplayForwarder 线程完成, 此处只计数。"""
+        self._fwd_submits += 1
+        self._last_src = self.camera_tab.grabber.camera
         self.node.set_display_frame(arr)
 
     def _log_forward_stats(self):
@@ -288,24 +288,21 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         if now - self._fwd_last < 2.0:
             return
         self._fwd_last = now
-        cnt = self.node.take_fwd_stats()[0]
+        (cnt, tobytes_ms, tomsg_ms, pub_ms, probe_ms, dt,
+         arr_info, wake_empty, wake_busy) = self.node.take_fwd_stats()
+        poll_ticks, fwd_submits = self._poll_ticks, self._fwd_submits
+        self._poll_ticks, self._fwd_submits = 0, 0
         if self.running_algo is None:
             return
-        # 分段诊断日志 (默认关闭, 取消注释即恢复): tobytes / 构消息其余 /
-        # 大图 publish / 小消息对照 + 数组内存布局 —— 曾据此定位
-        # rclpy msg.data=bytes 逐元素校验 ~50ms/帧的元凶
-        # (cnt, tobytes_ms, tomsg_ms, pub_ms, probe_ms, dt,
-        #  arr_info) = self.node.take_fwd_stats()
-        # if cnt > 0:
-        #     info = ''
-        #     if arr_info:
-        #         shape, strides, contig = arr_info
-        #         info = (f' [shape={shape} strides={strides} '
-        #                 f'C连续={contig}]')
-        #     self.log.info(
-        #         f'画面转发: {cnt} 帧/{dt:.1f}s, tobytes {tobytes_ms:.1f}ms / '
-        #         f'构消息其余 {tomsg_ms:.1f}ms / 大图 publish {pub_ms:.1f}ms / '
-        #         f'小消息对照 {probe_ms:.2f}ms{info}')
+        # 链路帧率总览 (每 2s 一条): 抓取 → GUI 轮询/提交 → 转发, 三段
+        # 各自的速率与转发器空槽/忙跳计数, 直接定位瓶颈段
+        if dt > 0:
+            grab_fps = self.camera_tab.grabber.fps
+            self.log.info(
+                f'链路帧率: 抓取 {grab_fps:.1f}fps → 轮询 {poll_ticks / dt:.1f}/s '
+                f'提交 {fwd_submits / dt:.1f}/s → 转发 {cnt / dt:.1f}fps '
+                f'(空槽 {wake_empty / dt:.1f}/s 忙跳 {wake_busy / dt:.1f}/s, '
+                f'publish {pub_ms:.1f}ms/帧)')
         # 启动后 3s 是 DDS 发现窗口, 计数 0 属正常不告警
         if cnt == 0 and now - self._algo_started_at > 3.0:
             self.log.warning(
