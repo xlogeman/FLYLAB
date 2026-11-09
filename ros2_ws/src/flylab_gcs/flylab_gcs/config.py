@@ -120,6 +120,17 @@ LANDING_STATUS_TOPIC = '/flylab/landing_status'
 # 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 algo_output_panel.py)
 ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 
+# ---------- 视觉反控降落模式 (算法注册表 landing_modes 声明) ----------
+# 反控形态随算法: 声明了多个 landing_modes 的算法 (ArUco检测) 在"视觉反控"
+# 下展开模式子菜单, 未声明的反控算法只显示普通单项:
+#   图像空间 = 现有逻辑 (cx/cy/面积图像伺服, 不依赖 3D 位姿)
+#   3D 姿态  = 以码的实际距离 (solvePnP 位姿) 闭环降落 —— 接口预留待实现
+# 模式经 -p landing_mode:=<mode> 传给 aruco_landing_node (节点侧声明该参数
+# 前命令行覆盖值被忽略, 不影响启动; flylab_vision 实现位姿闭环后仅改节点,
+# 地面站传参即生效)。其他算法将来可在 ALGORITHMS 注册各自的反控形态。
+LANDING_MODE_IMAGE = 'image'
+LANDING_MODE_POSE3D = 'pose3d'
+
 # ---------- ArUco 码边长运行时调节 (右栏"算法信息"面板滑杆) ----------
 # 场景里放了多种尺寸的码时, 拖动滑杆运行中同步 aruco_node /
 # aruco_landing_node 的 marker_length (影响位姿解算尺度 → 面板的
@@ -214,6 +225,10 @@ ALGORITHMS = [
              '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
      'start': 'aruco_start', 'stop': 'aruco_stop',
      'enables_landing': True,
+     # 反控模式子菜单: 声明了多个 landing_modes 的算法在"接管控制→视觉反控"
+     # 下展开模式子项 (ArUco: 图像空间/3D 姿态); 未声明或单项的反控算法
+     # 只显示普通"视觉反控"单项, 无下级选项
+     'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
      'panel': 'detect'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
     {'name': '目标检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detector_node',

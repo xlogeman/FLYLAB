@@ -112,7 +112,9 @@ class AlgoPanelMixin:
             self._reset_algo()
 
     def _update_algo_state(self):
-        """按钮文字跟随当前运行的算法, 无则回到"算法"; 运行中点亮状态灯。"""
+        """按钮文字跟随当前运行的算法, 无则回到"算法"; 运行中点亮状态灯。
+        算法启停/切换同时联动接管控制菜单的视觉反控形态 (子菜单/单项)。"""
         running = self.running_algo['name'] if self.running_algo else None
         self.algo_btn.setText(f'视觉算法: {running}' if running else '视觉算法')
         self._set_btn_on(self.algo_btn, running is not None)
+        self._update_landing_menu_shape()

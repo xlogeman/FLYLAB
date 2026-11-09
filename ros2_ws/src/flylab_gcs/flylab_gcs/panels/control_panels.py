@@ -4,6 +4,12 @@
 两者都走 offboard, 门控逻辑互相咬合 (互斥 + 遥控最高优先防炸机出口),
 故放在同一模块。菜单项为常驻 QAction (勾选 = 运行中, 再点取消),
 门控状态由 33ms 轮询落在 QAction 的 enabled 上, 菜单展开即见最新。
+
+视觉反控按运行中的算法展开模式子菜单 (反控行为因算法而异): 目前只有
+ArUco检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态 两个模式项,
+模式经 -p landing_mode 传给降落节点; 其他算法将来在 config.ALGORITHMS
+注册各自的反控形态。LandingActions 句柄对外保持旧 landing_act 单项语义,
+其余引用方 (main_window / vehicle_panel / algo_panel) 无需感知子菜单。
 样式常量 _TOOL_BTN_STYLE 定义在 main_window (ui_style.py)。
 """
 from PyQt5.QtCore import Qt, QTimer
@@ -14,6 +20,42 @@ from .. import config
 from ..teleop_pad import VirtualJoystick
 
 
+class LandingActions:
+    """视觉反控菜单全部 QAction (模式子菜单两项 + 普通单项) 的统一句柄,
+    对外兼容旧 landing_act 单项语义:
+    - isChecked() = 任一形态运行中
+    - setChecked(False) = 全部弹起 (勾选由用户点选, 不支持 True)
+    - setEnabled() = 同步门控到全部项
+    菜单形态按运行中的算法切换 (_update_landing_menu_shape): 声明多个
+    landing_modes 的算法 (ArUco检测) 用模式子菜单, 其余用普通单项。
+    """
+
+    def __init__(self, flat_act, image_act, pose_act):
+        self.flat = flat_act
+        self.image = image_act
+        self.pose = pose_act
+
+    def mode_action(self, mode):
+        """模式常量 -> 对应菜单项 (普通单项不走模式, 由调用方显式传入)。"""
+        return self.pose if mode == config.LANDING_MODE_POSE3D else self.image
+
+    def isChecked(self):
+        return (self.flat.isChecked() or self.image.isChecked()
+                or self.pose.isChecked())
+
+    def setChecked(self, checked):
+        if checked:
+            raise ValueError('视觉反控模式由用户点选, 不支持外部 setChecked(True)')
+        self.flat.setChecked(False)
+        self.image.setChecked(False)
+        self.pose.setChecked(False)
+
+    def setEnabled(self, enabled):
+        self.flat.setEnabled(enabled)
+        self.image.setEnabled(enabled)
+        self.pose.setEnabled(enabled)
+
+
 class ControlPanelsMixin:
     """MainWindow 的接管控制功能域 (self.* 为主窗口属性)。"""
 
@@ -22,7 +64,8 @@ class ControlPanelsMixin:
     def _update_takeover_gates(self):
         """offboard 功能互斥门控 (33ms 轮询), 门控结果落在菜单项上:
         - 视觉反控: 需已解锁升空 + ArUco检测运行中 + AirSim 源 + 链路已开;
-          进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口)
+          进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口);
+          模式子菜单 (图像空间/3D 姿态) 互斥: 运行中非现役模式置灰
         - 遥控: 仅需链路已开; 进行中仍可点视觉反控 (先取消遥控再反控)
         同时维护接管按钮的状态灯 (任一功能运行中点亮)。"""
         link_ok = self._selected_link() is not None
@@ -44,6 +87,12 @@ class ControlPanelsMixin:
             self.camera_tab.set_gimbal_locked(True)
             # 反控中允许开遥控抢回控制权 (防炸机): 接管时自动取消反控
             self.teleop_act.setEnabled(link_ok)
+            # 模式互斥: 现役模式保持可点 (再点即取消), 另一模式置灰 ——
+            # 反控运行中不存在模式切换, 只能先取消再换模式
+            self.landing_act.image.setEnabled(
+                self.landing_act.image.isChecked())
+            self.landing_act.pose.setEnabled(
+                self.landing_act.pose.isChecked())
         else:
             self.camera_tab.set_gimbal_locked(False)
             self.link_btn.setEnabled(True)
@@ -59,24 +108,54 @@ class ControlPanelsMixin:
                      and self.camera_tab.grabber.get_gimbal() is not None)
         self.camera_tab.set_follow_available(follow_ok)
 
-    def _on_landing_toggle(self):
-        if self.landing_act.isChecked():
-            # 反控接管优先: 先取消遥控, 节点交还 offboard 后反控再接管
-            if self.teleop_act.isChecked():
-                self.teleop_act.setChecked(False)
-            # 反控前自动摆位: 仅俯仰转垂直向下 (俯拍是降落几何前提),
-            # 偏航保持用户当前设置不动
-            self.camera_tab.grabber.gimbal_pitch_bottom()
-            # 链路参数跟随工具栏所选链路 (mavros / uxrce)
-            link = self._selected_link() or 'mavros'
-            cmd = list(config.LANDING_CMD) + ['--ros-args', '-p', f'link:={link}']
-            self.land_proc.start(cmd)
-            # 新进程需完成 DDS 发现 + 收首帧飞控状态 (1~3s), 重发多次防吞;
-            # 节点对重复 start 幂等
-            QTimer.singleShot(1000, lambda: self._send_landing_start(6))
-        else:
+    def _on_landing_mode_toggled(self, mode, act=None):
+        """视觉反控菜单项勾选/弹起 (模式子菜单两项 / 普通单项共用入口)。"""
+        if act is None:
+            act = self.landing_act.mode_action(mode)
+        if not act.isChecked():
+            # 弹起: 模式切换时另一模式已接管 (仍勾选), 不停流程;
+            # 真正取消 (无任一模式在运行) 才收尾交还控制权
+            if self.landing_act.isChecked():
+                return
             self.takeover_btn.setText('接管控制')
             self._stop_landing()
+            return
+        if mode == config.LANDING_MODE_POSE3D:
+            # 3D 姿态降落: 接口预留 (模式参数经 landing_mode 传给降落节点),
+            # 位姿闭环待 flylab_vision 实现后启用; 此处仅提示并复位。
+            # 正常路径另一模式已在门控轮询里置灰 (互斥), 此兜底防绕过 UI
+            self.log.warn(
+                '\033[33m3D 姿态降落暂未实现 (接口已预留), '
+                '待 flylab_vision 实现位姿闭环后开放\033[0m')
+            act.blockSignals(True)
+            act.setChecked(False)
+            act.blockSignals(False)
+            return
+        self._start_landing(mode)
+
+    def _start_landing(self, mode):
+        """按所选模式启动视觉反控降落 (当前仅图像空间有实现)。"""
+        # 互斥: 先弹起另一模式 (其弹起分支见 _on_landing_mode_toggled,
+        # 此时本项已勾选不会误停), 再取消遥控, 节点交还 offboard 后反控再接管
+        other = self.landing_act.pose if mode == config.LANDING_MODE_IMAGE \
+            else self.landing_act.image
+        if other.isChecked():
+            other.setChecked(False)
+        if self.teleop_act.isChecked():
+            self.teleop_act.setChecked(False)
+        # 反控前自动摆位: 仅俯仰转垂直向下 (俯拍是降落几何前提),
+        # 偏航保持用户当前设置不动
+        self.camera_tab.grabber.gimbal_pitch_bottom()
+        # 链路参数跟随工具栏所选链路 (mavros / uxrce); 模式经 landing_mode
+        # 传给降落节点 (节点未声明前被忽略, 接口预留)
+        link = self._selected_link() or 'mavros'
+        cmd = (list(config.LANDING_CMD)
+               + ['--ros-args', '-p', f'link:={link}',
+                  '-p', f'landing_mode:={mode}'])
+        self.land_proc.start(cmd)
+        # 新进程需完成 DDS 发现 + 收首帧飞控状态 (1~3s), 重发多次防吞;
+        # 节点对重复 start 幂等
+        QTimer.singleShot(1000, lambda: self._send_landing_start(6))
 
     def _check_landing_status(self):
         """降落节点状态事件处理: 按钮文字/弹起随状态联动
@@ -306,7 +385,11 @@ class ControlPanelsMixin:
     def _build_takeover_button(self):
         """接管控制下拉按钮: 两项均需先开通信链路 (走 offboard), 同一时刻
         只运行一个, 点运行中的项即取消。
-        - 视觉反控: aruco_landing_node 按视觉输出对准码下降并切 AUTO.LAND
+        - 视觉反控: 形态随运行中的算法 (_update_landing_menu_shape):
+            声明多个 landing_modes (ArUco检测) → 模式子菜单:
+              图像空间 = 按图像空间量对准码下降并切 AUTO.LAND
+              3D 姿态  = 以码的实际距离闭环降落 (接口预留, 待实现)
+            其余反控算法 / 无算法 → 普通"视觉反控"单项 (无下级选项)
         - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
           遥控抢回控制权 (防炸机出口)"""
         self.takeover_btn = QToolButton()
@@ -314,17 +397,44 @@ class ControlPanelsMixin:
         self.takeover_btn.setPopupMode(QToolButton.InstantPopup)
         self.takeover_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.takeover_btn.setToolTip(
-            '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落; '
+            '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落 '
+            '(ArUco检测运行时展开 图像空间 / 3D 姿态 模式子菜单); '
             '手动遥控 = 摇杆控速度。均需先开启通信链路')
         menu = QMenu(self.takeover_btn)
         self.takeover_btn.setMenu(menu)
-        self.landing_act = menu.addAction('视觉反控')
-        self.landing_act.setCheckable(True)
-        self.landing_act.setEnabled(False)
-        self.landing_act.setToolTip(
+        # 形态一: 视觉反控模式子菜单 (仅声明多个 landing_modes 的算法运行时显示)
+        self.landing_menu = menu.addMenu('视觉反控')
+        self.landing_img_act = self.landing_menu.addAction('图像空间')
+        self.landing_img_act.setCheckable(True)
+        self.landing_img_act.setEnabled(False)
+        self.landing_img_act.setToolTip(
             '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开。'
-            '按视觉输出对准码下降并自动降落; 再点取消')
-        self.landing_act.toggled.connect(self._on_landing_toggle)
+            '按图像空间量 (对中/面积) 对准码下降并自动降落; 再点取消')
+        self.landing_img_act.toggled.connect(
+            lambda checked: self._on_landing_mode_toggled(
+                config.LANDING_MODE_IMAGE))
+        self.landing_pose_act = self.landing_menu.addAction('3D 姿态')
+        self.landing_pose_act.setCheckable(True)
+        self.landing_pose_act.setEnabled(False)
+        self.landing_pose_act.setToolTip(
+            '以码的 3D 位姿 (实际距离) 闭环降落 —— 接口预留, 待实现')
+        self.landing_pose_act.toggled.connect(
+            lambda checked: self._on_landing_mode_toggled(
+                config.LANDING_MODE_POSE3D))
+        # 形态二: 普通"视觉反控"单项 (其余反控算法 / 无算法运行时显示),
+        # 按图像模式启动 (模式参数对未实现的节点无感, 见 config 注释)
+        self.landing_flat_act = menu.addAction('视觉反控')
+        self.landing_flat_act.setCheckable(True)
+        self.landing_flat_act.setEnabled(False)
+        self.landing_flat_act.setToolTip(
+            '需先: 反控算法运行中 + 已解锁升空 + 通信链路已开。'
+            '按当前视觉算法的输出反控降落; 再点取消')
+        self.landing_flat_act.toggled.connect(
+            lambda checked: self._on_landing_mode_toggled(
+                config.LANDING_MODE_IMAGE, self.landing_flat_act))
+        # 统一句柄 (兼容旧 landing_act 单项语义, 其余引用方零改动)
+        self.landing_act = LandingActions(
+            self.landing_flat_act, self.landing_img_act, self.landing_pose_act)
         self.teleop_act = menu.addAction('手动遥控')
         self.teleop_act.setCheckable(True)
         self.teleop_act.setEnabled(False)
@@ -332,4 +442,17 @@ class ControlPanelsMixin:
             '需先开启通信链路。开启后接管 offboard, 右栏摇杆控速度 '
             '(回中=悬停); 再点交还控制权')
         self.teleop_act.toggled.connect(self._on_teleop_toggle)
+        self._update_landing_menu_shape()   # 初始无算法 → 普通单项形态
         return self.takeover_btn
+
+    def _update_landing_menu_shape(self):
+        """按运行中的算法切换视觉反控菜单形态 (反控行为因算法而异):
+        算法在 config.ALGORITHMS 声明了多个 landing_modes (ArUco检测:
+        图像空间/3D 姿态) 时展开模式子菜单; 其余反控算法/无算法运行时
+        退化为普通单项。形态切换只影响菜单展示, 勾选状态由统一句柄
+        LandingActions 承载, 引用方无感。"""
+        algo = self.running_algo
+        modes = algo.get('landing_modes') if algo is not None else None
+        use_menu = bool(modes) and len(modes) > 1
+        self.landing_menu.menuAction().setVisible(use_menu)
+        self.landing_flat_act.setVisible(not use_menu)
