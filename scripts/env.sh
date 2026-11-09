@@ -37,6 +37,12 @@ export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
 # 背压 (实测 30Hz 原始图转发 publish 阻塞 ~80ms/帧, 见 fastrtps_shm.xml 头注)
 export FASTRTPS_DEFAULT_PROFILES_FILE=/root/flylab/scripts/fastrtps_shm.xml
 
+# SHM 遗留段清理: 节点被强杀时其 SHM 段不会自动释放, 日积月累吃满 /dev/shm
+# (满了新节点报 "Failed to create segment" 并回退 UDP)。脚本逐段 fuser 检测
+# 占用, 只删无主段, 任何时机运行都不会打断正在跑的节点。静默调用, 只在
+# 实际清理到东西时输出一行
+bash /root/flylab/scripts/clean-fastrtps-shm.sh
+
 # rviz/ORB 走软件渲染 (WSL 无独显穿透)
 export LIBGL_ALWAYS_SOFTWARE=1
 export DISPLAY=${DISPLAY:-:0}
