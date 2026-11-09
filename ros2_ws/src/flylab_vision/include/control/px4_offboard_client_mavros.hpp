@@ -92,6 +92,27 @@ public:
     return p;
   }
 
+  /// 机体姿态 (NED→FRD 四元数, v_body = R(q)·v_ned)。
+  /// mavros pose.orientation 语义为 v_enu = R(q_ef)·v_flu, 经轴重排四元数
+  /// 链 q_ned_frd = conj(q_ne ⊗ q_ef ⊗ q_ff) 换算
+  ///   (q_ne: ENU↔NED 轴重排 = 180°绕(1,1,0)/√2; q_ff: FRD↔FLU = 180°绕x),
+  /// 已用 朝北=恒等 / 朝东=-90°绕z 两基准姿态手工验证
+  AttitudeNED attitudeNED() const override
+  {
+    AttitudeNED a;
+    if (!got_pose_) {
+      return a;
+    }
+    const auto & q = current_pose_.pose.orientation;
+    const double s = 0.7071067811865476;   // √1/2
+    a.w = -s * (q.w + q.z);
+    a.x =  s * (q.x + q.y);
+    a.y =  s * (q.x - q.y);
+    a.z =  s * (q.w - q.z);
+    a.valid = true;
+    return a;
+  }
+
   // ---------------- 控制指令 ----------------
   /// 机体系 FRD 速度 (x前 y右 z下) -> FLU 机体系 -> 按当前 yaw 旋到 ENU map 系,
   /// 经 /mavros/setpoint_raw/local 下发 (MAVROS 插件内部 ENU->NED)。

@@ -120,21 +120,10 @@ class ControlPanelsMixin:
             self.takeover_btn.setText('接管控制')
             self._stop_landing()
             return
-        if mode == config.LANDING_MODE_POSE3D:
-            # 3D 姿态降落: 接口预留 (模式参数经 landing_mode 传给降落节点),
-            # 位姿闭环待 flylab_vision 实现后启用; 此处仅提示并复位。
-            # 正常路径另一模式已在门控轮询里置灰 (互斥), 此兜底防绕过 UI
-            self.log.warn(
-                '\033[33m3D 姿态降落暂未实现 (接口已预留), '
-                '待 flylab_vision 实现位姿闭环后开放\033[0m')
-            act.blockSignals(True)
-            act.setChecked(False)
-            act.blockSignals(False)
-            return
         self._start_landing(mode)
 
     def _start_landing(self, mode):
-        """按所选模式启动视觉反控降落 (当前仅图像空间有实现)。"""
+        """按所选模式启动视觉反控降落 (image=图像空间 / pose3d=3D 姿态)。"""
         # 互斥: 先弹起另一模式 (其弹起分支见 _on_landing_mode_toggled,
         # 此时本项已勾选不会误停), 再取消遥控, 节点交还 offboard 后反控再接管
         other = self.landing_act.pose if mode == config.LANDING_MODE_IMAGE \
@@ -388,7 +377,7 @@ class ControlPanelsMixin:
         - 视觉反控: 形态随运行中的算法 (_update_landing_menu_shape):
             声明多个 landing_modes (ArUco检测) → 模式子菜单:
               图像空间 = 按图像空间量对准码下降并切 AUTO.LAND
-              3D 姿态  = 以码的实际距离闭环降落 (接口预留, 待实现)
+              3D 姿态  = 以码的 3D 位姿 (机体系米级误差) 闭环降落
             其余反控算法 / 无算法 → 普通"视觉反控"单项 (无下级选项)
         - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
           遥控抢回控制权 (防炸机出口)"""
@@ -417,7 +406,9 @@ class ControlPanelsMixin:
         self.landing_pose_act.setCheckable(True)
         self.landing_pose_act.setEnabled(False)
         self.landing_pose_act.setToolTip(
-            '以码的 3D 位姿 (实际距离) 闭环降落 —— 接口预留, 待实现')
+            '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开 + 码边长准确 '
+            '(位姿尺度可信)。按码的 3D 位姿换算机体系米级误差: 水平 P 对中, '
+            '下降速度随离码高度调度, 近地自动切 AUTO.LAND; 再点取消')
         self.landing_pose_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_POSE3D))

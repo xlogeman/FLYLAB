@@ -15,6 +15,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
+#include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_command_ack.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
@@ -119,6 +120,12 @@ public:
     position_sub_ = node_.create_subscription<px4_msgs::msg::VehicleLocalPosition>(
       "/fmu/out/vehicle_local_position", fmu_qos,
       [this](const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {position_ = *msg;});
+    attitude_sub_ = node_.create_subscription<px4_msgs::msg::VehicleAttitude>(
+      "/fmu/out/vehicle_attitude", fmu_qos,
+      [this](const px4_msgs::msg::VehicleAttitude::SharedPtr msg) {
+        attitude_ = *msg;
+        got_attitude_ = true;
+      });
 
     // 切模式指令回执: 被拒绝时给出原因 (如 offboard 流未就绪 / 模式不可用)
     command_ack_sub_ = node_.create_subscription<px4_msgs::msg::VehicleCommandAck>(
@@ -171,6 +178,23 @@ public:
     p.y = position_.y;
     p.z = position_.z;
     return p;
+  }
+
+  /// 机体姿态 (NED→FRD 四元数, v_body = R(q)·v_ned)。
+  /// vehicle_attitude q 约定为 FRD→NED (v_ned = R(q)·v_frd, 见 msg 注释),
+  /// 取共轭 (单位四元数逆 = 共轭) 即得 NED→FRD
+  AttitudeNED attitudeNED() const override
+  {
+    AttitudeNED a;
+    if (!got_attitude_) {
+      return a;
+    }
+    a.w = attitude_.q[0];
+    a.x = -attitude_.q[1];
+    a.y = -attitude_.q[2];
+    a.z = -attitude_.q[3];
+    a.valid = true;
+    return a;
   }
 
   // ---------------- 控制指令 ----------------
@@ -308,11 +332,14 @@ private:
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr position_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleCommandAck>::SharedPtr command_ack_sub_;
 
   px4_msgs::msg::VehicleStatus status_;
   px4_msgs::msg::VehicleLocalPosition position_;
+  px4_msgs::msg::VehicleAttitude attitude_;
   bool got_status_ = false;
+  bool got_attitude_ = false;
   uint8_t last_nav_state_ = 255;    // 模式切换日志用
   bool last_failsafe_ = false;      // failsafe 告警用
   rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};

@@ -78,6 +78,27 @@
     angle_window_min: 5                      # 趋势角滑动窗口下限 (帧)
     angle_window_max: 50                     # 趋势角滑动窗口上限 (帧)
 
+    # 3D 位姿降落模式 (地面站"接管控制→视觉反控→3D 姿态"即以 landing_mode:=pose3d
+    # 启动; 位姿尺度可信时用 —— tvec 经云台姿态旋到机体系, 米级闭环:
+    #   水平: 速度 = pose_h_gain × 米级偏移 (限幅 max_h_vel, 无需面积/高度缩放)
+    #   下降: 速度 = pose_descend_gain × 离码高度, 夹在 [min,max] 后乘
+    #         对齐门控 (pose_gate_width 斜坡) × 航向门控
+    #   触发: 水平误差 < pose_align_tol 且 离码高度 <= pose_land_alt 且
+    #         趋势角/航向条件与 image 模式相同, 连续 min_landing_frames 帧
+    landing_mode: image                      # image = 图像空间伺服 | pose3d = 3D 位姿闭环
+    pose_h_gain: 0.8                         # 水平 P 增益 (1/s, 误差收敛时间常数倒数)
+    pose_descend_gain: 0.15                  # 下降 P 增益 (1/s)
+    pose_descend_max: 1.0                    # 下降速度上限 (m/s)
+    pose_descend_min: 0.2                    # 下降速度下限 (m/s, 保证低空下降进度)
+    pose_align_tol: 0.20                     # 水平对齐容差 (m)
+    pose_gate_width: 0.50                    # 对齐门控斜坡宽度 (m)
+    pose_land_alt: 1.5                       # 切 AUTO.LAND 的离码高度 (m)
+    pose_filter_alpha: 0.25                  # 落点估计 EMA 系数 (0~1, 越小越平滑; 码固定于世界, 滤波合法)
+    pose_outlier_m: 1.5                      # 落点估计野值剔除门限 (m, 单帧跳变超限保旧值)
+    cam_offset_fwd: 0.0                      # 云台支点相对机体中心的安装偏置 (机体系
+    cam_offset_right: 0.0                    #   FRD, m; 支点在旋转中心时全 0,
+    cam_offset_down: 0.0                     #   AirSim 云台默认在机体原点)
+
     # 异常处理与 offboard 时序
     lost_timeout_sec: 8.0                    # 目标丢失超时 (s), 超时切 AUTO_LOITER 交还控制权
     reacquire_sec: 0.5                       # 锁定 ID 持续丢失多久后重新选目标 (s)

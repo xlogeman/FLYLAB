@@ -8,7 +8,19 @@
 ///            → (对齐 + 面积阈值 + 降落趋势角 + 云台/机头双对齐锁定) 连续 N 帧后进入 LANDING
 ///   LANDING  切 PX4 AUTO.LAND, 上锁后复位回 IDLE
 ///
-/// 只用 cx/cy/面积/码朝向角做图像空间控制, 不依赖 3D 位姿 (未标定时尺度不可信)。
+/// 降落模式 (landing_mode 参数, 地面站"接管控制→视觉反控"子菜单选择):
+///   image  (默认) 图像空间控制: 只用 cx/cy/面积/码朝向角, 不依赖 3D 位姿
+///          (未标定时尺度不可信)
+///   pose3d 3D 位姿控制: 位姿尺度可信 (已标定或码边长准确) 时, tvec 经云台
+///          姿态旋到机体系, 再经机体姿态旋到 NED 加机体位置 = 码的世界系
+///          (NED) 落点估计 —— 落点固定于世界, 对其做野值剔除 + EMA 低通
+///          (顺带压掉 IPPE 深度噪声), 误差与速度指令全在世界系里算, 只把
+///          最终速度转回机体系下发。不在机体系闭环的原因: 机体前倾 θ 时
+///          "世界正下方的码"在机体系读出 h·sinθ 的虚假前向误差, 而前飞
+///          又需要前倾 —— 正反馈, k·h≥g 即失稳 (12m 高度恰在边界);
+///          世界系落点固定后该耦合消失。水平 P 增益直接作用于米级误差,
+///          下降速度随离码高度线性调度, 切 AUTO.LAND 条件换算成米级
+///          (水平误差 + 离码高度); 云台对准码朝向 + 机头跟随逻辑两模式相同
 /// 码朝向测量: 码 0° 方向 (OpenCV 角点 c0→c1) 经云台姿态旋到机体系取水平方位,
 /// 与水平对齐同一姿态链; 云台对准码 0° 方向 + 偏置 (yaw_offset, 地面站右栏可改),
 /// 对准后画面中码 0° 方向停在屏幕上方偏右 yaw_offset 处; 机头经跟随通道
@@ -74,6 +86,28 @@ constexpr double kStartPendingTimeout = 15.0;  // 挂起的 landing_start 等待
 // 纯数学助手 (clampd/quat_rot/landing_angle_deg/wrap180/descend_schedule/
 // TrendAngleEstimator) 抽到 include/aruco/landing_math.hpp
 
+// AttitudeNED -> 四元数消息 (quat_rot 的输入约定: R(q)·v)
+geometry_msgs::msg::Quaternion quat_from(const Px4OffboardClientBase::AttitudeNED & a)
+{
+  geometry_msgs::msg::Quaternion q;
+  q.w = a.w; q.x = a.x; q.y = a.y; q.z = a.z;
+  return q;
+}
+
+// 四元数共轭 (单位四元数的逆: R(q*)·v = R(q)^T·v, 反向旋转)
+geometry_msgs::msg::Quaternion quat_conj(const geometry_msgs::msg::Quaternion & q)
+{
+  geometry_msgs::msg::Quaternion r;
+  r.w = q.w; r.x = -q.x; r.y = -q.y; r.z = -q.z;
+  return r;
+}
+
+double point3_dist(const cv::Point3d & a, const cv::Point3d & b)
+{
+  const cv::Point3d d = a - b;
+  return std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+}
+
 }  // namespace
 
 class ArucoLandingNode : public rclcpp::Node
@@ -129,6 +163,37 @@ public:
     offboard_warmup_sec_ = declare_parameter<double>("offboard_warmup_sec", 1.0);
     offboard_retry_sec_ = declare_parameter<double>("offboard_retry_sec", 10.0);
     control_hz_ = declare_parameter<double>("control_hz", 20.0);
+
+    // 降落模式: image = 图像空间伺服 (默认, 不依赖 3D 位姿);
+    // pose3d = 3D 位姿闭环 (位姿尺度可信时): tvec 经云台姿态旋到机体系,
+    // 按米级水平误差 P 对中 + 下降速度随离码高度调度, 触发条件换米级
+    const auto landing_mode = declare_parameter<std::string>("landing_mode", "image");
+    pose3d_mode_ = landing_mode == "pose3d";
+    if (!pose3d_mode_ && landing_mode != "image") {
+      RCLCPP_FATAL(
+        get_logger(), "未知 landing_mode '%s' (可选 image|pose3d)",
+        landing_mode.c_str());
+      throw std::invalid_argument("landing_mode must be image or pose3d");
+    }
+    // pose3d 模式参数 (image 模式忽略):
+    // 水平增益 1/s —— 速度 = 增益 × 米级偏移, 增益即误差收敛时间常数的倒数
+    pose_h_gain_ = declare_parameter<double>("pose_h_gain", 0.8);
+    // 下降速度 = 增益 × 离码高度, 夹在 [min, max] 内再乘对齐/航向门控
+    pose_descend_gain_ = declare_parameter<double>("pose_descend_gain", 0.15);
+    pose_descend_max_ = declare_parameter<double>("pose_descend_max", 1.0);
+    pose_descend_min_ = declare_parameter<double>("pose_descend_min", 0.2);
+    pose_align_tol_ = declare_parameter<double>("pose_align_tol", 0.20);  // 水平对齐容差 (m)
+    pose_gate_width_ = declare_parameter<double>("pose_gate_width", 0.50);  // 对齐门控斜坡宽度 (m)
+    pose_land_alt_ = declare_parameter<double>("pose_land_alt", 1.5);  // 切 AUTO.LAND 的离码高度 (m)
+    // 落点估计滤波 (NED 世界系): 码固定于世界, EMA 低通压 IPPE 深度噪声;
+    // 单帧跳变超过野值门限 (IPPE 歧义/角点失败) 直接剔除保旧值
+    pose_filter_alpha_ = declare_parameter<double>("pose_filter_alpha", 0.25);
+    pose_outlier_m_ = declare_parameter<double>("pose_outlier_m", 1.5);
+    // 云台支点相对机体中心的安装偏置 (机体系 FRD, 米): pose3d 模式把码偏移
+    // 平移到机体中心; 支点在旋转中心时全 0 (AirSim 云台默认在机体原点)
+    cam_offset_fwd_ = declare_parameter<double>("cam_offset_fwd", 0.0);
+    cam_offset_right_ = declare_parameter<double>("cam_offset_right", 0.0);
+    cam_offset_down_ = declare_parameter<double>("cam_offset_down", 0.0);
 
     // 降落朝向对齐 (全程并行, 不等水平对齐): 云台对准码 0° 方向 + 偏置,
     // 机头经跟随通道同步追随云台; 云台对准且机头跟上连续 N 帧锁定航向
@@ -290,7 +355,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "ArUco 降落节点就绪 (三态状态机): 等待 %s 指令; 图像 %s; PX4 链路=%s (需已解锁升空的飞机)",
+      "ArUco 降落节点就绪 (三态状态机, 模式=%s): 等待 %s 指令; 图像 %s; PX4 链路=%s (需已解锁升空的飞机)",
+      pose3d_mode_ ? "pose3d" : "image",
       kCmdStart, image_topic.c_str(), link_.c_str());
   }
 
@@ -344,6 +410,8 @@ private:
     ever_offboard_ = false;
     selector_->reset();        // 重新进入降落流程重新选目标
     yaw_aligner_->reset();    // 航向重新对齐
+    marker_ned_valid_ = false;  // 落点估计滤波复位 (重新捕获)
+    marker_ned_id_ = -1;
     gimbal_follow_req_ = false;   // 跟随请求复位 (上次运行若遗留, 地面站心跳超时自退)
     trend_est_.reset();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -676,25 +744,14 @@ private:
         tgt->center_norm.x, tgt->center_norm.y);
     }
 
-    // 图像空间量: 归一化中心 + 面积占比
+    // 对齐输入量: image 模式 = 归一化画面中心/面积; pose3d 模式 = 码 3D 位姿
     const double cx = tgt->center_norm.x;
     const double cy = tgt->center_norm.y;
     const double area =
       image_area_ > 0 ? (tgt->bbox_wh.x * tgt->bbox_wh.y) / image_area_ : 0.0;
-    const double dist_factor = (1.0 - area) * (1.0 - area);  // 距离越近增益越小, 防近距振荡
-
-    // 高度增益缩放: 归一化误差在高空对应更大水平距离, 按高度/基准高度放大
-    // 增益使收敛速率与高度无关; 封顶防高空过冲, 低空不放大
     const auto & pos = px4_->localPosition();
-    double height_scale = 1.0;
-    if (align_ref_alt_ > 0.0 && pos.z_valid) {
-      const double h = std::fmax(0.5, -pos.z);
-      height_scale = std::fmin(
-        std::fmax(h / align_ref_alt_, 1.0), max_height_scale_);
-    }
-    // 水平对齐 (输出机体系 FRD 速度): 用相机姿态四元数把"图右/图下"方向
-    // R(q)·(0,1,0)、R(q)·(0,0,1) 旋到机体系, 垂直分量只取水平投影 ——
-    // 不假设相机垂直向下, 刚性/自稳/yaw 随动云台全适用
+
+    // 水平控制 (输出机体系 FRD 速度) 依赖云台姿态: 数据过期则方位测量不可信
     if (!gimbalFresh()) {
       px4_->sendHover();
       gimbalYawRate(0.0);   // 云台姿态过期, 方位测量不可信, 停转
@@ -714,22 +771,110 @@ private:
         "\033[33m相机光轴偏离垂直向下 %.0f°, 云台未俯拍到位, 降落几何不成立\033[0m",
         tilt_deg);
     }
-    const cv::Point3d u_b = quat_rot(cam_ori_, 0.0, 1.0, 0.0);  // 图右 (机体系)
-    const cv::Point3d v_b = quat_rot(cam_ori_, 0.0, 0.0, 1.0);  // 图下 (机体系)
-    const double k = vel_gain_ * dist_factor * height_scale;
-    double v_fwd = k * ((cx - land_cx_) * u_b.x + (cy - land_cy_) * v_b.x);
-    double v_right = k * ((cx - land_cx_) * u_b.y + (cy - land_cy_) * v_b.y);
-    v_fwd = clampd(v_fwd, max_h_vel_);
-    v_right = clampd(v_right, max_h_vel_);
+
+    // 水平对齐 —— 两模式输出同一组量, 下游 (门控下降/触发/面板) 无感差异:
+    //   align_err   image=归一化画面误差, pose3d=NED 水平误差 (m)
+    //   aligned     分别对 align_tol / pose_align_tol
+    //   v_fwd/right image=增益×归一化误差×(1-面积)²×高度缩放, pose3d=世界系
+    //               速度指令转机体系
+    double align_err = 0.0, align_gate = 1.0, v_fwd = 0.0, v_right = 0.0;
+    double e_n = 0.0, e_e = 0.0, h_m = -1.0;  // pose3d: NED 水平误差 (北,东) 与离码高度 (米)
+    bool aligned = false;
+    if (pose3d_mode_) {
+      // 检出但位姿解算失败 (罕见): pose3d 模式无法米级闭环, 悬停等下一帧
+      if (!tgt->has_pose) {
+        px4_->sendHover();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "\033[33m[3D位姿] 目标码 id=%d 位姿解算失败 (solvePnP), 悬停等待下一帧\033[0m",
+          tgt->id);
+        return;
+      }
+      // tvec (OpenCV 相机系 x右 y下 z前) 先换轴序到云台约定 (x视轴 y图右
+      // z图下, 与 gimbal_state 四元数同一约定), 经云台姿态旋到机体系 FRD,
+      // 加云台支点安装偏置 = 码相对机体中心的米级偏移 (前, 右, 下)
+      cv::Point3d p_b =
+        quat_rot(cam_ori_, tgt->tvec[2], tgt->tvec[0], tgt->tvec[1]);
+      p_b.x += cam_offset_fwd_;
+      p_b.y += cam_offset_right_;
+      p_b.z += cam_offset_down_;
+      // 世界系落点固定: 机体姿态旋到 NED + 机体位置 = 码的 NED 坐标估计。
+      // 不在机体系闭环的原因: 机体前倾 θ 时"世界正下方的码"在机体系读出
+      // h·sinθ 的虚假前向误差, 而前飞又需要前倾 —— 正反馈 (k·h≥g 即失稳,
+      // 12m 高度恰在边界); 世界系量与机体姿态解耦, 该耦合消失
+      const auto att = px4_->attitudeNED();
+      if (!att.valid || !pos.xy_valid || !pos.z_valid) {
+        px4_->sendHover();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "\033[33m[3D位姿] 机体%s数据不可用, 原地悬停等待\033[0m",
+          !att.valid ? "姿态" : "位置");
+        return;
+      }
+      // 目标码切换即复位滤波 (不同码落点不同)
+      if (tgt->id != marker_ned_id_) {
+        marker_ned_id_ = tgt->id;
+        marker_ned_valid_ = false;
+      }
+      const geometry_msgs::msg::Quaternion aq = quat_from(att);
+      // p_b (FRD) -> NED: NED→FRD 四元数取共轭反向旋转
+      const cv::Point3d p_n = quat_rot(quat_conj(aq), p_b.x, p_b.y, p_b.z);
+      const cv::Point3d mk{pos.x + p_n.x, pos.y + p_n.y, pos.z + p_n.z};
+      // 野值剔除 + EMA 低通: 码固定于世界, 对落点估计滤波合法, 顺带压掉
+      // IPPE 深度噪声 (角点 1px ≈ 0.3m @12m); 单帧跳变超门限剔除保旧值
+      if (!marker_ned_valid_) {
+        marker_ned_ = mk;
+        marker_ned_valid_ = true;
+      } else if (point3_dist(mk, marker_ned_) <= pose_outlier_m_) {
+        marker_ned_ += pose_filter_alpha_ * (mk - marker_ned_);
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "\033[33m[3D位姿] 落点估计野值 (%.2fm 跳变) 已剔除, 保旧值\033[0m",
+          point3_dist(mk, marker_ned_));
+      }
+      // 误差与离码高度 (NED, z 下正): e 指向码
+      e_n = marker_ned_.x - pos.x;
+      e_e = marker_ned_.y - pos.y;
+      h_m = marker_ned_.z - pos.z;
+      align_err = std::hypot(e_n, e_e);
+      aligned = align_err < pose_align_tol_;
+      align_gate = std::fmin(1.0, std::fmax(0.0,
+        1.0 - (align_err - pose_align_tol_) / std::fmax(1e-3, pose_gate_width_)));
+      // 世界系速度指令 -> 机体系 FRD (NED→FRD 四元数正向旋转, 只取水平两轴;
+      // 机体俯仰/横滚不再进入误差与指令, 俯仰正反馈消失)
+      const cv::Point3d v_b =
+        quat_rot(aq, pose_h_gain_ * e_n, pose_h_gain_ * e_e, 0.0);
+      v_fwd = clampd(v_b.x, max_h_vel_);
+      v_right = clampd(v_b.y, max_h_vel_);
+    } else {
+      const double dist_factor = (1.0 - area) * (1.0 - area);  // 距离越近增益越小, 防近距振荡
+      // 高度增益缩放: 归一化误差在高空对应更大水平距离, 按高度/基准高度放大
+      // 增益使收敛速率与高度无关; 封顶防高空过冲, 低空不放大
+      double height_scale = 1.0;
+      if (align_ref_alt_ > 0.0 && pos.z_valid) {
+        const double h = std::fmax(0.5, -pos.z);
+        height_scale = std::fmin(
+          std::fmax(h / align_ref_alt_, 1.0), max_height_scale_);
+      }
+      // 用相机姿态四元数把"图右/图下"方向 R(q)·(0,1,0)、R(q)·(0,0,1) 旋到
+      // 机体系, 垂直分量只取水平投影 —— 不假设相机垂直向下, 刚性/自稳/yaw
+      // 随动云台全适用
+      const cv::Point3d u_b = quat_rot(cam_ori_, 0.0, 1.0, 0.0);  // 图右 (机体系)
+      const cv::Point3d v_b = quat_rot(cam_ori_, 0.0, 0.0, 1.0);  // 图下 (机体系)
+      const double k = vel_gain_ * dist_factor * height_scale;
+      v_fwd = clampd(k * ((cx - land_cx_) * u_b.x + (cy - land_cy_) * v_b.x), max_h_vel_);
+      v_right = clampd(k * ((cx - land_cx_) * u_b.y + (cy - land_cy_) * v_b.y), max_h_vel_);
+      align_err = std::hypot(cx - land_cx_, cy - land_cy_);
+      aligned = align_err < align_tol_;
+      align_gate = std::fmin(1.0, std::fmax(0.0,
+        1.0 - (align_err - align_tol_) / std::fmax(1e-3, align_gate_width_)));
+    }
 
     // 全并行耦合控制: 水平对中 / 下降 / 朝向对齐同时输出, 不再分阶段。
-    // 下降速度 = 面积调度 × 对齐门控 × 航向门控, 门控为线性斜坡:
-    // 误差在容差内=1, 超出容差后随误差线性衰减到 0 —— 下降会放大归一化
-    // 误差, 门控自动收小停降回去对齐, 自平衡 (替代原 far_descend 离散规则)
-    const double align_err = std::hypot(cx - land_cx_, cy - land_cy_);
-    const bool aligned = align_err < align_tol_;
-    const double align_gate = std::fmin(1.0, std::fmax(0.0,
-      1.0 - (align_err - align_tol_) / std::fmax(1e-3, align_gate_width_)));
+    // 下降速度 = 距离调度 (image=面积, pose3d=离码高度) × 对齐门控 × 航向门控,
+    // 门控为线性斜坡: 误差在容差内=1, 超出容差后随误差线性衰减到 0 ——
+    // 下降会放大误差, 门控自动收小停降回去对齐, 自平衡
 
     // ---------------- 朝向对齐 (全程并行: 云台 → 码 0° 方向 + 偏置, 机头跟随) ----------------
     // 状态机/滤波/锁定/门控在 YawAligner (include/aruco/yaw_aligner.hpp);
@@ -745,10 +890,18 @@ private:
     requestGimbalFollow(yaw_align_ && !yaw.locked);
     gimbalYawRate(yaw.gimbal_rate);
 
-    // 下降速度合成: 面积调度 × 对齐门控 × 航向门控 (近慢远快调度不变)
-    double v_down =
-      descend_schedule(area, descend_close_, descend_far_, area_s_thresh_) *
-      align_gate * yaw.yaw_gate;
+    // 下降速度合成: image = 面积调度 (近慢远快); pose3d = 离码高度线性调度
+    // (增益×高度, 夹在 [min, max] 保证低空仍有下降进度) —— 均乘对齐/航向门控
+    double v_down;
+    if (pose3d_mode_) {
+      const double vd = pose_descend_gain_ * std::fmax(0.0, h_m);
+      v_down = std::fmin(pose_descend_max_, std::fmax(pose_descend_min_, vd)) *
+        align_gate * yaw.yaw_gate;
+    } else {
+      v_down =
+        descend_schedule(area, descend_close_, descend_far_, area_s_thresh_) *
+        align_gate * yaw.yaw_gate;
+    }
     // 近地高度下限: 低于此高度且航向未锁定时停降 (AUTO.LAND 航向在切换
     // 瞬间锁定, 低空带误差下降会来不及锁航向), 悬停等对齐
     if (floor_alt_ > 0.0 && yaw_align_ && !yaw.locked && pos.z_valid &&
@@ -761,9 +914,11 @@ private:
     trend_est_.update(area, pos.xy_valid && pos.z_valid,
       cv::Point3d{pos.y, pos.x, -pos.z});   // NED -> ENU
 
-    // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直 + 航向已锁定,
-    // 连续 N 帧确认
-    if (aligned && area >= land_area_thresh_ &&
+    // 触发条件: 对齐 + 足够近 (image=面积达标, pose3d=离码高度达标) +
+    // 趋势角够垂直 + 航向已锁定, 连续 N 帧确认
+    const bool near_enough = pose3d_mode_ ? h_m <= pose_land_alt_ :
+      area >= land_area_thresh_;
+    if (aligned && near_enough &&
       trend_est_.angle() < vertical_threshold_deg_ && (!yaw_align_ || yaw.locked))
     {
       landing_count_++;
@@ -771,10 +926,18 @@ private:
       landing_count_ = 0;
     }
     if (landing_count_ >= min_landing_frames_) {
-      RCLCPP_INFO(
-        get_logger(),
-        "\033[32m降落条件满足 (面积 %.3f, 对齐误差 %.3f, 趋势角 %.1f°), 切 PX4 AUTO.LAND\033[0m",
-        area, align_err, trend_est_.angle());
+      if (pose3d_mode_) {
+        RCLCPP_INFO(
+          get_logger(),
+          "\033[32m降落条件满足 (3D位姿: 水平误差 %.3fm 容差%.2f, 离码高度 %.2fm 门限%.1f, 趋势角 %.1f°), "
+          "切 PX4 AUTO.LAND\033[0m",
+          align_err, pose_align_tol_, h_m, pose_land_alt_, trend_est_.angle());
+      } else {
+        RCLCPP_INFO(
+          get_logger(),
+          "\033[32m降落条件满足 (图像空间: 面积 %.3f, 对齐误差 %.3f, 趋势角 %.1f°), 切 PX4 AUTO.LAND\033[0m",
+          area, align_err, trend_est_.angle());
+      }
       gimbalYawRate(0.0);          // 停云台
       requestGimbalFollow(false);  // 停跟随
       state_ = State::LANDING;
@@ -796,7 +959,8 @@ private:
       const double h = pos.z_valid ? -pos.z : -1.0;
       std::ostringstream js;
       js << std::fixed << std::setprecision(3)
-         << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
+         << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"mode\":\"" <<
+        (pose3d_mode_ ? "pose3d" : "image") << "\",\"tracked_id\":"
          << selector_->trackedId() << ",\"count\":" << detections_.size()
          << ",\"area\":" << area
          << ",\"w\":" << static_cast<int>(tgt->bbox_wh.x + 0.5)
@@ -806,6 +970,10 @@ private:
       if (tgt->has_pose) {
         js << ",\"tvec\":[" << tgt->tvec[0] << ',' << tgt->tvec[1]
            << ',' << tgt->tvec[2] << ']';
+      }
+      // pose3d 模式补充米级闭环量: err=机体系水平误差(m), h_m=离码高度(m)
+      if (pose3d_mode_) {
+        js << ",\"err_m\":" << align_err << ",\"h_m\":" << h_m;
       }
       js << ",\"err\":" << align_err
          << ",\"aligned\":" << (aligned ? "true" : "false")
@@ -832,22 +1000,44 @@ private:
       publishInfo(js.str());
     }
     // 1Hz 详细状态行: 降落每一步在干什么、为什么还不触发, 一眼可见
-    RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "[TRACKING][云台泛化] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
-      "对齐误差=%.3f (容差%.3f%s 门控%.2f 增益缩放%.1f) 趋势角=%.0f°(门限%.0f°) "
-      "云台对齐=%.1f°(偏置%.0f° %s 门控%.2f) 跟随=%.1f°(%s) "
-      "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
-      pos.z_valid ? -pos.z : 0.0,
-      detections_.size(), tgt->id, area, cx, cy,
-      align_err, align_tol_, aligned ? "已对齐" : "未对齐", align_gate, height_scale,
-      trend_est_.angle(), vertical_threshold_deg_,
-      yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
-      !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
-      yaw.yaw_gate,
-      yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
-      yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
-      v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
+    if (pose3d_mode_) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "[TRACKING][3D位姿] 高度=%.2fm 检出=%zu 选中 id=%d "
+        "水平误差=(北%.2f, 东%.2f)m 合计=%.3f (容差%.2f%s 门控%.2f) "
+        "离码高度=%.2fm (门限%.1fm) 趋势角=%.0f°(门限%.0f°) "
+        "云台对齐=%.1f°(偏置%.0f° %s 门控%.2f) 跟随=%.1f°(%s) "
+        "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
+        pos.z_valid ? -pos.z : 0.0,
+        detections_.size(), tgt->id,
+        e_n, e_e, align_err, pose_align_tol_,
+        aligned ? "已对齐" : "未对齐", align_gate,
+        h_m, pose_land_alt_,
+        trend_est_.angle(), vertical_threshold_deg_,
+        yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
+        !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
+        yaw.yaw_gate,
+        yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
+        yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
+        v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
+    } else {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "[TRACKING][云台泛化] 高度=%.2fm 检出=%zu 选中 id=%d area=%.3f cx=%.2f cy=%.2f "
+        "对齐误差=%.3f (容差%.3f%s 门控%.2f) 趋势角=%.0f°(门限%.0f°) "
+        "云台对齐=%.1f°(偏置%.0f° %s 门控%.2f) 跟随=%.1f°(%s) "
+        "输出速度(前,右,下)=(%.2f, %.2f, %.2f) 触发计数=%d/%d",
+        pos.z_valid ? -pos.z : 0.0,
+        detections_.size(), tgt->id, area, cx, cy,
+        align_err, align_tol_, aligned ? "已对齐" : "未对齐", align_gate,
+        trend_est_.angle(), vertical_threshold_deg_,
+        yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
+        !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
+        yaw.yaw_gate,
+        yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
+        yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
+        v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
+    }
   }
 
   /// 目标丢失处理 (TRACKING): 原地悬停, 超时切 AUTO_LOITER 交还控制权
@@ -1003,6 +1193,23 @@ private:
   double yaw_rate_max_deg_;  // 云台速率限幅 (°/s, gimbalYawRate 通道用)
   double follow_fresh_sec_;
   double align_gate_width_, floor_alt_;
+
+  // 3D 位姿降落模式 (landing_mode:=pose3d; image 模式忽略)
+  bool pose3d_mode_ = false;
+  double pose_h_gain_;               // 水平 P 增益 (1/s): 速度 = 增益 × 米级偏移
+  double pose_descend_gain_;         // 下降 P 增益 (1/s): 速度 = 增益 × 离码高度
+  double pose_descend_max_, pose_descend_min_;   // 下降速度限幅 (m/s, 门控前)
+  double pose_align_tol_;            // 水平对齐容差 (m)
+  double pose_gate_width_;           // 对齐门控斜坡宽度 (m)
+  double pose_land_alt_;             // 切 AUTO.LAND 的离码高度门限 (m)
+  double cam_offset_fwd_, cam_offset_right_, cam_offset_down_;  // 云台支点安装偏置 (机体系 FRD, m)
+  double pose_filter_alpha_;   // 落点估计 EMA 系数 (0~1, 越小越平滑)
+  double pose_outlier_m_;      // 落点估计野值剔除门限 (m)
+
+  // 落点估计 (NED 世界系固定, pose3d 模式): EMA 滤波值 + 有效性 + 所属码 ID
+  cv::Point3d marker_ned_{0.0, 0.0, 0.0};
+  bool marker_ned_valid_ = false;
+  int marker_ned_id_ = -1;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长

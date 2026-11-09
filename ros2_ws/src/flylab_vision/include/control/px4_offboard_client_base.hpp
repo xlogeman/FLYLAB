@@ -38,6 +38,15 @@ public:
     float z = 0.0f;
   };
 
+  /// 机体姿态快照: NED→FRD 旋转四元数 (v_body = R(q)·v_ned)。
+  /// MAVROS 侧由 ENU pose (v_enu = R(q)·v_flu) 换算, uXRCE 侧取 vehicle_attitude
+  /// (FRD→NED) 共轭; valid=false = 尚无姿态数据
+  struct AttitudeNED
+  {
+    bool valid = false;
+    double w = 1.0, x = 0.0, y = 0.0, z = 0.0;
+  };
+
   virtual ~Px4OffboardClientBase() = default;
 
   // ---------------- 状态查询 ----------------
@@ -49,6 +58,7 @@ public:
   /// 当前飞控导航模式名 (诊断日志用, 如 "OFFBOARD" / "AUTO.RTL")
   virtual std::string modeName() const = 0;
   virtual LocalPosNED localPosition() const = 0;
+  virtual AttitudeNED attitudeNED() const = 0;
 
   // ---------------- offboard 接管状态机 ----------------
   virtual void takeoverReset(const rclcpp::Time & now) = 0;

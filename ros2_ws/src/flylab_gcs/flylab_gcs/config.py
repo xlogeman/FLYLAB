@@ -124,10 +124,10 @@ ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 # 反控形态随算法: 声明了多个 landing_modes 的算法 (ArUco检测) 在"视觉反控"
 # 下展开模式子菜单, 未声明的反控算法只显示普通单项:
 #   图像空间 = 现有逻辑 (cx/cy/面积图像伺服, 不依赖 3D 位姿)
-#   3D 姿态  = 以码的实际距离 (solvePnP 位姿) 闭环降落 —— 接口预留待实现
-# 模式经 -p landing_mode:=<mode> 传给 aruco_landing_node (节点侧声明该参数
-# 前命令行覆盖值被忽略, 不影响启动; flylab_vision 实现位姿闭环后仅改节点,
-# 地面站传参即生效)。其他算法将来可在 ALGORITHMS 注册各自的反控形态。
+#   3D 姿态  = 以码的实际距离 (solvePnP 位姿, 经云台姿态旋到机体系) 米级闭环
+#              降落 —— 前提是位姿尺度可信 (码边长准确或已标定)
+# 模式经 -p landing_mode:=<mode> 传给 aruco_landing_node。其他算法将来可在
+# ALGORITHMS 注册各自的反控形态。
 LANDING_MODE_IMAGE = 'image'
 LANDING_MODE_POSE3D = 'pose3d'
 

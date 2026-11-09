@@ -81,6 +81,7 @@ def _landing_fields(data):
         '实宽': None,
         '位置': None,
         '误差': None,
+        '码距': None,
         '占比': None,
         '趋势角': None,
         '航向': None,
@@ -96,9 +97,14 @@ def _landing_fields(data):
             out['尺寸'] = f'{w}x{h_px}px'
             out['实宽'] = f'{wm:.2f}m' if wm and wm > 0 else '— (无位姿)'
         out['位置'] = _tvec_text(data)
+        mode3d = data.get('mode') == 'pose3d'
         out['误差'] = (
+            f"{data.get('err', 0.0):.2f}m "
+            f"({'达标' if data.get('aligned') else '未达标'})" if mode3d else
             f"{data.get('err', 0.0):.3f} "
             f"({'达标' if data.get('aligned') else '未达标'})")
+        out['码距'] = (
+            f"{data.get('h_m', -1.0):.2f}m" if mode3d else None)
         out['占比'] = f"{100.0 * data.get('area', 0.0):.1f}%"
         trend = data.get('trend')
         out['趋势角'] = f'{trend:.1f}°' if trend is not None else None
@@ -146,6 +152,7 @@ SECTIONS = {
             ('位置', lambda d: _landing_fields(d)['位置']),
             ('占比', lambda d: _landing_fields(d)['占比']),
             ('误差', lambda d: _landing_fields(d)['误差']),
+            ('码距', lambda d: _landing_fields(d)['码距']),
             ('趋势角', lambda d: _landing_fields(d)['趋势角']),
             ('航向', lambda d: _landing_fields(d)['航向']),
             ('速度', lambda d: _landing_fields(d)['速度']),
