@@ -51,6 +51,9 @@
 #include <opencv2/core.hpp>
 
 #include "aruco/aruco_detector.hpp"
+#include "aruco/landing_math.hpp"
+#include "aruco/target_selector.hpp"
+#include "aruco/yaw_aligner.hpp"
 #include "common/image_utils.hpp"
 #include "control/px4_offboard_client.hpp"
 
@@ -68,50 +71,8 @@ constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机
 constexpr const char kStatusIdle[] = "idle";             // 流程结束/取消/中止
 constexpr double kStartPendingTimeout = 15.0;  // 挂起的 landing_start 等待飞控状态的最长时间 (s)
 
-double clampd(double v, double lim)
-{
-  lim = std::abs(lim);
-  return std::fmin(std::fmax(v, -lim), lim);
-}
-
-/// R(q)·v: 四元数旋转向量 (标准公式, q 为 body←camera 旋转)
-cv::Point3d quat_rot(const geometry_msgs::msg::Quaternion & q, double x, double y, double z)
-{
-  // t = 2 * (q_vec × v)
-  const double tx = 2.0 * (q.y * z - q.z * y);
-  const double ty = 2.0 * (q.z * x - q.x * z);
-  const double tz = 2.0 * (q.x * y - q.y * x);
-  return {
-    x + q.w * tx + (q.y * tz - q.z * ty),
-    y + q.w * ty + (q.z * tx - q.x * tz),
-    z + q.w * tz + (q.x * ty - q.y * tx)
-  };
-}
-
-/// 降落趋势角: 位移向量与竖直向下方向的夹角 (度)
-double landing_angle_deg(const std::vector<cv::Point3d> & positions)
-{
-  const auto & a = positions.front();
-  const auto & b = positions.back();
-  const double vx = b.x - a.x, vy = b.y - a.y, vz = b.z - a.z;
-  const double len = std::sqrt(vx * vx + vy * vy + vz * vz);
-  if (len < 1e-6) {
-    return 0.0;  // 位置未变化, 视为已垂直
-  }
-  double cos_theta = -vz / len;  // ENU 竖直向下 = (0,0,-1)
-  cos_theta = std::fmax(-1.0, std::fmin(1.0, cos_theta));
-  return std::acos(cos_theta) * 180.0 / M_PI;
-}
-
-/// 角度归一化到 [-180, 180)
-double wrap180(double deg)
-{
-  deg = std::fmod(deg + 180.0, 360.0);
-  if (deg < 0.0) {
-    deg += 360.0;
-  }
-  return deg - 180.0;
-}
+// 纯数学助手 (clampd/quat_rot/landing_angle_deg/wrap180/descend_schedule/
+// TrendAngleEstimator) 抽到 include/aruco/landing_math.hpp
 
 }  // namespace
 
@@ -151,7 +112,7 @@ public:
     align_ref_alt_ = declare_parameter<double>("align_ref_alt", 2.5);    // 高度增益缩放基准高度 (m, 0=禁用)
     max_height_scale_ = declare_parameter<double>("max_height_scale", 3.0);   // 高度缩放上限
     align_gate_width_ = declare_parameter<double>("align_gate_width", 0.15);  // 对齐门控斜坡宽度 (归一化误差): 对齐误差超出 align_tol 后下降线性衰减到 0
-    yaw_gate_width_ = declare_parameter<double>("yaw_gate_width", 15.0);      // 航向门控斜坡宽度 (度): 云台/跟随偏差超出 yaw_tol 后下降线性衰减到 0
+    const double yaw_gate_width = declare_parameter<double>("yaw_gate_width", 15.0);  // 航向门控斜坡宽度 (度): 云台/跟随偏差超出 yaw_tol 后下降线性衰减到 0
     floor_alt_ = declare_parameter<double>("floor_alt", 1.0);                 // 近地高度下限 (m): 低于此高度且航向未锁定时停降; 0=禁用
     descend_close_ = declare_parameter<double>("descend_close", 0.3);    // 面积大(近)时下降速度 (正值=向下, m/s)
     descend_far_ = declare_parameter<double>("descend_far", 0.5);        // 面积小(远)时下降速度 (正值=向下, m/s)
@@ -174,11 +135,11 @@ public:
     // (AUTO.LAND 保持切换瞬间航向); 对齐期间下降受航向门控平滑压低
     yaw_align_ = declare_parameter<bool>("yaw_align", true);
     yaw_offset_deg_ = declare_parameter<double>("yaw_offset_deg", 0.0);
-    yaw_tol_deg_ = declare_parameter<double>("yaw_tol_deg", 5.0);
-    yaw_gain_ = declare_parameter<double>("yaw_gain", 2.5);
+    const double yaw_tol_deg = declare_parameter<double>("yaw_tol_deg", 5.0);
+    const double yaw_gain = declare_parameter<double>("yaw_gain", 2.5);
     yaw_rate_max_deg_ = declare_parameter<double>("yaw_rate_max_deg", 30.0);
-    min_yaw_frames_ = declare_parameter<int>("min_yaw_frames", 5);
-    yaw_timeout_sec_ = declare_parameter<double>("yaw_timeout_sec", 30.0);
+    const int min_yaw_frames = declare_parameter<int>("min_yaw_frames", 5);
+    const double yaw_timeout_sec = declare_parameter<double>("yaw_timeout_sec", 30.0);
     const auto yaw_offset_topic = declare_parameter<std::string>(
       "yaw_offset_topic", "/flylab/landing_yaw_offset");
 
@@ -192,15 +153,25 @@ public:
     // (世界锚定, 机体转动时相对偏航收敛), 订阅 /flylab/gimbal_yaw_err
     // (反卷后的云台偏航 = 视线世界方位 − 航向, 右+, NaN=未跟随, 1s 保活),
     // 注入偏航角速率 = follow_kp × err; 云台对准且机头跟上才恢复下降
-    follow_kp_ = declare_parameter<double>("follow_kp", 0.8);
-    follow_tol_deg_ = declare_parameter<double>("follow_tol_deg", 5.0);
-    follow_rate_max_deg_ =
+    const double follow_kp = declare_parameter<double>("follow_kp", 0.8);
+    const double follow_tol_deg = declare_parameter<double>("follow_tol_deg", 5.0);
+    const double follow_rate_max_deg =
       declare_parameter<double>("follow_rate_max_deg", 30.0);
     follow_fresh_sec_ = declare_parameter<double>("follow_fresh_sec", 1.5);
     const auto follow_req_topic = declare_parameter<std::string>(
       "follow_req_topic", "/flylab/gimbal_follow");
     const auto follow_err_topic = declare_parameter<std::string>(
       "follow_err_topic", "/flylab/gimbal_yaw_err");
+
+    // ---------- 目标选择 / 朝向对齐 / 趋势角子系统 (逻辑拆分, 参数在此装配) ----------
+    // 逻辑见 include/aruco/target_selector.hpp 与 yaw_aligner.hpp
+    selector_ = std::make_unique<TargetSelector>(get_logger(),
+      TargetSelector::Params{target_id_, target_fallback_, reacquire_sec_});
+    yaw_aligner_ = std::make_unique<YawAligner>(get_logger(), get_clock(),
+      YawAligner::Params{yaw_align_, yaw_offset_deg_, yaw_tol_deg, yaw_gain,
+        yaw_rate_max_deg_, min_yaw_frames, yaw_timeout_sec, follow_kp,
+        follow_tol_deg, follow_rate_max_deg, yaw_gate_width});
+    trend_est_.setWindow(angle_window_min_, angle_window_max_);
 
     DetectorConfig cfg;
     cfg.dict_name = dict_name;
@@ -371,16 +342,10 @@ private:
     land_confirmed_ = false;
     had_target_ = false;
     ever_offboard_ = false;
-    tracked_id_ = -1;      // 重新进入降落流程重新选目标
-    lost_id_time_ = 0.0;
-    yaw_locked_ = false;   // 航向重新对齐
-    yaw_count_ = 0;
-    yaw_filt_init_ = false;
-    yaw_last_id_ = -1;
-    yaw_wait_t_ = 0.0;
+    selector_->reset();        // 重新进入降落流程重新选目标
+    yaw_aligner_->reset();    // 航向重新对齐
     gimbal_follow_req_ = false;   // 跟随请求复位 (上次运行若遗留, 地面站心跳超时自退)
-    trend_angle_ = 90.0;
-    positions_.clear();
+    trend_est_.reset();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     px4_->takeoverReset(now());
     state_ = State::TRACKING;
@@ -557,13 +522,8 @@ private:
       dict_name_.c_str());
     // 锁定目标码在新字典下可能不存在: 丢弃锁定重新选目标, 并复位
     // 朝向滤波/计数/锁定 (码 ID 集合变了, 朝向基准失效)
-    tracked_id_ = -1;
-    lost_id_time_ = 0.0;
-    yaw_last_id_ = -1;
-    yaw_filt_init_ = false;
-    yaw_count_ = 0;
-    yaw_locked_ = false;
-    yaw_wait_t_ = 0.0;
+    selector_->reset();
+    yaw_aligner_->reset();
   }
 
   // ---------------- 地面站降落朝向偏置同步 ----------------
@@ -575,10 +535,7 @@ private:
     }
     yaw_offset_deg_ = msg.data;
     // 偏置变化即重新对齐: 解锁航向、清滤波与计数 (IDLE 中仅存值)
-    yaw_locked_ = false;
-    yaw_count_ = 0;
-    yaw_filt_init_ = false;
-    yaw_wait_t_ = 0.0;
+    yaw_aligner_->setOffset(msg.data);
     RCLCPP_INFO(
       get_logger(),
       "降落朝向偏置同步: %.1f° (来自地面站, 将按新朝向重新对齐)", msg.data);
@@ -610,10 +567,11 @@ private:
     detections_ = detector_->detect(bgr);
     // 跟踪码选取与检测节点同规则 (锁定 ID 内取面积最大者); 每帧广播 ID
     // (无跟踪目标发 -1), 供检测节点判断是否让位
+    const int tracked_id = selector_->trackedId();
     const Detection * tracked =
-      tracked_id_ >= 0 ? largestOfId(tracked_id_) : nullptr;
+      tracked_id >= 0 ? selector_->largestOfId(tracked_id, detections_) : nullptr;
     std_msgs::msg::Int32 tid;
-    tid.data = tracked ? tracked_id_ : -1;
+    tid.data = tracked ? tracked_id : -1;
     tracked_id_pub_->publish(tid);
     // 检测结果叠加到地面站画面 (与 aruco_node 同一标注接口, 独立分组);
     // 正在跟踪的码用强调样式 (橙色 + TRACK 后缀, 与检测节点最大码的洋红
@@ -625,104 +583,6 @@ private:
           detections_, kAnnoAlgo, tracked, "TRACK", cv::Scalar(255, 165, 0)) :
         to_annotations_json(detections_, kAnnoAlgo);
       anno_pub_->publish(out);
-    }
-  }
-
-  /// 指定 ID 的检出码中取画面面积最大者; 无该 ID 返回 nullptr
-  const Detection * largestOfId(int id) const
-  {
-    const Detection * best = nullptr;
-    double best_area = -1.0;
-    for (const auto & d : detections_) {
-      if (d.id != id) {
-        continue;
-      }
-      const double a = d.bbox_wh.x * d.bbox_wh.y;
-      if (a > best_area) {
-        best_area = a;
-        best = &d;
-      }
-    }
-    return best;
-  }
-
-  /// 目标选择 (指定 ID 优先 + 最大码回退, 适配多尺度嵌套码):
-  ///   target_id = -1  自动模式: 首帧选画面最大的码并锁定, 持续丢失超 reacquire_sec 重选
-  ///   target_id >= 0  指定模式: 指定 ID 出现即切为对齐目标; 不可见则回退
-  ///                   画面最大码 (target_fallback=true) 或只认指定 ID
-  /// 回退目标软锁定防跳变; 指定 ID 重新出现立即切回 (同心码无水平跳变)。
-  /// 同 ID 多码一律取画面面积最大者, 不随检出顺序跳变。
-  const Detection * pickTarget(double dt)
-  {
-    if (detections_.empty()) {
-      noteTargetMissed(dt);
-      return nullptr;
-    }
-    // 指定 ID 优先: 出现即切换对齐目标
-    if (target_id_ >= 0) {
-      const Detection * m = largestOfId(target_id_);
-      if (m != nullptr) {
-        if (tracked_id_ != target_id_) {
-          RCLCPP_INFO(
-            get_logger(), "\033[32m对齐目标切换: id=%d (指定目标出现%s)\033[0m",
-            target_id_, tracked_id_ >= 0 ? ", 从回退码接管" : "");
-        }
-        tracked_id_ = target_id_;
-        lost_id_time_ = 0.0;
-        return m;
-      }
-      if (!target_fallback_) {
-        noteTargetMissed(dt);
-        return nullptr;  // 严格模式: 只认指定 ID
-      }
-      // 指定 ID 未出现: 回退跟踪画面最大码 (软锁定, 防跳变)
-    }
-    // 锁定目标仍在画面: 直接跟它 (指定模式下 tracked_id_ 已是回退码)
-    if (tracked_id_ >= 0 && tracked_id_ != target_id_) {
-      const Detection * m = largestOfId(tracked_id_);
-      if (m != nullptr) {
-        lost_id_time_ = 0.0;
-        return m;
-      }
-      // 锁定目标本帧缺失: 短暂丢失 (检测抖动/遮挡) 仍认锁定目标, 悬停等待
-      noteTargetMissed(dt);
-      if (lost_id_time_ <= reacquire_sec_) {
-        return nullptr;
-      }
-      RCLCPP_INFO(
-        get_logger(), "锁定目标 id=%d 持续丢失 %.1fs, 重新选择", tracked_id_, lost_id_time_);
-      tracked_id_ = -1;
-    }
-    // (重新)选择: 取画面里面积最大的码并锁定
-    const Detection * best = nullptr;
-    double best_area = -1.0;
-    for (const auto & d : detections_) {
-      const double a = d.bbox_wh.x * d.bbox_wh.y;
-      if (a > best_area) {
-        best_area = a;
-        best = &d;
-      }
-    }
-    if (best != nullptr) {
-      if (target_id_ >= 0) {
-        RCLCPP_INFO(
-          get_logger(), "\033[33m指定目标 id=%d 不可见, 回退画面最大码 id=%d "
-          "(共检出 %zu 个码)\033[0m", target_id_, best->id, detections_.size());
-      } else {
-        RCLCPP_INFO(
-          get_logger(), "\033[32m选定跟踪目标: id=%d (画面最大, 共检出 %zu 个码, "
-          "此后锁定该 ID)\033[0m", best->id, detections_.size());
-      }
-      tracked_id_ = best->id;
-      lost_id_time_ = 0.0;
-    }
-    return best;
-  }
-
-  void noteTargetMissed(double dt)
-  {
-    if (tracked_id_ >= 0) {
-      lost_id_time_ += dt;
     }
   }
 
@@ -801,7 +661,7 @@ private:
     ever_offboard_ = true;
 
     // 阶段 2: 视觉跟踪 (已确认 offboard, 心跳随每拍 sendVelocityFRD 持续发送)
-    const Detection * tgt = pickTarget(dt);
+    const Detection * tgt = selector_->pick(dt, detections_);
     if (tgt == nullptr) {
       handleTargetLost(dt);
       return;
@@ -872,114 +732,39 @@ private:
       1.0 - (align_err - align_tol_) / std::fmax(1e-3, align_gate_width_)));
 
     // ---------------- 朝向对齐 (全程并行: 云台 → 码 0° 方向 + 偏置, 机头跟随) ----------------
-    // 目标: 云台方位 = 码方位 − yaw_offset, 对准后画面中码 0° 方向停在
-    // 屏幕上方偏右 yaw_offset 处 (右正); 机头经跟随通道同步追随云台
-    // (注入偏航角速率 = follow_kp × 反卷误差) —— 收敛态与直接转机头一致
-    // (码方位相对机头 = yaw_offset)。不等水平对齐即开始, 与对中/下降并行,
-    // 边降边转时码持续变大、朝向测量自改善; 测量逐帧 EMA 滤波;
-    // 目标码切换 (嵌套码接管/重选) 后朝向基准失效,
-    // 复位滤波/计数/锁定按新码重新对齐
-    if (tgt->id != yaw_last_id_) {
-      yaw_last_id_ = tgt->id;
-      yaw_filt_init_ = false;
-      yaw_count_ = 0;
-      yaw_locked_ = false;
-    }
-    double yaw_err = 0.0;
-    bool gimbal_turning = false;
-    double gimbal_rate = 0.0;
-    double yaw_rate_rad = 0.0;   // 机头跟随注入的偏航角速率 (rad/s, 正=右转)
-    double yaw_gate = 1.0;       // 航向门控 (yaw_align 关闭或已锁定=1)
-    if (yaw_align_) {
-      // 云台方位: 画面上方 (0,0,-1) 经云台姿态旋到机体系取水平方位,
-      // 与码方位同一姿态链, 不假设相机垂直向下
-      const cv::Point3d up_b = quat_rot(cam_ori_, 0.0, 0.0, -1.0);
-      const double gimbal_az = std::atan2(up_b.y, up_b.x) * 180.0 / M_PI;
-      const double e =
-        wrap180(markerYawDeg(*tgt) - yaw_offset_deg_ - gimbal_az);
-      yaw_err = yaw_filt_init_ ?
-        wrap180(yaw_err_f_ + 0.4 * wrap180(e - yaw_err_f_)) : e;
-      yaw_err_f_ = yaw_err;
-      yaw_filt_init_ = true;
-      if (!yaw_locked_) {
-        // 转云台 + 机头跟随 (与对中/下降并行, 下降由航向门控平滑压低);
-        // 云台对准且机头跟上连续 N 帧后锁定航向
-        // 跟随接入: 请求相机侧反卷 (边沿触发) + 订阅误差注入偏航角速率;
-        // 误差不可用 (非 AirSim 源 / 地面站挂掉) 时仅转云台不转机头,
-        // 机头跟不上则永远不满足锁定条件, 由超时保护兜底
-        requestGimbalFollow(true);
-        const bool follow_ok = followErrUsable();
-        if (!follow_ok) {
-          RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 2000,
-            "\033[33m机头跟随误差不可用 (需地面站 AirSim 相机源 + 跟随广播), "
-            "仅转云台不转机头\033[0m");
-        }
-        const bool aircraft_aligned =
-          follow_ok && std::fabs(follow_err_) <= follow_tol_deg_;
-        if (std::fabs(yaw_err) <= yaw_tol_deg_ && aircraft_aligned) {
-          yaw_count_++;
-        } else {
-          yaw_count_ = 0;
-        }
-        if (yaw_count_ >= min_yaw_frames_) {
-          yaw_locked_ = true;
-          requestGimbalFollow(false);   // 相机切回跟随机头, 视角连续不跳变
-          RCLCPP_INFO(
-            get_logger(),
-            "\033[32m云台已对准码朝向且机头已跟随 (云台偏差 %.1f°, 跟随误差 %.1f°, "
-            "偏置 %.0f°), 航向锁定\033[0m",
-            yaw_err, follow_err_, yaw_offset_deg_);
-        } else {
-          gimbal_turning = true;
-          gimbal_rate = yaw_gain_ * yaw_err;
-          if (follow_ok) {
-            yaw_rate_rad = clampd(
-              follow_kp_ * follow_err_, follow_rate_max_deg_) * M_PI / 180.0;
-          }
-          // 转向悬置超时保护: 长期收敛不了按当前朝向继续 (人工介入排查)
-          yaw_wait_t_ += dt;
-          if (yaw_timeout_sec_ > 0.0 && yaw_wait_t_ > yaw_timeout_sec_) {
-            RCLCPP_WARN(
-              get_logger(),
-              "\033[33m朝向对齐悬置超时 (%.0fs, 云台偏差 %.1f°, 跟随误差 %.1f°), "
-              "放弃对齐继续下降 (可取消后检查 yaw_gain/follow_kp/容差/"
-              "码是否被遮挡/云台是否到限位)\033[0m",
-              yaw_wait_t_, yaw_err, follow_err_);
-            yaw_locked_ = true;   // 仅放行后续流程, 不再重试对齐
-            requestGimbalFollow(false);
-            gimbal_turning = false;
-          }
-        }
-        // 航向门控: 取云台偏差与跟随误差的较大者 (任一未跟上都压低下降);
-        // 跟随误差不可用时只按云台偏差门控 (由超时保护兜底放行)
-        double gate_err = std::fabs(yaw_err);
-        if (follow_ok) {
-          gate_err = std::fmax(gate_err, std::fabs(follow_err_));
-        }
-        yaw_gate = yaw_locked_ ? 1.0 : std::fmin(1.0, std::fmax(0.0,
-          1.0 - (gate_err - yaw_tol_deg_) / std::fmax(1e-3, yaw_gate_width_)));
-      }
-    }
-    gimbalYawRate(gimbal_turning ? gimbal_rate : 0.0);
+    // 状态机/滤波/锁定/门控在 YawAligner (include/aruco/yaw_aligner.hpp);
+    // 这里只提供测量输入: 云台方位 = 画面上方 (0,0,-1) 经云台姿态旋到机
+    // 体系取水平方位 (与码方位同一姿态链, 不假设相机垂直向下), 码方位见
+    // markerYawDeg()。跟随请求的收发 (requestGimbalFollow) 属 ROS 管道留在本节点
+    const cv::Point3d up_b = quat_rot(cam_ori_, 0.0, 0.0, -1.0);
+    const double gimbal_az = std::atan2(up_b.y, up_b.x) * 180.0 / M_PI;
+    const auto yaw = yaw_aligner_->update(
+      dt, tgt->id, markerYawDeg(*tgt), gimbal_az, followErrUsable(), follow_err_);
+    // 跟随接入: 未锁定期间持续请求相机侧反卷 (0.5s 保活自愈失步), 锁定
+    // (含超时放行) 边沿切回跟随机头 (视角连续不跳变); 关闭对齐不请求
+    requestGimbalFollow(yaw_align_ && !yaw.locked);
+    gimbalYawRate(yaw.gimbal_rate);
 
     // 下降速度合成: 面积调度 × 对齐门控 × 航向门控 (近慢远快调度不变)
-    double v_down = descendSchedule(area) * align_gate * yaw_gate;
+    double v_down =
+      descend_schedule(area, descend_close_, descend_far_, area_s_thresh_) *
+      align_gate * yaw.yaw_gate;
     // 近地高度下限: 低于此高度且航向未锁定时停降 (AUTO.LAND 航向在切换
     // 瞬间锁定, 低空带误差下降会来不及锁航向), 悬停等对齐
-    if (floor_alt_ > 0.0 && yaw_align_ && !yaw_locked_ && pos.z_valid &&
+    if (floor_alt_ > 0.0 && yaw_align_ && !yaw.locked && pos.z_valid &&
       -pos.z < floor_alt_)
     {
       v_down = 0.0;
     }
 
     // 降落趋势角: 滑动窗口内位移与竖直方向的夹角 (窗口随面积自适应)
-    updateTrendAngle(area);
+    trend_est_.update(area, pos.xy_valid && pos.z_valid,
+      cv::Point3d{pos.y, pos.x, -pos.z});   // NED -> ENU
 
     // 触发条件: 对齐 + 面积达标(足够近) + 趋势角够垂直 + 航向已锁定,
     // 连续 N 帧确认
     if (aligned && area >= land_area_thresh_ &&
-      trend_angle_ < vertical_threshold_deg_ && (!yaw_align_ || yaw_locked_))
+      trend_est_.angle() < vertical_threshold_deg_ && (!yaw_align_ || yaw.locked))
     {
       landing_count_++;
     } else {
@@ -989,7 +774,7 @@ private:
       RCLCPP_INFO(
         get_logger(),
         "\033[32m降落条件满足 (面积 %.3f, 对齐误差 %.3f, 趋势角 %.1f°), 切 PX4 AUTO.LAND\033[0m",
-        area, align_err, trend_angle_);
+        area, align_err, trend_est_.angle());
       gimbalYawRate(0.0);          // 停云台
       requestGimbalFollow(false);  // 停跟随
       state_ = State::LANDING;
@@ -998,11 +783,11 @@ private:
       return;
     }
 
-    if (gimbal_turning) {
+    if (yaw.turning) {
       // 全并行: 水平 P 对中 + 门控下降 + 偏航角速率 (rad/s, 正=右转) =
       // follow_kp × 反卷跟随误差, 机头追上视线后云台相对偏航收敛回中,
       // 与云台环共同收敛到 "码方位相对机头 = yaw_offset" 的不动点
-      px4_->sendVelocityFRDYawRate(v_fwd, v_right, v_down, yaw_rate_rad);
+      px4_->sendVelocityFRDYawRate(v_fwd, v_right, v_down, yaw.yaw_rate_rad);
     } else {
       px4_->sendVelocityFRD(v_fwd, v_right, v_down);
     }
@@ -1012,7 +797,7 @@ private:
       std::ostringstream js;
       js << std::fixed << std::setprecision(3)
          << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
-         << tracked_id_ << ",\"count\":" << detections_.size()
+         << selector_->trackedId() << ",\"count\":" << detections_.size()
          << ",\"area\":" << area
          << ",\"w\":" << static_cast<int>(tgt->bbox_wh.x + 0.5)
          << ",\"h\":" << static_cast<int>(tgt->bbox_wh.y + 0.5)
@@ -1028,20 +813,20 @@ private:
          << std::setprecision(2)
          << ",\"height\":" << h
          << std::setprecision(1)
-         << ",\"trend\":" << trend_angle_
+         << ",\"trend\":" << trend_est_.angle()
          << std::setprecision(2)
          << ",\"vel\":[" << v_fwd << ',' << v_right << ',' << v_down << ']'
          << ",\"a_gate\":" << align_gate
-         << ",\"y_gate\":" << yaw_gate
+         << ",\"y_gate\":" << yaw.yaw_gate
          << ",\"trigger\":" << landing_count_
          << ",\"trigger_need\":" << min_landing_frames_;
       // 航向对齐状态 (面板"航向"行; 未启用不发, 面板显示 '—')
       if (yaw_align_) {
         js << ",\"yaw_en\":true"
-           << ",\"yaw_err\":" << yaw_err
+           << ",\"yaw_err\":" << yaw.yaw_err_deg
            << std::setprecision(0)
            << ",\"yaw_off\":" << yaw_offset_deg_
-           << ",\"yaw_locked\":" << (yaw_locked_ ? "true" : "false");
+           << ",\"yaw_locked\":" << (yaw.locked ? "true" : "false");
       }
       js << '}';
       publishInfo(js.str());
@@ -1056,10 +841,10 @@ private:
       pos.z_valid ? -pos.z : 0.0,
       detections_.size(), tgt->id, area, cx, cy,
       align_err, align_tol_, aligned ? "已对齐" : "未对齐", align_gate, height_scale,
-      trend_angle_, vertical_threshold_deg_,
-      yaw_align_ ? yaw_err : 0.0, yaw_offset_deg_,
-      !yaw_align_ ? "关闭" : (yaw_locked_ ? "已锁定" : "对齐中"),
-      yaw_gate,
+      trend_est_.angle(), vertical_threshold_deg_,
+      yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
+      !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
+      yaw.yaw_gate,
       yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
       yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
       v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
@@ -1079,7 +864,7 @@ private:
       std::ostringstream js;
       js << std::fixed << std::setprecision(3)
          << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
-         << tracked_id_ << ",\"count\":" << detections_.size()
+         << selector_->trackedId() << ",\"count\":" << detections_.size()
          << ",\"lost\":true"
          << std::setprecision(2)
          << ",\"lost_t\":" << lost_time_
@@ -1101,43 +886,8 @@ private:
     }
   }
 
-  /// 下降速度调度 (正值=向下): 按 s=(1-面积)² 两段线性插值,
-  /// 近处(s→0) descend_close 慢降, 远处(s→1) descend_far 快降
-  double descendSchedule(double area) const
-  {
-    double s = std::fmax(0.0, std::fmin(1.0, 1.0 - area));
-    s *= s;
-    const double v_close = descend_close_;              // s=0 (最近)
-    const double v_far = descend_far_;                  // s=1 (最远)
-    const double v_mid = 0.5 * (v_close + v_far);       // 分段点处速度
-    const double t2 = std::fmax(0.01, std::fmin(0.99, area_s_thresh_));
-    if (s <= t2) {
-      return v_close + (v_mid - v_close) * (s / t2);
-    }
-    return v_mid + (v_far - v_mid) * ((s - t2) / (1.0 - t2));
-  }
-
-  void updateTrendAngle(double area)
-  {
-    const auto & pos = px4_->localPosition();
-    if (!pos.xy_valid || !pos.z_valid) {
-      return;
-    }
-    const cv::Point3d p{pos.y, pos.x, -pos.z};       // NED -> ENU
-    // 窗口大小随面积自适应: 距离越远窗口越大
-    double win = (1.0 - area) * (1.0 - area) * 12.0;
-    win = std::fmax(
-      static_cast<double>(angle_window_min_),
-      std::fmin(static_cast<double>(angle_window_max_), win));
-    const size_t n = std::max<size_t>(2, static_cast<size_t>(std::lround(win)));
-    if (positions_.size() >= n) {
-      positions_.erase(positions_.begin());
-    }
-    positions_.push_back(p);
-    if (positions_.size() >= n) {
-      trend_angle_ = landing_angle_deg(positions_);
-    }
-  }
+  // 下降速度调度 descend_schedule() 与趋势角估计 TrendAngleEstimator
+  // 抽到 include/aruco/landing_math.hpp
 
   // ---------------- LANDING: 切 AUTO.LAND, 由 PX4 完成降落 ----------------
   void tickLanding(const rclcpp::Time & now_t)
@@ -1249,30 +999,23 @@ private:
   double lost_timeout_sec_, offboard_warmup_sec_, offboard_retry_sec_, control_hz_;
   double reacquire_sec_;
   bool yaw_align_;
-  double yaw_offset_deg_, yaw_tol_deg_, yaw_gain_, yaw_rate_max_deg_, yaw_timeout_sec_;
-  int min_yaw_frames_;
-  double follow_kp_, follow_tol_deg_, follow_rate_max_deg_, follow_fresh_sec_;
-  double align_gate_width_, yaw_gate_width_, floor_alt_;
+  double yaw_offset_deg_;   // 当前生效偏置 (同步去重/面板显示; 状态机内部持有副本)
+  double yaw_rate_max_deg_;  // 云台速率限幅 (°/s, gimbalYawRate 通道用)
+  double follow_fresh_sec_;
+  double align_gate_width_, floor_alt_;
 
   // 运行时状态
   double lost_time_ = 0.0;          // 目标连续丢失时长
   int landing_count_ = 0;           // 降落条件连续满足帧数
-  double trend_angle_ = 90.0;       // 降落趋势角 (度)
-  std::vector<cv::Point3d> positions_;  // 趋势角滑动窗口 (ENU)
+  TrendAngleEstimator trend_est_;   // 降落趋势角估计 (landing_math.hpp)
 
-  // 航向对齐
-  bool yaw_locked_ = false;         // 航向已锁定 (转 AUTO.LAND 前提之一)
-  int yaw_count_ = 0;               // 航向偏差连续达标帧数
-  double yaw_err_f_ = 0.0;          // 航向偏差 EMA 滤波值 (度)
-  bool yaw_filt_init_ = false;      // 滤波器已初始化 (首帧直通)
-  int yaw_last_id_ = -1;            // 上次测向的目标码 ID (切换复位用)
-  double yaw_wait_t_ = 0.0;         // 转向悬置累计时长 (超时保护)
+  // 拆分子系统 (构造函数中按参数装配)
+  std::unique_ptr<TargetSelector> selector_;  // 目标码选择 (target_selector.hpp)
+  std::unique_ptr<YawAligner> yaw_aligner_;   // 朝向对齐状态机 (yaw_aligner.hpp)
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr yaw_offset_sub_;
   bool land_confirmed_ = false;     // 已确认 AUTO.LAND (打一次日志)
   bool had_target_ = false;         // 目标捕获/丢失事件日志用
   bool ever_offboard_ = false;      // 本次流程曾进入过 OFFBOARD (判定外部接管用)
-  int tracked_id_ = -1;             // 锁定的目标码 ID (-1 = 未锁定)
-  double lost_id_time_ = 0.0;       // 锁定目标持续丢失时长
   bool start_pending_ = false;      // landing_start 已挂起 (等飞控状态到达后补执行)
   rclcpp::Time start_pending_deadline_{0, 0, RCL_ROS_TIME};  // 挂起超时时刻
   rclcpp::Time last_mode_cmd_{0, 0, RCL_ROS_TIME};
