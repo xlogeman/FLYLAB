@@ -5,7 +5,6 @@
 不直接接触任何 rclpy 对象。将来加订阅/发布只改这里。
 """
 import json
-# import os            # 仅转发环境诊断日志用 (见 run 内注释, 恢复时一并打开)
 import threading
 import time
 from array import array
@@ -95,15 +94,6 @@ class DisplayForwarder(threading.Thread):
         self._frame = None        # 最新待发帧 (ndarray 引用)
         self._publishing = False  # 上一帧是否仍在发送中 (阻塞时跳帧)
         self.fwd_count = 0        # 2s 统计窗口内的实际发布帧数 (供界面告警)
-        self._tomsg_ms = 0.0      # 窗口内构消息耗时累计 (tobytes/字段填充)
-        self._tobytes_ms = 0.0    # 窗口内 tobytes 耗时累计 (定位非连续数组慢拷贝)
-        self._arr_info = None     # 最近一帧的 (shape, strides, C连续) 内存布局
-        self._pub_ms = 0.0        # 窗口内大图 publish 耗时累计 (rmw+传输)
-        self._probe_ms = 0.0      # 窗口内小消息 publish 耗时累计 (对照)
-        self._pub_ms_n = 0
-        self._wake_empty = 0      # 窗口内醒来但单槽无新帧的次数 (上游提交不足)
-        self._wake_busy = 0       # 窗口内上一帧未发完跳过的次数
-        self._stat_t = time.monotonic()
         self._running = True
 
     def set_frame(self, arr):
@@ -112,23 +102,10 @@ class DisplayForwarder(threading.Thread):
             self._frame = arr
 
     def take_fwd_stats(self):
-        """取出并清零统计窗口 (帧数, tobytes/构消息其余/大图/小消息均值 ms,
-        窗口秒, 数组内存布局)。"""
+        """取出并清零统计窗口内的实际发布帧数 (供界面断流告警)。"""
         with self._lock:
             count, self.fwd_count = self.fwd_count, 0
-            tobytes_ms, tomsg_ms, pub_ms, probe_ms, n = (
-                self._tobytes_ms, self._tomsg_ms, self._pub_ms,
-                self._probe_ms, self._pub_ms_n)
-            self._tobytes_ms, self._tomsg_ms = 0.0, 0.0
-            self._pub_ms, self._probe_ms, self._pub_ms_n = 0.0, 0.0, 0
-            empty, busy = self._wake_empty, self._wake_busy
-            self._wake_empty, self._wake_busy = 0, 0
-            arr_info = self._arr_info
-            dt = time.monotonic() - self._stat_t
-            self._stat_t = time.monotonic()
-        div = n if n else 1
-        return (count, tobytes_ms / div, (tomsg_ms - tobytes_ms) / div,
-                pub_ms / div, probe_ms / div, dt, arr_info, empty, busy)
+        return count
 
     def stop(self):
         self._running = False
@@ -136,38 +113,18 @@ class DisplayForwarder(threading.Thread):
     def _to_msg(self, arr):
         # 关键: msg.data 必须赋 array.array('B') —— 赋 bytes 会触发 rclpy
         # 字段 setter 对 900K 元素做逐元素校验 (实测 ~50ms/帧), array.array
-        # 走类型快路 (<0.01ms)。参见构建耗时隔离测试 (2026-11-07)
-        t_b = time.monotonic()
-        data = array('B', arr.tobytes())
-        t_b = (time.monotonic() - t_b) * 1000.0
+        # 走类型快路 (<0.01ms)
         msg = Image()
         msg.height, msg.width = arr.shape[:2]
         msg.encoding = 'bgr8'
         msg.step = int(arr.strides[0])
         msg.header.frame_id = 'display'
         msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.data = data
-        with self._lock:
-            self._tobytes_ms += t_b
-            self._arr_info = (tuple(arr.shape), tuple(arr.strides),
-                              bool(arr.flags['C_CONTIGUOUS']))
+        msg.data = array('B', arr.tobytes())
         return msg
 
     def run(self):
         self._node = rclpy.create_node('ground_station_display')
-        # 链路诊断 (2026-11-09, 排查完毕已注释, 恢复需连带顶部 import os):
-        # 启动时打一次 DDS 环境 —— SHM profile 是否生效 (未 source env.sh 时
-        # FASTRTPS profile 缺失, 大图退回 UDP 分片, best-effort 下丢帧 40%+),
-        # RMW 实现与转发 QoS。排查帧率先看这条, 再看 2s 一条的"链路帧率"日志
-        # self._node.get_logger().info(
-        #     '转发环境: RMW=%s, FASTRTPS_DEFAULT_PROFILES_FILE=%s%s, '
-        #     '转发QoS=%s, 订阅QoS(算法侧默认)=KeepLast(1)+BEST_EFFORT' % (
-        #         os.environ.get('RMW_IMPLEMENTATION', '(未设置,rmw_fastrtps)'),
-        #         '已设置' if os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE')
-        #         else '未设置',
-        #         f'({os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"]})'
-        #         if os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE') else '',
-        #         'RELIABLE' if config.DISPLAY_IMAGE_RELIABLE else 'BEST_EFFORT'))
         # reliable: best-effort 下大图 UDP 分片丢一个整帧就没 (实测丢帧 40%+);
         # 若 ACK 等待限制吞吐, 改 config.DISPLAY_IMAGE_RELIABLE = False
         qos = QoSProfile(
@@ -177,11 +134,6 @@ class DisplayForwarder(threading.Thread):
             history=HistoryPolicy.KEEP_LAST, depth=2)
         pub = self._node.create_publisher(
             Image, config.DISPLAY_IMAGE_TOPIC, qos)
-        # 小消息对照探针: 与大图同进程同 DDS 事件循环, 用于区分
-        # "进程级/事件循环级卡顿" 与 "大图序列化/传输专属卡顿"
-        probe_pub = self._node.create_publisher(String, '/flylab/display_probe', 10)
-        probe_msg = String()
-        probe_msg.data = 'x'
         # 2ms 唤醒: 帧到达即发布 (提交点直挂回调后帧成对到达, 28Hz 节拍
         # 会把一对帧坍缩成 ~1 帧 -> 发布速率只有提交的一半)。放宽节拍后
         # 发布速率=提交速率, 接收端 KeepLast(1)+最新帧语义自会丢积压;
@@ -194,30 +146,14 @@ class DisplayForwarder(threading.Thread):
                     frame = self._frame
                     self._frame = None
                     busy = self._publishing
-                    if frame is None:
-                        self._wake_empty += 1
-                    elif busy:
-                        self._wake_busy += 1
                 # 无订阅者/上一帧未发完: 跳过, 新帧留在单槽里等下一轮
                 if (frame is not None and not busy
                         and pub.get_subscription_count() > 0):
                     self._publishing = True
                     try:
-                        t_msg = time.monotonic()
-                        msg = self._to_msg(frame)
-                        t_msg = time.monotonic() - t_msg
-                        t_pub = time.monotonic()
-                        pub.publish(msg)
-                        t_pub = time.monotonic() - t_pub
-                        t_probe = time.monotonic()
-                        probe_pub.publish(probe_msg)
-                        t_probe = time.monotonic() - t_probe
+                        pub.publish(self._to_msg(frame))
                         with self._lock:
                             self.fwd_count += 1
-                            self._tomsg_ms += t_msg * 1000.0
-                            self._pub_ms += t_pub * 1000.0
-                            self._probe_ms += t_probe * 1000.0
-                            self._pub_ms_n += 1
                     except Exception:
                         # 退出竞态: shutdown 作废上下文时正好在 publish, 静默吞掉
                         pass
@@ -525,8 +461,7 @@ class GroundStationNode(Node):
         self.display_forwarder.set_frame(arr)
 
     def take_fwd_stats(self):
-        """取 2s 统计窗口内的 (转发帧数, 各段均值 ms, 窗口秒, 空槽/忙跳次数)
-        (取后清零)。"""
+        """取统计窗口内的实际转发帧数 (取后清零, 供界面断流告警)。"""
         return self.display_forwarder.take_fwd_stats()
 
     def shutdown(self):

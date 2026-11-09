@@ -48,7 +48,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 
-#include <opencv2/imgproc.hpp>
+#include <opencv2/core.hpp>
 
 #include "aruco/aruco_detector.hpp"
 #include "common/image_utils.hpp"

@@ -315,7 +315,6 @@ class AlgoOutputPanel(QGroupBox):
         spin.setValue(config.LANDING_YAW_OFFSET_DEFAULT)
         spin.valueChanged.connect(publish)
         lay.addWidget(spin, 1)   # 必须加入布局, 否则游离控件不显示 (此前缺失)
-        self._yaw_spin = spin
         self._yaw_box = box
 
     def _build_dict_combo(self, publish):
@@ -335,7 +334,6 @@ class AlgoOutputPanel(QGroupBox):
         combo.setCurrentText(config.ARUCO_DICT_DEFAULT)
         combo.activated[str].connect(publish)   # 用户选择才发布 (含重复选择, 传字典名)
         lay.addWidget(combo, 1)
-        self._dict_combo = combo
         self._dict_box = box
 
     def set_active(self, keys):

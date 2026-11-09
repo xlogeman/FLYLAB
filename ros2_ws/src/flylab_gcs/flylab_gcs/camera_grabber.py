@@ -126,20 +126,15 @@ class Grabber(threading.Thread):
         # 会话内限位拒绝标记 (方向 -> bool), 按键被限位卡住时标红, 不持久化
         self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
                                 'pitch+': False, 'pitch-': False}
-        # 图传分段耗时累计 (rpc= simGetImages 往返, dec=解码/转换),
-        # 每 2 秒汇总, 日志默认关闭 (见 _stat_tick, 排查帧率问题时打开)
-        self._stat = {'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': time.time()}
-        self._stat_lock = threading.Lock()   # 多 worker 线程并发累计
         self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
         # 航向跟随 (云台偏航带动机头): _follow 开启后偏航语义从"跟随机头"
         # 翻转为"世界系锚定" —— 偏航输入写世界方位锚点 _az_target, 抓取
         # 每拍把存储 yaw 反卷回 wrap(锚点 − 航向), 机头转动时 yaw 收敛回 0;
-        # _veh_yaw/_veh_yaw_t 为最近测量的机体航向与时刻 (外环新鲜度依据)
+        # _veh_yaw_t 为最近一次机体航向测量时刻 (外环新鲜度依据)
         self._follow = False
         self._follow_src = 'ui'      # 跟随来源: 'ui'(teleop) / 'algo'(反控算法)
         self._algo_cmd_t = None      # 最近一次算法云台指令时刻 (心跳判定)
         self._az_target = None       # 视线世界方位锚点 (度, 北偏东右+), None=待快照
-        self._veh_yaw = None         # 最近测量的机体航向 (度, 同约定)
         self._veh_yaw_t = None       # 航向测量时刻 (monotonic, 秒)
         self.running = True
         self._airsim_ok = False     # AirSim RPC 是否已连通 (云台可用性依据)
@@ -518,7 +513,6 @@ class Grabber(threading.Thread):
             return None
         yaw_b, _ = quat_yaw_el(q_b)
         with self.lock:
-            self._veh_yaw = yaw_b
             self._veh_yaw_t = time.monotonic()
             if not self._follow:
                 return q_b
@@ -561,7 +555,6 @@ class Grabber(threading.Thread):
             self._follow_src = 'ui'
             self._algo_cmd_t = None
             self._az_target = None
-            self._veh_yaw = None
             self._veh_yaw_t = None
 
     def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur, q_b=None):
@@ -680,25 +673,6 @@ class Grabber(threading.Thread):
             if self._fov is None:
                 self._fov = fov
         self.log(f'视场角: 采纳相机 {cam} 当前 FOV {fov:.0f}° (同步算法节点)')
-
-    def _stat_tick(self, rpc_s, dec_s):
-        """分段耗时累计: 每 2 秒汇总一条日志 (rpc 均值/解码均值/帧数),
-        定位帧率瓶颈在 UE 渲染+RPC 往返还是本地解码 (多 worker 并发累计)。
-        日志已按需注释 (2026-11-09, 链路排查完毕), 需要时取消注释恢复。"""
-        with self._stat_lock:
-            s = self._stat
-            s['rpc'] += rpc_s
-            s['dec'] += dec_s
-            s['n'] += 1
-            now = time.time()
-            if now - s['t'] >= 2.0 and s['n'] > 0:
-                n = s['n']
-                # 帧率排查 (2026-11-09, 排查完毕已注释): RPC 往返是源头帧率
-                # 上限的直接依据 (单连接 1000/RPC); 解码异常变慢也在此暴露
-                # self.log(f'图传分段: RPC {s["rpc"]/n*1000:.0f}ms '
-                #          f'/ 解码 {s["dec"]/n*1000:.1f}ms '
-                #          f'(近{n}帧, 提交帧率 {n/(now-s["t"]):.1f}fps)')
-                s.update({'rpc': 0.0, 'dec': 0.0, 'n': 0, 't': now})
 
     def _commit(self, arr, is_depth, gen):
         """写入最新帧并统计 fps。切源代数不符 (读取阻塞期间切了源) 时
@@ -833,18 +807,13 @@ class Grabber(threading.Thread):
                     # PNG 压缩传输 (体积 1/3, 约定见 config.DISPLAY_SCENE_COMPRESS)
                     req = airsim.ImageRequest(
                         cam, airsim.ImageType.Scene, False, self._scene_compress)
-                t_rpc = time.monotonic()
                 resp = client.simGetImages([req], VEHICLE)
-                t_rpc = time.monotonic() - t_rpc
 
-                t_dec = time.monotonic()
                 arr = self._decode_response(resp, is_depth)
                 if arr is not None:
                     self._commit(arr, is_depth, gen)
                 else:
                     time.sleep(0.05)
-                t_dec = time.monotonic() - t_dec
-                self._stat_tick(t_rpc, t_dec)
                 # 自适应节流: 扣除 RPC 往返后补足剩余间隔
                 time.sleep(max(0.0, 1.0 / GRAB_HZ - (time.monotonic() - t_start)))
             except Exception as e:

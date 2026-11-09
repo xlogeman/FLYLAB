@@ -104,7 +104,6 @@ class CameraViewWidget(QWidget):
         self.file_ctrl.setEnabled(False)
         self._build_gimbal(in_group=side_panel)
 
-        src_label = QLabel('输入源:')
         if side_panel:                       # 左画面+控制条 / 右栏 (地面站)
             # 源选择按钮由主窗口放进顶部工具栏, 这里只排画面/右栏
             outer = QHBoxLayout(self)
@@ -142,7 +141,7 @@ class CameraViewWidget(QWidget):
         else:                                # 上下排列 (独立调试窗口)
             layout = QVBoxLayout(self)
             row = QHBoxLayout()
-            row.addWidget(src_label)
+            row.addWidget(QLabel('输入源:'))
             row.addWidget(self.src_btn)
             row.addStretch(1)
             layout.addLayout(row)

@@ -2,7 +2,6 @@
 #ifndef FLYLAB_VISION__ARUCO_DETECTOR_HPP_
 #define FLYLAB_VISION__ARUCO_DETECTOR_HPP_
 
-#include <map>
 #include <string>
 #include <vector>
 
@@ -20,8 +19,7 @@ struct Detection
   cv::Point2f center_px{0.f, 0.f};   // 中心像素坐标
   cv::Point2f center_norm{0.f, 0.f}; // 中心归一化坐标
   cv::Point2f bbox_wh{0.f, 0.f};     // 外接框宽高
-  cv::Vec3d rvec{0.0, 0.0, 0.0};     // 相机系位姿 (x右 y下 z前, 米)
-  cv::Vec3d tvec{0.0, 0.0, 0.0};
+  cv::Vec3d tvec{0.0, 0.0, 0.0};     // 相机系位姿 (x右 y下 z前, 米)
   bool has_pose = false;             // solvePnP 是否成功
   // 位姿轴端点投影: [原点, x端, y端, z端] (像素); has_pose 时有效,
   // 供可视化画 RGB 轴
@@ -88,9 +86,6 @@ private:
 /// 读取 OpenCV 格式标定 yaml (camera_matrix + distortion_coefficients)。
 /// 失败抛 std::runtime_error。
 void load_calib(const std::string & path, cv::Mat & K, cv::Mat & D);
-
-/// 字典名 -> 预定义字典; 未知名字抛 std::invalid_argument
-cv::Ptr<cv::aruco::Dictionary> make_dictionary(const std::string & name);
 
 /// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
 /// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每个 marker:

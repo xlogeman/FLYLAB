@@ -19,7 +19,6 @@
 #include <onnxruntime_cxx_api.h>
 #include <sstream>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 #include <opencv2/imgcodecs.hpp>

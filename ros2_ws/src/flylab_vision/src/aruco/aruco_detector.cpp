@@ -3,6 +3,8 @@
 
 #include <cmath>
 #include <iomanip>
+#include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 
@@ -184,7 +186,6 @@ std::vector<Detection> ArucoDetector::detect(const cv::Mat & bgr)
     if (cv::solvePnP(
         objp, corners_mat, K, D, rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE))
     {
-      d.rvec = cv::Vec3d(rvec);
       d.tvec = cv::Vec3d(tvec);
       d.has_pose = true;
       // 位姿轴端点投影到像素 (供可视化画 RGB 轴)
@@ -195,7 +196,7 @@ std::vector<Detection> ArucoDetector::detect(const cv::Mat & bgr)
       pts.at<cv::Vec3d>(2) = {0, a, 0};
       pts.at<cv::Vec3d>(3) = {0, 0, a};
       cv::Mat proj;
-      cv::projectPoints(pts, d.rvec, d.tvec, K, D, proj);
+      cv::projectPoints(pts, rvec, tvec, K, D, proj);
       for (int k = 0; k < 4; ++k) {
         d.axis_pts.emplace_back(
           static_cast<float>(proj.at<cv::Vec2d>(k)[0]),
