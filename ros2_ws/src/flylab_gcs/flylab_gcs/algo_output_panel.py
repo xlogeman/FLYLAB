@@ -230,23 +230,24 @@ class AlgoOutputPanel(QGroupBox):
         self._lay = QGridLayout(self)
         self._lay.setContentsMargins(0, 2, 0, 0)
         self._lay.setSpacing(4)
-        # ArUco 码边长滑杆 (常驻, 网格下方一整行): 场景含多种尺寸码时
-        # 运行中同步节点 marker_length (位姿解算尺度)
+        # ArUco 码边长滑杆 (跟随 ArUco 分组显隐, 网格下方一整行): 场景含
+        # 多种尺寸码时运行中同步节点 marker_length (位姿解算尺度)
         self._marker_box = None
         if set_marker_length is not None:
             self._build_marker_slider(set_marker_length)
-        # 降落朝向选择 (常驻): 机头相对码 0° 方向的落点偏置,
-        # 视觉反控降落时运行中同步 aruco_landing_node yaw_offset_deg
+        # 降落朝向选择 (仅降落分组激活时显示): 机头相对码 0° 方向的落点
+        # 偏置, 视觉反控降落时运行中同步 aruco_landing_node yaw_offset_deg
         self._yaw_box = None
         if set_landing_yaw is not None:
             self._build_yaw_spin(set_landing_yaw)
-        # 字典切换 (常驻): 运行中同步 aruco_node / aruco_landing_node 的
-        # dict_name (下一帧检测生效)
+        # 字典切换 (跟随 ArUco 分组显隐): 运行中同步 aruco_node /
+        # aruco_landing_node 的 dict_name (下一帧检测生效)
         self._dict_box = None
         if set_aruco_dict is not None:
             self._build_dict_combo(set_aruco_dict)
-        # 底部常驻行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
-        # 横向容器, 整行横跨全部分组列 (见 _relayout); 任意存在都兼容
+        # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
+        # 横向容器, 整行横跨全部分组列 (见 _relayout); 可见性跟随激活
+        # 分组 (见 _update_bottom_visibility), 无 ArUco 算法运行时整行隐藏
         bottom = None
         if self._marker_box is not None or self._yaw_box is not None or \
                 self._dict_box is not None:
@@ -261,6 +262,7 @@ class AlgoOutputPanel(QGroupBox):
             if self._dict_box is not None:
                 row.addWidget(self._dict_box, 1)
         self._bottom_row = bottom
+        self._update_bottom_visibility([])   # 初始无分组, 整行隐藏
 
     def _build_marker_slider(self, publish):
         """码边长滑杆: 值域/步进取 config; 拖动才发布 (未动过节点用
@@ -344,13 +346,30 @@ class AlgoOutputPanel(QGroupBox):
         self._dict_box = box
 
     def set_active(self, keys):
-        """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除。"""
+        """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
+        底部调节行的可见性同步跟随 (无 ArUco 分组时整行隐藏)。"""
         for key in list(self._sections):
             if key not in keys:
                 self._remove(key)
         for key in keys:
             if key not in self._sections and key in SECTIONS:
                 self._add(key)
+        self._update_bottom_visibility(keys)
+
+    def _update_bottom_visibility(self, keys):
+        """底部调节行随激活分组显隐: 码边长滑杆/字典切换对检测与降落都
+        有意义 (降落节点同样检测码), 有 detect 或 landing 即显示;
+        降落朝向偏置只属于降落, 仅 landing 时显示; 全无则整行隐藏。"""
+        aruco_on = 'detect' in keys or 'landing' in keys
+        landing_on = 'landing' in keys
+        if self._marker_box is not None:
+            self._marker_box.setVisible(aruco_on)
+        if self._yaw_box is not None:
+            self._yaw_box.setVisible(landing_on)
+        if self._dict_box is not None:
+            self._dict_box.setVisible(aruco_on)
+        if self._bottom_row is not None:
+            self._bottom_row.setVisible(aruco_on)
 
     def refresh(self):
         info = self._get_info() or {}
@@ -372,7 +391,8 @@ class AlgoOutputPanel(QGroupBox):
 
     def _relayout(self):
         """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零;
-        底部常驻行 (码边长滑杆 + 降落朝向选择 + 字典切换并排) 横跨全部分组列。"""
+        底部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换并排) 横跨全部分组列,
+        可见性由 _update_bottom_visibility 决定 (隐藏的组件不占布局空间)。"""
         for col, key in enumerate(self._order):
             self._lay.addWidget(self._sections[key], 0, col)
         for col in range(self._lay.columnCount()):
