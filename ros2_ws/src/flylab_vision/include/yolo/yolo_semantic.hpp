@@ -33,6 +33,7 @@ struct YoloSemanticResult
   cv::Mat class_map;          // CV_8UC1, 尺寸 = 输入帧, 像素值 = 类别 id
                               // (cityscapes 19 类), 无效像素 = kSemanticVoid
   std::vector<int> present;   // 本帧出现的类别 id, 按像素占比降序
+  std::vector<float> present_share;   // 与 present 一一对应的像素占比 (%)
 };
 
 /// YOLO 语义分割器 —— 纯算法, 不含 ROS / 窗口显示。
@@ -72,21 +73,20 @@ private:
 /// cityscapes 19 类类别名 (下标 = 类别 id, 与 ONNX 元数据 names 一致)
 const std::vector<std::string> & cityscapes_names();
 
-/// cityscapes 19 类标准配色 (RGB, 下标 = 类别 id)
+/// 19 类配色表 (RGB, 下标 = 类别 id): 自定义清新风格, 类别图缩略图与
+/// 图例色块共用 (原为 Cityscapes 标准配色, 因整体偏沉闷替换)
 const std::vector<cv::Vec3b> & cityscapes_palette_rgb();
 
-/// 语义分割结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
-/// 可视化同深度估计的画中画模式 (to_depth_annotations_json):
-///   image 图元: 类别图按 cityscapes 配色着色 (无效像素半透明深灰打底,
-///     保持窗口完整感同时暗示"无类别归属"), 先缩到画中画窗尺寸再以
-///     带透明通道的 PNG+base64 编码 (PNG 无块状伪影, 平坦色块体积极小),
-///     以不透明小窗贴在画面右下角 (留 8px 边距, 相机画面不被遮挡);
-///   text 图元: 本帧出现的类别名图例 (按像素占比降序), 画面左下角偏上
-///     一行 (左上角是 FPS HUD, 左下角留给深度估计的范围文字)。
-/// pip_scale 为画中画窗宽占原帧比例 (0.1~1.0 自动夹取)。
-std::string to_semantic_annotations_json(
-  const YoloSemanticResult & result, const std::string & algo = "semantic",
-  float pip_scale = 0.33f);
+/// 语义分割结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/aruco_info,
+/// 与 ArUco 检测/深度估计同一话题, 面板按 src 分组):
+///   {"src":"semantic","nclass":..,"w":..,"h":..,
+///    "present":[["car",12.3],...],"img":"<base64 PNG>"|省略}
+/// present 为本帧出现的类别 [名, 像素占比%, [R,G,B] 配色] (按占比降序,
+/// 全量; 图例截断在面板侧), img 为类别图按 cityscapes 配色着色
+/// (无效像素深灰) 缩到 img_width 宽后的 PNG base64 (平坦色块体积小且无
+/// 伪影; img_width<=0 或输入为空时省略, 面板只显示文字字段)。
+std::string to_semantic_info_json(
+  const YoloSemanticResult & result, int frame_w, int frame_h, int img_width);
 
 }  // namespace flylab_vision
 

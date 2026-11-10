@@ -12,15 +12,18 @@
 1. 算法节点往 /flylab/aruco_info 发 {"src": "<key>", ...} (建议 10Hz 限频;
    参数名 info_topic, 参照 aruco_node.publishInfo)
 2. 本文件 SECTIONS 注册一项: title + fields 字段表
-   (label, extract) —— extract(data) 返回显示文本, None 显示 '—',
-   格式化逻辑完全自定义
+   (label, extract[, opts]) —— extract(data) 返回显示文本 (可为 HTML 富
+   文本, QLabel 自动识别), None 显示 '—', 格式化逻辑完全自定义;
+   opts 可选 {'wrap': N} 让该行换行并固定 N 行高
+   (长度逐帧变化的长文本字段必加, 否则宽高随内容撑动右栏布局)
 3. config.ALGORITHMS 该算法条目加 'panel': '<key>' —— 运行时面板自动
    显示该分组, 停止自动移除
 
 内置分组:
-  detect  —— aruco_node 最大码摘要
-  landing —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
-  depth   —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
+  detect   —— aruco_node 最大码摘要
+  landing  —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
+  depth    —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
+  semantic —— yolo_semantic_node 语义分割 (配色类别图 + 类别图例)
 
 分组 spec 可带 'image': True —— 分组顶部多一个固定高度 (IMG_ROW_HEIGHT)
 的图片行, 数据里可选字段 "img" (base64 JPEG, 参照 overlay.py image 图元的
@@ -38,7 +41,7 @@ from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
 from . import config
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
-IMG_ROW_HEIGHT = 200  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
+IMG_ROW_HEIGHT = 195  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
 
 # 降落状态机 -> 界面文案
 _LANDING_STATE_TEXT = {
@@ -143,6 +146,33 @@ def _depth_fields(data):
     return out
 
 
+def _semantic_fields(data):
+    """yolo_semantic_node 分割摘要 -> {字段名: 文本|None}。"""
+    out = {'检出': None, '图例': None, '画幅': None}
+    n = data.get('nclass')
+    if n is not None:
+        out['检出'] = f'{n} 类'
+    present = data.get('present')
+    if present:
+        # 一个类别一行, 只显示占比最大的前 3 行 (present 已按占比降序);
+        # 类别名前涂同色小方块 (RGB 由节点随数据下发, 与类别图同 cityscapes
+        # 配色), 富文本渲染, 行高仍由 {'wrap': 3} 固定
+        rows = []
+        for p in present[:3]:
+            name, share = p[0], p[1]
+            text = f'{name} {share:.1f}%'
+            if len(p) >= 3 and len(p[2]) == 3:
+                r, g, b = p[2]
+                text = (f'<span style="background-color:rgb({r},{g},{b});">'
+                        '&nbsp;&nbsp;&nbsp;</span>&nbsp;' + text)
+            rows.append(text)
+        out['图例'] = '<br>'.join(rows)
+    w, h = data.get('w'), data.get('h')
+    if w and h:
+        out['画幅'] = f'{w}x{h}'
+    return out
+
+
 # 分组注册表: key (= 消息 src) -> {title, title_fn, fields}
 # fields: [(label, extract)] —— extract(data) -> 文本 | None (显示 '—')
 # 行序在并列显示的分组间保持语义对应 (同行 = 同类信息), 新分组接入时照此排列
@@ -185,6 +215,16 @@ SECTIONS = {
             ('中心', lambda d: _depth_fields(d)['中心']),
             ('平均', lambda d: _depth_fields(d)['平均']),
             ('画幅', lambda d: _depth_fields(d)['画幅']),
+        ],
+    },
+    'semantic': {
+        'title': '语义分割',
+        'image': True,   # 分组顶部 cityscapes 配色类别图行 (数据 "img" base64 PNG)
+        'fields': [
+            ('检出', lambda d: _semantic_fields(d)['检出']),
+            # 图例长度逐帧变化: 固定 3 行高防右栏布局跳动 (见 _Section opts)
+            ('图例', lambda d: _semantic_fields(d)['图例'], {'wrap': 3}),
+            ('画幅', lambda d: _semantic_fields(d)['画幅']),
         ],
     },
 }
@@ -246,10 +286,29 @@ class _Section(QGroupBox):
             form.addRow(self._img)
         self._extracts = []
         self._vals = []
-        for lbl, extract in self._fields:
+        for lbl, extract, *rest in self._fields:
+            opts = rest[0] if rest else {}
             key = QLabel(lbl + '：')
             val = QLabel('—')
-            val.setStyleSheet('font-family: monospace;')
+            lines = opts.get('wrap')
+            if lines:
+                # 长文本字段 (如图例): 换行 + 固定 N 行高 + 宽度交给布局 ——
+                # 文本长度逐帧变化时不改变本行尺寸, 右栏各分区不跳动。
+                # 字体用 setFont 直设 (不走样式表): 行高按同一字体的度量
+                # 精确锁定, 否则样式表字体与默认字体度量不一致, 行底留白
+                # (视觉上与下一行之间多出一行)
+                font = val.font()
+                font.setFamily('monospace')
+                val.setFont(font)
+                val.setWordWrap(True)
+                val.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+                # 行距用 lineSpacing (含 leading, 与富文本/QTextDocument
+                # 实际行距一致), height() 不含 leading 会裁掉末行下伸部
+                val.setFixedHeight(val.fontMetrics().lineSpacing() * lines)
+                val.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+                key.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            else:
+                val.setStyleSheet('font-family: monospace;')
             form.addRow(key, val)
             self._extracts.append(extract)
             self._vals.append(val)

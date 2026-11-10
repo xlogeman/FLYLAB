@@ -256,7 +256,8 @@ ALGORITHMS = [
     {'name': '语义分割',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_semantic_node',
              '--ros-args', '-p', 'device:=cuda'],
-     'start': 'semantic_start', 'stop': 'semantic_stop'},
+     'start': 'semantic_start', 'stop': 'semantic_stop',
+     'panel': 'semantic'},   # 右栏算法信息面板: 配色类别图 + 图例 (SECTIONS['semantic'])
     {'name': '姿态估计',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
              '--ros-args', '-p', 'device:=cuda'],

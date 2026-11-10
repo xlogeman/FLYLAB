@@ -10,7 +10,7 @@
 /// 回原帧尺寸 (INTER_NEAREST 避免类别插值混色), 与原图逐像素对齐。
 ///
 /// 与 yolo_segment (实例分割) 的差异: 无检测框/原型掩码/NMS, 输出是整幅
-/// 像素级类别图, 展示走 image 图元半透明全幅叠加。
+/// 像素级类别图, 展示走 cityscapes 配色缩略图进右栏面板 (to_semantic_info_json)。
 #include "yolo/yolo_semantic.hpp"
 
 #include <algorithm>
@@ -67,13 +67,6 @@ cv::Mat make_blob(const cv::Mat & canvas)
   return blob;
 }
 
-std::string num(double v, int prec = 1)
-{
-  std::ostringstream os;
-  os << std::fixed << std::setprecision(prec) << v;
-  return os.str();
-}
-
 /// base64 编码 (无外部依赖, 手写查表)
 const char kBase64Table[] =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -95,7 +88,77 @@ std::string base64_encode(const uint8_t * data, size_t len)
   return out;
 }
 
+/// 类别图 -> cityscapes 配色 BGR 图: 类别像素不透明着色, 无效像素深灰
+/// (暗示"无类别归属"), 等比缩放到 target_w 宽 (0 = 保持原尺寸)。
+/// 供右栏面板缩略图编码
+cv::Mat colorize_semantic(const cv::Mat & cls, int target_w = 0)
+{
+  cv::Mat colored(cls.size(), CV_8UC3);
+  const auto & palette = cityscapes_palette_rgb();
+  for (int y = 0; y < cls.rows; ++y) {
+    const uint8_t * src = cls.ptr<uint8_t>(y);
+    cv::Vec3b * dst = colored.ptr<cv::Vec3b>(y);
+    for (int x = 0; x < cls.cols; ++x) {
+      const uint8_t c = src[x];
+      if (c != kSemanticVoid && c < palette.size()) {
+        // 调色板存 RGB, Mat 用 BGR
+        dst[x] = cv::Vec3b(palette[c][2], palette[c][1], palette[c][0]);
+      } else {
+        dst[x] = cv::Vec3b(214, 218, 224);   // 浅灰底 (无类别归属)
+      }
+    }
+  }
+  if (target_w > 0 && target_w < colored.cols) {
+    const int h = std::max(1, static_cast<int>(std::lround(
+      colored.rows * target_w / static_cast<double>(colored.cols))));
+    cv::resize(colored, colored, cv::Size(target_w, h), 0, 0, cv::INTER_AREA);
+  }
+  return colored;
+}
+
 }  // namespace
+
+std::string to_semantic_info_json(
+  const YoloSemanticResult & result, int frame_w, int frame_h, int img_width)
+{
+  std::ostringstream os;
+  os << "{\"src\":\"semantic\"";
+  if (!result.class_map.empty()) {
+    const auto & names = cityscapes_names();
+    os << ",\"nclass\":" << result.present.size()
+       << ",\"w\":" << frame_w << ",\"h\":" << frame_h;
+    // 本帧出现的类别图例 (按像素占比降序): [名, 占比%, [R,G,B]] 全量发送,
+    // 显示截断 (前 3 项) 在面板侧 —— 截断上限属显示关注点, 改图例行数只动
+    // flylab_gcs 不用重编本包; RGB 取 cityscapes 标准配色, 面板画同色小方块
+    os << ",\"present\":[";
+    const auto & palette = cityscapes_palette_rgb();
+    for (size_t i = 0; i < result.present.size(); ++i) {
+      const int c = result.present[i];
+      if (i > 0) {
+        os << ",";
+      }
+      os << "[\"" << (c < static_cast<int>(names.size()) ? names[c] :
+        "class_" + std::to_string(c)) << "\","
+         << std::fixed << std::setprecision(1)
+         << (i < result.present_share.size() ? result.present_share[i] : 0.f)
+         << ",[" << static_cast<int>(palette[c][0]) << ","
+         << static_cast<int>(palette[c][1]) << ","
+         << static_cast<int>(palette[c][2]) << "]]";
+    }
+    os << "]";
+    // 配色缩略图: 缩到面板显示宽度再编码, 体积随宽度而非原帧尺寸;
+    // PNG: 平坦色块体积小、无 JPEG 伪影闪烁
+    if (img_width > 0) {
+      const cv::Mat colored = colorize_semantic(result.class_map, img_width);
+      std::vector<uchar> png;
+      if (cv::imencode(".png", colored, png)) {
+        os << ",\"img\":\"" << base64_encode(png.data(), png.size()) << "\"";
+      }
+    }
+  }
+  os << "}";
+  return os.str();
+}
 
 const std::vector<std::string> & cityscapes_names()
 {
@@ -109,26 +172,29 @@ const std::vector<std::string> & cityscapes_names()
 
 const std::vector<cv::Vec3b> & cityscapes_palette_rgb()
 {
+  // 自定义清新配色 (RGB, 下标 = 类别 id): 替代 Cityscapes 标准配色
+  // (整体偏深偏闷), 保持语义直觉 (天空蓝/植被绿/路面雾蓝紫) 且
+  // 相邻易混类别拉开色相; 类别图缩略图与图例色块共用本表
   static const std::vector<cv::Vec3b> palette = {
-    {128, 64, 128},    // 0  road
-    {244, 35, 232},    // 1  sidewalk
-    {70, 70, 70},      // 2  building
-    {102, 102, 156},   // 3  wall
-    {190, 153, 153},   // 4  fence
-    {153, 153, 153},   // 5  pole
-    {250, 170, 30},    // 6  traffic light
-    {220, 220, 0},     // 7  traffic sign
-    {107, 142, 35},    // 8  vegetation
-    {152, 251, 152},   // 9  terrain
-    {70, 130, 180},    // 10 sky
-    {220, 20, 60},     // 11 person
-    {255, 0, 0},       // 12 rider
-    {0, 0, 142},       // 13 car
-    {0, 0, 70},        // 14 truck
-    {0, 60, 100},      // 15 bus
-    {0, 80, 100},      // 16 train
-    {0, 0, 230},       // 17 motorcycle
-    {119, 11, 32}};    // 18 bicycle
+    {106, 130, 230},   // 0  road       雾蓝紫
+    {255, 195, 120},   // 1  sidewalk   杏黄
+    {140, 142, 148},   // 2  building   中灰
+    {226, 168, 216},   // 3  wall       粉紫
+    {255, 216, 96},    // 4  fence      明黄
+    {168, 172, 190},   // 5  pole       浅灰
+    {255, 84, 84},     // 6  traffic light  亮红
+    {250, 200, 0},     // 7  traffic sign   柠黄
+    {104, 200, 112},   // 8  vegetation 清新绿
+    {192, 232, 128},   // 9  terrain    嫩芽黄绿
+    {96, 182, 255},    // 10 sky        天蓝
+    {255, 128, 56},    // 11 person     活力橙
+    {255, 172, 190},   // 12 rider      樱粉
+    {78, 142, 255},    // 13 car        亮蓝
+    {58, 192, 202},    // 14 truck      青
+    {255, 158, 64},    // 15 bus        橙黄
+    {150, 122, 232},   // 16 train      紫罗兰
+    {255, 96, 160},    // 17 motorcycle 品红粉
+    {118, 222, 180}};  // 18 bicycle    薄荷绿
   return palette;
 }
 
@@ -302,85 +368,15 @@ YoloSemanticResult YoloSemanticSegmenter::segment(const cv::Mat & bgr)
   }
   std::sort(counts.begin(), counts.end(),
     [](const auto & a, const auto & b) {return a.second > b.second;});
+  const float total = static_cast<float>(valid.total());
   for (const auto & [c, cnt] : counts) {
-    (void)cnt;
     result.present.push_back(c);
+    result.present_share.push_back(
+      total > 0.f ? 100.f * cnt / total : 0.f);
   }
 
   result.class_map = std::move(valid);
   return result;
-}
-
-std::string to_semantic_annotations_json(
-  const YoloSemanticResult & result, const std::string & algo, float pip_scale)
-{
-  if (result.class_map.empty()) {
-    return "{\"algo\":\"" + algo + "\",\"items\":[]}";
-  }
-  const cv::Mat & cls = result.class_map;
-  const auto & palette = cityscapes_palette_rgb();
-
-  // 类别图 -> 配色 BGRA 图: 类别像素不透明, 无效像素半透明深灰打底
-  // (保持画中画窗口完整感, 同时暗示"无类别归属")。
-  // PNG 编码: 平坦色块体积小、无 JPEG 伪影闪烁, 且保留透明通道
-  cv::Mat bgra(cls.size(), CV_8UC4);
-  for (int y = 0; y < cls.rows; ++y) {
-    const uint8_t * src = cls.ptr<uint8_t>(y);
-    cv::Vec4b * dst = bgra.ptr<cv::Vec4b>(y);
-    for (int x = 0; x < cls.cols; ++x) {
-      const uint8_t c = src[x];
-      if (c != kSemanticVoid && c < palette.size()) {
-        // 调色板存 RGB, Mat 用 BGRA
-        dst[x] = cv::Vec4b(palette[c][2], palette[c][1], palette[c][0], 255);
-      } else {
-        dst[x] = cv::Vec4b(40, 40, 40, 200);   // 深灰半透明底
-      }
-    }
-  }
-
-  // 画中画 (同深度估计): 右下角小窗 (留 8px 边距), 编码即窗尺寸,
-  // 地面站按原尺寸贴不放大, 相机画面不被遮挡
-  pip_scale = std::max(0.1f, std::min(1.f, pip_scale));
-  const int draw_w = std::max(1, static_cast<int>(std::lround(cls.cols * pip_scale)));
-  const int draw_h = std::max(1, static_cast<int>(std::lround(cls.rows * pip_scale)));
-  const int pos_x = cls.cols - draw_w - 8;
-  const int pos_y = cls.rows - draw_h - 8;
-  cv::Mat pip;
-  cv::resize(bgra, pip, cv::Size(draw_w, draw_h), 0, 0, cv::INTER_AREA);
-
-  std::vector<uchar> png;
-  if (!cv::imencode(".png", pip, png)) {
-    return "{\"algo\":\"" + algo + "\",\"items\":[]}";
-  }
-  const std::string b64 = base64_encode(png.data(), png.size());
-
-  std::ostringstream os;
-  os << "{\"algo\":\"" << algo << "\",\"items\":[";
-  os << "{\"type\":\"image\",\"pos\":[" << num(pos_x, 0) << "," << num(pos_y, 0)
-     << "],\"w\":" << num(draw_w, 0)
-     << ",\"alpha\":1"
-     << ",\"data\":\"" << b64 << "\"}";
-  // text 图元: 本帧出现的类别图例 (按像素占比降序), 左下角偏上一行 ——
-  // 左上角是地面站 FPS HUD, 左下角同一行留给深度估计的范围文字
-  if (!result.present.empty()) {
-    const auto & names = cityscapes_names();
-    os << ",{\"type\":\"text\",\"pos\":[12," << num(cls.rows - 42, 0)
-       << "],\"text\":\"";
-    for (size_t i = 0; i < result.present.size() && i < 8; ++i) {
-      const int c = result.present[i];
-      if (i > 0) {
-        os << " / ";
-      }
-      os << (c < static_cast<int>(names.size()) ? names[c] :
-        "class_" + std::to_string(c));
-    }
-    if (result.present.size() > 8) {
-      os << " / +" << result.present.size() - 8;
-    }
-    os << "\",\"color\":[255,255,255]}";
-  }
-  os << "]}";
-  return os.str();
 }
 
 }  // namespace flylab_vision
