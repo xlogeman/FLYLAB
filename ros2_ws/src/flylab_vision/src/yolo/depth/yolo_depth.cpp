@@ -103,11 +103,31 @@ std::string base64_encode(const unsigned char * data, size_t len)
   return out;
 }
 
-std::string num(double v, int prec = 2)
+/// 深度图 min-max 归一化 -> turbo 伪彩 (近处暖色/远处冷色, 相对深度可视化
+/// 惯例), 等比缩放到 target_w 宽 (0 = 保持原尺寸)。供右栏面板缩略图编码
+cv::Mat colorize_depth(const DepthResult & result, int target_w = 0)
 {
-  std::ostringstream os;
-  os << std::fixed << std::setprecision(prec) << v;
-  return os.str();
+  cv::Mat norm, colored;
+  cv::normalize(result.depth, norm, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+  cv::applyColorMap(norm, colored, cv::COLORMAP_TURBO);
+  if (target_w > 0 && target_w < colored.cols) {
+    const int h = std::max(1, static_cast<int>(std::lround(
+      colored.rows * target_w / static_cast<double>(colored.cols))));
+    cv::resize(colored, colored, cv::Size(target_w, h), 0, 0, cv::INTER_AREA);
+  }
+  return colored;
+}
+
+/// 画面中心 5x5 邻域平均深度: 单像素噪声大, 取小块更稳
+double center_depth(const cv::Mat & depth)
+{
+  const int cx = depth.cols / 2, cy = depth.rows / 2;
+  const int x0 = std::max(0, cx - 2), y0 = std::max(0, cy - 2);
+  const int w = std::min(5, depth.cols - x0), h = std::min(5, depth.rows - y0);
+  if (w <= 0 || h <= 0) {
+    return 0.0;
+  }
+  return cv::mean(depth(cv::Rect(x0, y0, w, h)))[0];
 }
 
 }  // namespace
@@ -250,48 +270,29 @@ DepthResult YoloDepthEstimator::estimate(const cv::Mat & bgr)
   return out;
 }
 
-std::string to_depth_annotations_json(
-  const DepthResult & result, const std::string & algo,
-  float pip_scale, int jpeg_quality)
+std::string to_depth_info_json(
+  const DepthResult & result, int frame_w, int frame_h,
+  int img_width, int jpeg_quality)
 {
-  std::vector<uchar> jpeg;
-  std::string b64;
-  int draw_w = 0, draw_h = 0, pos_x = 0, pos_y = 0;
-  if (!result.depth.empty() && result.dmax > result.dmin) {
-    // min-max 归一化 -> turbo 伪彩 (近处暖色/远处冷色, 相对深度可视化惯例)
-    cv::Mat norm, colored;
-    cv::normalize(result.depth, norm, 0, 255, cv::NORM_MINMAX, CV_8UC1);
-    cv::applyColorMap(norm, colored, cv::COLORMAP_TURBO);
-    const int fw = colored.cols, fh = colored.rows;
-    // 画中画: 右下角小窗 (留 8px 边距), 编码即窗尺寸,
-    // 地面站按原尺寸贴不放大, 相机画面不被遮挡
-    pip_scale = std::max(0.1f, std::min(1.f, pip_scale));
-    draw_w = std::max(1, static_cast<int>(std::lround(fw * pip_scale)));
-    draw_h = std::max(1, static_cast<int>(std::lround(fh * pip_scale)));
-    pos_x = fw - draw_w - 8;
-    pos_y = fh - draw_h - 8;
-    cv::resize(colored, colored, cv::Size(draw_w, draw_h), 0, 0,
-      cv::INTER_AREA);
-    cv::imencode(".jpg", colored, jpeg,
-      {cv::IMWRITE_JPEG_QUALITY, std::max(1, std::min(100, jpeg_quality))});
-    b64 = base64_encode(jpeg.data(), jpeg.size());
-  }
-
   std::ostringstream os;
-  os << "{\"algo\":\"" << algo << "\",\"items\":[";
-  if (!b64.empty()) {
-    os << "{\"type\":\"image\",\"pos\":[" << pos_x << "," << pos_y << "],"
-       << "\"w\":" << draw_w << ","
-       << "\"alpha\":1,"
-       << "\"data\":\"" << b64 << "\"},";
-  }
-  // 本帧深度范围: 画面左下角 (HUD 左上角 / 分类右上角, 左下角空闲)
+  os << "{\"src\":\"depth\"";
   if (!result.depth.empty()) {
-    os << "{\"type\":\"text\",\"pos\":[12," << result.depth.rows - 12
-       << "],\"text\":\"depth " << num(result.dmin) << " ~ "
-       << num(result.dmax) << "\"}";
+    os << std::fixed << std::setprecision(2)
+       << ",\"dmin\":" << result.dmin
+       << ",\"dmax\":" << result.dmax
+       << ",\"dmean\":" << cv::mean(result.depth)[0]
+       << ",\"dctr\":" << center_depth(result.depth)
+       << ",\"w\":" << frame_w << ",\"h\":" << frame_h;
+    // 伪彩缩略图: 缩到面板显示宽度再编码, 体积随宽度而非原帧尺寸
+    if (img_width > 0 && result.dmax > result.dmin) {
+      const cv::Mat colored = colorize_depth(result, img_width);
+      std::vector<uchar> jpeg;
+      cv::imencode(".jpg", colored, jpeg,
+        {cv::IMWRITE_JPEG_QUALITY, std::max(1, std::min(100, jpeg_quality))});
+      os << ",\"img\":\"" << base64_encode(jpeg.data(), jpeg.size()) << "\"";
+    }
   }
-  os << "]}";
+  os << "}";
   return os.str();
 }
 

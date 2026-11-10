@@ -20,16 +20,25 @@
 内置分组:
   detect  —— aruco_node 最大码摘要
   landing —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
+  depth   —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
+
+分组 spec 可带 'image': True —— 分组顶部多一个固定高度 (IMG_ROW_HEIGHT)
+的图片行, 数据里可选字段 "img" (base64 JPEG, 参照 overlay.py image 图元的
+编码方式) 等比缩放完整放入并居中留边, 任意分辨率/长宽比都自适应,
+无 "img" 或超时即清空。
 """
+import base64
 import time
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
-    QGroupBox, QLabel, QSlider, QSpinBox, QWidget
+    QGroupBox, QLabel, QSlider, QSpinBox, QSizePolicy, QWidget
 
 from . import config
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
+IMG_ROW_HEIGHT = 200  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
 
 # 降落状态机 -> 界面文案
 _LANDING_STATE_TEXT = {
@@ -86,7 +95,6 @@ def _landing_fields(data):
         '趋势角': None,
         '航向': None,
         '速度': None,
-        '计数': None,
     }
     tid = data.get('tracked_id', -1)
     out['码号'] = f'id={tid}' if tid >= 0 else None
@@ -118,9 +126,20 @@ def _landing_fields(data):
         vel = data.get('vel')
         out['速度'] = (
             f'({vel[0]:+.2f}, {vel[1]:+.2f}, {vel[2]:+.2f})' if vel else None)
-        need = data.get('trigger_need', 0)
-        out['计数'] = (
-            f"{data.get('trigger', 0)}/{need}" if need else None)
+    return out
+
+
+def _depth_fields(data):
+    """yolo_depth_node 深度摘要 -> {字段名: 文本|None}。"""
+    out = {'范围': None, '中心': None, '平均': None, '画幅': None}
+    if 'dmin' in data:
+        out['范围'] = \
+            f"{data.get('dmin', 0.0):.2f} ~ {data.get('dmax', 0.0):.2f} m"
+        out['中心'] = f"{data.get('dctr', 0.0):.2f} m"
+        out['平均'] = f"{data.get('dmean', 0.0):.2f} m"
+    w, h = data.get('w'), data.get('h')
+    if w and h:
+        out['画幅'] = f'{w}x{h}'
     return out
 
 
@@ -156,10 +175,55 @@ SECTIONS = {
             ('趋势角', lambda d: _landing_fields(d)['趋势角']),
             ('航向', lambda d: _landing_fields(d)['航向']),
             ('速度', lambda d: _landing_fields(d)['速度']),
-            ('计数', lambda d: _landing_fields(d)['计数']),
+        ],
+    },
+    'depth': {
+        'title': '深度估计',
+        'image': True,   # 分组顶部伪彩深度图行 (数据 "img" base64 JPEG)
+        'fields': [
+            ('范围', lambda d: _depth_fields(d)['范围']),
+            ('中心', lambda d: _depth_fields(d)['中心']),
+            ('平均', lambda d: _depth_fields(d)['平均']),
+            ('画幅', lambda d: _depth_fields(d)['画幅']),
         ],
     },
 }
+
+
+class _ImageRow(QLabel):
+    """分组图片行: 固定高度显示区, 图片等比缩放完整放入并居中 (letterbox
+    留边), 任意分辨率/长宽比的效果图都自适应, 不会把分组撑高挤出可视区。
+    水平 Ignored: 宽度完全交给布局, 图片也不反向撑宽分组列;
+    拉伸窗口自动重缩放。解码开销可忽略 (节点端 10Hz 限频 + JPEG)。"""
+
+    def __init__(self, height, parent=None):
+        super().__init__(parent)
+        self._full = None   # 原始 QPixmap (重缩放基准)
+        self.setFixedHeight(height)
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+    def set_image(self, pixmap):
+        self._full = pixmap
+        self._rescale()
+
+    def clear_image(self):
+        if self._full is not None:
+            self._full = None
+            self.clear()
+
+    def _rescale(self):
+        if self._full is None:
+            return
+        # FastTransformation: 25Hz 高频刷新下比 Smooth 省一半 GUI 线程开销,
+        # 320px 缩略图缩到 ~200px 显示区, 两种插值肉眼无差
+        self.setPixmap(self._full.scaled(
+            max(1, self.width()), max(1, self.height()),
+            Qt.KeepAspectRatio, Qt.FastTransformation))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rescale()
 
 
 class _Section(QGroupBox):
@@ -170,10 +234,16 @@ class _Section(QGroupBox):
         self._fields = spec['fields']
         self._title_fn = spec.get('title_fn')
         self._texts = {}   # 行 -> 上次文本 (相同不重绘)
+        self._last_img = None   # 上次渲染的 "img" base64 (相同帧不重复解码)
         form = QFormLayout(self)
         form.setContentsMargins(6, 2, 6, 4)
         form.setSpacing(1)
         form.setLabelAlignment(Qt.AlignRight)
+        # 图片行 (spec['image']): 置于字段表上方, 跨两列整行;
+        # 固定高度等比留边显示, 分组高度不随图片分辨率变化
+        self._img = _ImageRow(IMG_ROW_HEIGHT) if spec.get('image') else None
+        if self._img is not None:
+            form.addRow(self._img)
         self._extracts = []
         self._vals = []
         for lbl, extract in self._fields:
@@ -195,6 +265,15 @@ class _Section(QGroupBox):
             title = self._title_fn(data)
             if title != self.title():
                 self.setTitle(title)
+        if self._img is not None:
+            b64 = data.get('img') if data else None
+            if b64 != self._last_img:   # 33ms 轮询 vs 数据帧率不同步, 去重防重复解码
+                self._last_img = b64
+                pix = QPixmap()
+                if b64 and pix.loadFromData(base64.b64decode(b64)):
+                    self._img.set_image(pix)
+                else:
+                    self._img.clear_image()
         if data is None:
             for val in self._vals:
                 self._set(val, '—')

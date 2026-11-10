@@ -76,6 +76,9 @@ ros2 launch flylab_flight fly_ego.launch.py    # EGO 避障 (默认 MAVROS 跟�
 
 # 4. 地面站 (工具栏一键起 PX4/链路/飞控，算法启停 / ArUco降落 / 日志框)
 ros2 run flylab_gcs ground_station
+
+# 5. 可略过 Airsim 仿真，绑定摄像头进行视觉算法相关实验
+usbipd attach --busid 1-8 --wsl U-22.04-fuck
 ```
 
 ---
@@ -89,7 +92,7 @@ ros2 run flylab_gcs ground_station
 | 模块 | 说明 |
 |---|---|
 | `config.py` | 全局配置：话题、端口、机型/链路/飞控命令/算法注册表，改这里 |
-| `main_window.py` | 主窗口：顶部工具栏（四个下拉按钮）+ 右栏算法面板 + 33ms 轮询与按钮门控 |
+| `main_window.py` | 主窗口：顶部工具栏 + 右栏面板组装 + 33ms 轮询与按钮门控 |
 | `ros_node.py` | ROS 节点 + `TeeLogger`（终端日志照常，同时分流到界面日志框） |
 | `camera_grabber.py` | 视频源抓取线程（AirSim RPC / 本机摄像头 / 视频文件）+ 软件云台（世界系稳定） |
 | `vehicle_control.py` | 飞行控制线程：独立 AirSim RPC 会话（解锁/起飞/降落/悬停/返航/上锁） |
@@ -99,16 +102,14 @@ ros2 run flylab_gcs ground_station
 | `video_label.py` | 视频控件：等比显示 / 深度伪彩 / 拖拽框选 / 标注叠加 |
 | `overlay.py` | 标注 schema 与分组解析 |
 
-界面布局：顶部工具栏（视频源 / PX4 SITL / 飞行控制 / 通信链路 / 视觉算法 / 飞行链路 / 接管控制，运行中亮绿灯）+ 左画面（下方日志框）+ 右栏（地图 / 云台罗盘 / 手动遥控双摇杆）。窗口大小 `config.WINDOW_SIZE_RATIO`。
+界面布局：顶部工具栏（视频源 / PX4 SITL / 飞行控制 / 通信链路 / 视觉算法 / 飞行链路 / 接管控制，运行中亮绿灯）+ 左画面（下方日志框）+ 右栏（地图 / 云台罗盘 / 手动遥控双摇杆 / 算法信息面板）。窗口大小 `config.WINDOW_SIZE_RATIO`。
 
-**顶部工具栏**（四个按钮全部下拉交互：点选项生效、再点取消）：
+**顶部工具栏**（全部下拉交互：点选项生效、再点取消）：
 - **视频源**：UE 相机 / 本机摄像头 / 视频文件；菜单展开时重扫本机摄像头（热插拔可见）
-- **PX4 SITL**：机型菜单（`config.PX4_MODELS`，✓=运行中）——点机型即启动，再点即停，选其他机型停旧换新；输出接管进日志框
-- **通信链路**（互斥，一次只开一条）：uXRCE-DDS Agent / MAVROS（**必须用 14542 专属实例**，见 §7）；降落进行中锁定不可切换，所选链路作为反控/遥控节点 `link` 参数
-- **飞行控制**：解锁/起飞/降落/悬停/返航/上锁（`config.VEHICLE_CMDS`），经 AirSim API → MAVLink → PX4；仅 RPC 已连通可点；异步指令，结果看 QGC / mavros state
-- **接管控制**：视觉反控（ArUco 降落）/ 手动遥控（摇杆）二选一（都走 offboard，互斥，✓=运行中，再点取消）；均需先开通信链路；反控中可选手动遥控抢回控制权（防炸机出口）
-
-**日志框**（画面下方）：rclpy 日志与 PX4 进程输出全部上屏（时间戳 + 级别着色）；缓冲批量渲染限速，PX4 控制台刷屏不拖垮界面。
+- **PX4 SITL**：机型菜单（✓=运行中），点机型即启动、再点即停、选其他停旧换新；输出接管进日志框
+- **通信链路**（互斥）：uXRCE-DDS Agent / MAVROS（**必须用 14542 专属实例**，见 §7）；降落中锁定不可切换
+- **飞行控制**：解锁/起飞/降落/悬停/返航/上锁，经 AirSim API → PX4；需 RPC 已连通；异步指令，结果看 QGC / mavros state
+- **接管控制**：视觉反控（ArUco 降落）/ 手动遥控二选一（都走 offboard，互斥）；需先开通信链路；反控中可开遥控抢回（防炸机出口）
 
 **显示画面转发**：当前显示帧（深度伪彩除外）以 30Hz 原分辨率发到 `/flylab/display/image_raw`，算法节点订阅即处理「用户正在看的画面」，输入源切换对算法透明；算法要吃原始话题用 `-p image_topic:=...` 覆盖。
 
@@ -122,6 +123,8 @@ ros2 run flylab_gcs ground_station
   {"type": "text",     "pos": [x, y],       "text": "..."},
   {"type": "image",    "pos": [x,y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}]}
 ```
+
+**算法信息面板**（右栏底部）：算法发 `{"src": "<key>", ...}` JSON 到 `/flylab/aruco_info`（`info_topic` 可覆盖），`algo_output_panel.SECTIONS` 注册字段表 + `config.ALGORITHMS` 加 `'panel'` 键即随算法显隐；稠密输出（深度/分割）可带 `"img"`（base64 JPEG）进分组顶部固定高度图片区（等比留边，任意分辨率自适应）。
 
 **其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——Qt 与 PyQt5 冲突）。
 
@@ -149,7 +152,7 @@ ros2 run flylab_vision aruco_node --ros-args \
     -p calib:=/path/to/calib.yaml                 # 相机标定 (可选; 无则按 FOV 估算)
 ```
 
-**新增算法**（展示型）：建 `include/<算法>/` + `src/<算法>/`（算法库不碰 ROS）→ 节点继承 `DisplayVisionNode` 实现 `process()` / `clear_json()`，通信零编写 → CMakeLists 两行模板（`flylab_algo` + `flylab_node`，参考 `yolo_obb_node.cpp`）→ `config.ALGORITHMS` 注册即出现在地面站下拉框。
+**新增算法**（展示型）：建 `include/<算法>/` + `src/<算法>/`（算法库不碰 ROS）→ 节点继承 `DisplayVisionNode` 实现 `process()` / `clear_json()`，通信零编写 → CMakeLists 两行模板（参考 `yolo_obb_node.cpp`）→ `config.ALGORITHMS` 注册（要上右栏面板加 `'panel'` 键 + 发 `{"src": ...}` JSON，见 §4.1）即出现在地面站下拉框。
 
 **独立调试 CLI**：根目录 `python3 aruco_detector.py --image/--video/--camera/--gen`。
 
@@ -207,7 +210,7 @@ ros2 run flylab_vision aruco_node --ros-args \
 | UDP 8888 | uXRCE-DDS（`tracker:=uxrce`） | MicroXRCEAgent |
 | TCP 41451 | AirSim RPC API | airsim_sensor_* / flylab_gcs |
 
-**坑：14580 会被 AirSim 抢占。** Cosys-AirSim 以 1Hz 向 `ControlIp:ControlPortRemote`（WSL 的 14580）发心跳，而 PX4 的 MAVLink 实例只锁定一次对端，AirSim 先到先得导致 MAVROS 永远连不上。MAVROS 必须走 14582↔14542 专属实例，勿动 14580；WSL 重启后跑 `scripts/sync-airsim-ip.sh` 更新 ControlIp。
+**坑：14580 会被 AirSim 抢占**——AirSim 以 1Hz 心跳先到先得抢占 PX4 MAVLink 实例的对端锁定，MAVROS 永远连不上。MAVROS 必须走 14582↔14542 专属实例，勿动 14580；WSL 重启后跑 `scripts/sync-airsim-ip.sh` 更新 ControlIp。
 
 ## 8. 注意事项
 

@@ -42,9 +42,13 @@ def main(args=None):
     win.show()
 
     # Ctrl+C / kill 修复: 主线程阻塞在 Qt 事件循环里, 收到 SIGINT/SIGTERM
-    # 统一优雅退出事件循环 → finally 回收全部托管进程 (不留孤儿链路)
+    # 统一优雅退出事件循环 → finally 回收全部托管进程 (不留孤儿链路)。
+    # SIGHUP 同样必须接管: 关闭运行 GCS 的终端窗口时 shell 发 SIGHUP,
+    # 默认行为是不执行 finally 直接终止 → PX4/MAVROS/算法节点全部变孤儿
     signal.signal(signal.SIGINT, lambda *_: QApplication.instance().quit())
     signal.signal(signal.SIGTERM, lambda *_: QApplication.instance().quit())
+    signal.signal(signal.SIGQUIT, lambda *_: QApplication.instance().quit())
+    signal.signal(signal.SIGHUP, lambda *_: QApplication.instance().quit())
 
     try:
         ret = app.exec_()

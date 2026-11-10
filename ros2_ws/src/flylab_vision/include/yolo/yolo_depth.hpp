@@ -70,16 +70,16 @@ private:
   DepthConfig config_;
 };
 
-/// 深度图 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
-/// 输出为按算法分组的消息 {"algo": algo, "items": [...]}:
-///   image 图元: turbo 伪彩深度图 (min-max 归一化) 经 JPEG+base64 编码,
-///     以不透明小窗贴在画面右下角 (pip_scale 控制窗宽占原帧比例),
-///     相机画面完全不被遮挡;
-///   text 图元: 本帧深度范围 (min~max), 画面左下角。
-/// jpeg_quality 为 JPEG 压缩质量 (1~100)。
-std::string to_depth_annotations_json(
-  const DepthResult & result, const std::string & algo = "yolo_depth",
-  float pip_scale = 0.33f, int jpeg_quality = 70);
+/// 深度结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/aruco_info,
+/// 与 ArUco 检测同一话题, 面板按 src 分组; 建议调用方 10Hz 限频):
+///   {"src":"depth","dmin":..,"dmax":..,"dmean":..,"dctr":..,
+///    "w":..,"h":..,"img":"<base64 JPEG>"|省略}
+/// dmean=全帧平均深度, dctr=画面中心 5x5 邻域平均深度 (单像素噪声大);
+/// img 为 turbo 伪彩深度图缩放到 img_width 宽后的 JPEG base64
+/// (img_width<=0 或深度退化时省略, 面板只显示文字字段)。
+std::string to_depth_info_json(
+  const DepthResult & result, int frame_w, int frame_h,
+  int img_width, int jpeg_quality);
 
 }  // namespace flylab_vision
 

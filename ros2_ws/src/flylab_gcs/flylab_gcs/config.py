@@ -243,7 +243,8 @@ ALGORITHMS = [
     {'name': '深度估计',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_depth_node',
              '--ros-args', '-p', 'device:=cuda'],
-     'start': 'depth_start', 'stop': 'depth_stop'},
+     'start': 'depth_start', 'stop': 'depth_stop',
+     'panel': 'depth'},   # 右栏算法信息面板: 伪彩深度图 + 摘要 (SECTIONS['depth'])
     {'name': '旋转框检测',
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_obb_node',
              '--ros-args', '-p', 'device:=cuda'],

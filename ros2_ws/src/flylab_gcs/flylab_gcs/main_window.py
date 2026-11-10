@@ -300,19 +300,24 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                 f'画面转发: 近 2 秒 0 帧 (源 {self._last_src or "?"} 无图像?)')
 
     def shutdown(self):
-        """退出: 回收全部托管进程, 停掉后台线程。"""
-        if self.running_algo is not None:
-            self._stop_algo()
-        if self.running_flight is not None:
-            self._stop_flight()          # 链路随地面站退出一并回收
-        if self.landing_act.isChecked():
-            self.node.publish_cmd(config.LANDING_STOP_CMD)
-        self.land_proc.stop()
-        if self.teleop_act.isChecked():
-            self.node.publish_cmd(config.TELEOP_STOP_CMD)   # 交还控制权再回收
-        self.teleop_proc.stop()
-        self._stop_px4()             # PX4 SITL 随地面站退出一并回收
-        for key in list(self.link_procs):
-            self._stop_link(key)
-        self.veh_ctrl.stop()         # 飞控 RPC 会话线程
-        self.camera_tab.shutdown()
+        """退出: 回收全部托管进程, 停掉后台线程。
+        各步独立 try/except: 任何一步失败 (如进程已死/句柄异常) 不阻断
+        后续回收, 否则一个异常就把剩余托管进程全部变成孤儿。"""
+        for step in (
+            lambda: self._stop_algo() if self.running_algo is not None else None,
+            lambda: self._stop_flight() if self.running_flight is not None else None,
+            lambda: self.node.publish_cmd(config.LANDING_STOP_CMD)
+                if self.landing_act.isChecked() else None,
+            self.land_proc.stop,
+            lambda: self.node.publish_cmd(config.TELEOP_STOP_CMD)
+                if self.teleop_act.isChecked() else None,
+            self.teleop_proc.stop,
+            self._stop_px4,
+            lambda: [self._stop_link(k) for k in list(self.link_procs)],
+            self.veh_ctrl.stop,
+            self.camera_tab.shutdown,
+        ):
+            try:
+                step()
+            except Exception as e:   # 退出路径: 只记不抛, 保证回收走完
+                self.log.error(f'退出回收步骤失败 (忽略继续): {e}')
