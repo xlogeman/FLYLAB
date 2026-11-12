@@ -24,6 +24,7 @@
   landing  —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
   depth    —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
   semantic —— yolo_semantic_node 语义分割 (配色类别图 + 类别图例)
+  track    —— yolo_track_node 目标追踪 (状态字段 + 框选/追踪按钮行)
 
 分组 spec 可带 'image': True —— 分组顶部多一个固定高度 (IMG_ROW_HEIGHT)
 的图片行, 数据里可选字段 "img" (base64 JPEG, 参照 overlay.py image 图元的
@@ -36,12 +37,20 @@ import time
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
-    QGroupBox, QLabel, QSlider, QSpinBox, QSizePolicy, QWidget
+    QGroupBox, QLabel, QPushButton, QSlider, QSpinBox, QSizePolicy, QWidget
 
 from . import config
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
 IMG_ROW_HEIGHT = 195  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
+
+# 目标追踪状态机 -> 界面文案
+_TRACK_STATE_TEXT = {
+    'IDLE': '未选目标',
+    'SELECTED': '已框选',
+    'TRACK': '追踪中',
+    'LOST': '目标丢失',
+}
 
 # 降落状态机 -> 界面文案
 _LANDING_STATE_TEXT = {
@@ -173,6 +182,21 @@ def _semantic_fields(data):
     return out
 
 
+def _track_fields(data):
+    """yolo_track_node 追踪状态 -> {字段名: 文本|None}。"""
+    out = {'目标': None, '相似度': None, '尺寸': None, '检出': None}
+    if data.get('cls'):
+        out['目标'] = f"{data['cls']} {data.get('conf', 0.0):.2f}"
+    sim = data.get('sim')
+    if sim is not None and data.get('state') in ('TRACK', 'LOST'):
+        out['相似度'] = f'{sim:.2f}'
+    w, h = data.get('w'), data.get('h')
+    if w and h:
+        out['尺寸'] = f'{w}x{h}px'
+    out['检出'] = f"{data.get('count', 0)} 个"
+    return out
+
+
 # 分组注册表: key (= 消息 src) -> {title, title_fn, fields}
 # fields: [(label, extract)] —— extract(data) -> 文本 | None (显示 '—')
 # 行序在并列显示的分组间保持语义对应 (同行 = 同类信息), 新分组接入时照此排列
@@ -225,6 +249,19 @@ SECTIONS = {
             # 图例长度逐帧变化: 固定 3 行高防右栏布局跳动 (见 _Section opts)
             ('图例', lambda d: _semantic_fields(d)['图例'], {'wrap': 3}),
             ('画幅', lambda d: _semantic_fields(d)['画幅']),
+        ],
+    },
+    'track': {
+        'title': '目标追踪',
+        # 状态不占行位, 动态显示在分组标题里 (未选目标/已框选/追踪中/目标丢失)
+        'title_fn': lambda d: (
+            '目标追踪 · ' + _TRACK_STATE_TEXT.get(
+                d.get('state', 'IDLE'), '未选目标')) if d else '目标追踪',
+        'fields': [
+            ('目标', lambda d: _track_fields(d)['目标']),
+            ('相似度', lambda d: _track_fields(d)['相似度']),
+            ('尺寸', lambda d: _track_fields(d)['尺寸']),
+            ('检出', lambda d: _track_fields(d)['检出']),
         ],
     },
 }
@@ -358,7 +395,8 @@ class AlgoOutputPanel(QGroupBox):
     refresh() 按各分组最新数据刷新 (33ms 轮询驱动, 内部去重)。"""
 
     def __init__(self, get_info, set_marker_length=None,
-                 set_landing_yaw=None, set_aruco_dict=None, parent=None):
+                 set_landing_yaw=None, set_aruco_dict=None,
+                 set_track_controls=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -383,6 +421,13 @@ class AlgoOutputPanel(QGroupBox):
         self._dict_box = None
         if set_aruco_dict is not None:
             self._build_dict_combo(set_aruco_dict)
+        # 目标追踪控制 (跟随 track 分组显隐): 框选目标 / 开始追踪两个按钮,
+        # 门控随追踪状态变化 (见 set_track_state)
+        self._track_roi = False     # 已框选目标
+        self._track_on = False      # 追踪进行中
+        self._track_box = None
+        if set_track_controls is not None:
+            self._build_track_buttons(*set_track_controls)
         # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
         # 横向容器, 整行横跨全部分组列 (见 _relayout); 可见性跟随激活
         # 分组 (见 _update_bottom_visibility), 无 ArUco 算法运行时整行隐藏
@@ -483,6 +528,64 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(combo, 1)
         self._dict_box = box
 
+    # ---------- 目标追踪控制 (两个按钮 + 状态门控) ----------
+
+    def _build_track_buttons(self, on_begin, on_select):
+        """目标追踪按钮行: 框选目标 (checkable, 点后画面拖框) / 开始追踪。
+        门控约定: 开始追踪需先框选好目标; 追踪中不能再框选。"""
+        self._track_begin_cb = on_begin
+        self._track_select_cb = on_select
+        box = QGroupBox('目标追踪')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        self._track_sel_btn = QPushButton('框选目标')
+        self._track_sel_btn.setCheckable(True)
+        self._track_sel_btn.setToolTip(
+            '点后在画面按下拖出矩形框选目标 (松手即确认, Esc 取消);\n'
+            '追踪中不可再框选')
+        self._track_sel_btn.toggled.connect(self._on_track_select)
+        self._track_begin_btn = QPushButton('开始追踪')
+        self._track_begin_btn.setEnabled(False)   # 需先框选好目标
+        self._track_begin_btn.setToolTip(
+            '锁定框选目标开始追踪 (检测框 + ReID 外观匹配, 目标丢失保持\n'
+            '最后已知位置); 再点取消追踪')
+        self._track_begin_btn.clicked.connect(self._on_track_begin)
+        lay.addWidget(self._track_sel_btn, 1)
+        lay.addWidget(self._track_begin_btn, 1)
+        self._track_box = box
+        self._update_track_buttons()
+
+    def _on_track_select(self, checked):
+        if self._track_select_cb is not None:
+            self._track_select_cb(bool(checked))
+
+    def _on_track_begin(self):
+        if self._track_begin_cb is not None:
+            self._track_begin_cb()
+
+    def set_track_state(self, roi_selected, tracking):
+        """主窗口同步追踪状态 -> 按钮文字/门控 (追踪中选框按钮禁用并弹回)。"""
+        self._track_roi = bool(roi_selected)
+        self._track_on = bool(tracking)
+        self._update_track_buttons()
+
+    def set_track_selecting(self, on):
+        """画面框选模式开关 (Esc 取消框选时主窗口弹回按钮)。"""
+        if self._track_box is not None and \
+                self._track_sel_btn.isChecked() != bool(on):
+            self._track_sel_btn.setChecked(bool(on))   # 触发 toggled -> 取消框选
+
+    def _update_track_buttons(self):
+        if self._track_box is None:
+            return
+        self._track_begin_btn.setText('取消追踪' if self._track_on else '开始追踪')
+        self._track_begin_btn.setEnabled(self._track_roi or self._track_on)
+        self._track_sel_btn.setEnabled(not self._track_on)
+        if self._track_on and self._track_sel_btn.isChecked():
+            self._track_sel_btn.blockSignals(True)
+            self._track_sel_btn.setChecked(False)
+            self._track_sel_btn.blockSignals(False)
+
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
         底部调节行的可见性同步跟随 (无 ArUco 分组时整行隐藏)。"""
@@ -492,6 +595,13 @@ class AlgoOutputPanel(QGroupBox):
         for key in keys:
             if key not in self._sections and key in SECTIONS:
                 self._add(key)
+        if 'track' not in keys:
+            # 追踪算法停止, 按钮全部复位 (含框选进行中: 弹回按钮并退出
+            # 画面框选模式)
+            if self._track_roi or self._track_on:
+                self.set_track_state(False, False)
+            if self._track_box is not None and self._track_sel_btn.isChecked():
+                self.set_track_selecting(False)
         self._update_bottom_visibility(keys)
 
     def _update_bottom_visibility(self, keys):
@@ -506,6 +616,8 @@ class AlgoOutputPanel(QGroupBox):
             self._yaw_box.setVisible(landing_on)
         if self._dict_box is not None:
             self._dict_box.setVisible(aruco_on)
+        if self._track_box is not None:
+            self._track_box.setVisible('track' in keys)
         if self._bottom_row is not None:
             self._bottom_row.setVisible(aruco_on)
 
@@ -538,3 +650,6 @@ class AlgoOutputPanel(QGroupBox):
         if self._bottom_row is not None:
             self._lay.addWidget(
                 self._bottom_row, 1, 0, 1, max(1, self._lay.columnCount()))
+        if self._track_box is not None:
+            self._lay.addWidget(
+                self._track_box, 2, 0, 1, max(1, self._lay.columnCount()))

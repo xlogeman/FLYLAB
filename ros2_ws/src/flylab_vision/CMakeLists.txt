@@ -68,6 +68,8 @@ flylab_algo(yolo_pose src/yolo/pose/yolo_pose.cpp ${ORT_LIB})
 # 链接 yolo_detector 复用 coco_names() (分割同为 COCO 80 类)
 flylab_algo(yolo_segment src/yolo/segment/yolo_segment.cpp yolo_detector ${ORT_LIB})
 flylab_algo(yolo_semantic src/yolo/semantic/yolo_semantic.cpp ${ORT_LIB})
+# 目标追踪: ReID 单目标跟踪 (链接 yolo_detector 复用 YoloDetection/色板)
+flylab_algo(yolo_tracker src/yolo/track/yolo_tracker.cpp yolo_detector ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
@@ -78,6 +80,7 @@ flylab_node(yolo_obb_node src/yolo/obb/yolo_obb_node.cpp yolo_obb)
 flylab_node(yolo_pose_node src/yolo/pose/yolo_pose_node.cpp yolo_pose)
 flylab_node(yolo_segment_node src/yolo/segment/yolo_segment_node.cpp yolo_segment)
 flylab_node(yolo_semantic_node src/yolo/semantic/yolo_semantic_node.cpp yolo_semantic)
+flylab_node(yolo_track_node src/yolo/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
@@ -105,8 +108,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   FILES_MATCHING PATTERN "libonnxruntime*")
 
 install(TARGETS vision_common
-  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic
-  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node aruco_landing_node teleop_node
+  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker
+  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

@@ -173,6 +173,16 @@ LANDING_YAW_OFFSET_MAX = 360       # 度 (上限)
 LANDING_YAW_OFFSET_STEP = 5        # 度 (上下箭头单步)
 LANDING_YAW_OFFSET_DEFAULT = 0     # 度 (初始显示值, 与 aruco.yaml 的 yaw_offset_deg 一致)
 
+# ---------- 目标追踪 (右栏"算法信息"面板按钮交互) ----------
+# 流程: 菜单启动 yolo_track_node (逐帧检测) → 点面板"框选目标"在画面拖出
+# 矩形 (回车/双击确认) → ROI 经 latched 话题发给节点 → 点"开始追踪"锁定
+# (框选区检测裁块出 ReID 外观向量, 逐帧余弦相似度续跟), 再点"取消追踪"
+# 结束。ROI 进入追踪即消费 (画面黄框销毁), 取消后需重新框选。
+# 门控: 开始追踪需先框选; 追踪中不能再框选 (见 algo_output_panel)。
+TRACK_ROI_TOPIC = '/flylab/track_roi'
+TRACK_BEGIN_CMD = 'track_begin'
+TRACK_END_CMD = 'track_end'
+
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）
 PX4_SCRIPT = '/root/flylab/scripts/run-px4.sh'
@@ -262,7 +272,11 @@ ALGORITHMS = [
      'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
              '--ros-args', '-p', 'device:=cuda'],
      'start': 'pose_start', 'stop': 'pose_stop'},
-    {'name': '目标追踪', 'start': 'track_start', 'stop': 'track_stop'},
+    {'name': '目标追踪',
+     'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_track_node',
+             '--ros-args', '-p', 'device:=cuda'],
+     'start': 'track_start', 'stop': 'track_stop',
+     'panel': 'track'},   # 右栏面板: 框选/追踪按钮 + 状态 (SECTIONS['track'])
 ]
 
 # ---------- 飞行链路选择 (flylab_flight 一键 launch, 下拉框 + 运行/取消) ----------

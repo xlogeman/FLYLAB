@@ -16,11 +16,12 @@ from PyQt5.QtWidgets import QLabel
 class VideoLabel(QLabel):
     """视频画面 + 可选的拖拽框选交互 (休眠接口, 默认关闭)。
 
-    地面站当前没有算法消费目标框, 框选整体停用 —— 点击/拖动画面无任何反应。
-    将来接入目标选取类算法时, 重新启用只需两行:
+    地面站当前由目标追踪消费目标框 (主窗口接 bbox_selected 发 ROI)。
+    重新启用只需两行:
         video.set_select_enabled(True)          # 按下左键冻结画面, 拖出矩形
         video.bbox_selected.connect(handler)    # 回调收到原图坐标 x, y, w, h
-    确认: 回车或双击; 取消: Esc。"""
+    确认: 松手 (拖出 ≥6px 矩形) 或回车/双击; 取消: Esc 或松手时框太小
+    (只取消画框, 不退出框选模式)。"""
 
     bbox_selected = pyqtSignal(int, int, int, int)   # 原图坐标 x, y, w, h
     selection_cancelled = pyqtSignal()
@@ -148,6 +149,18 @@ class VideoLabel(QLabel):
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.LeftButton:
             self._pan_start = None
+            # 框选松手即确认: 拖出 ≥6px 矩形收框上屏 (否则松手后框继续
+            # 跟着鼠标走, 用户单点想"确认"反而重新起框, 框像粘住鼠标);
+            # 框太小视为误点, 只取消画框并解冻, 留在框选模式可重拖
+            if self._select_enabled and self._sel_start is not None:
+                if self._sel_cur is not None and \
+                        abs(self._sel_cur.x() - self._sel_start.x()) >= 6 and \
+                        abs(self._sel_cur.y() - self._sel_start.y()) >= 6:
+                    self._confirm_selection()
+                else:
+                    self._sel_start = self._sel_cur = None
+                    self._frozen = False
+                    self._redraw()
         super().mouseReleaseEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):

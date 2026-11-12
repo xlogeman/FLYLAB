@@ -114,6 +114,15 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._algo_started_at = 0.0    # 算法进程启动时刻 (发现窗口内不告警)
         self._last_src = ''
         self._poll_err_last = 0.0   # 上次轮询异常上屏时刻 (限频用)
+        # 目标追踪 UI 状态: 已框选 ROI (None=未框选) / 追踪进行中 /
+        # 画面框选模式进行中。按钮门控在 algo_panel (set_track_state),
+        # ROI 经 latched 话题下发
+        self._track_roi = None
+        self._track_tracking = False
+        self._track_selecting = False
+        self.camera_tab.video.bbox_selected.connect(self._on_track_bbox)
+        self.camera_tab.video.selection_cancelled.connect(
+            self._on_track_sel_cancelled)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
         # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)
@@ -152,7 +161,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.algo_panel = AlgoOutputPanel(
             self.node.get_aruco_info, self.node.publish_marker_length,
             self.node.publish_landing_yaw_offset,
-            set_aruco_dict=self.node.publish_aruco_dict)
+            set_aruco_dict=self.node.publish_aruco_dict,
+            set_track_controls=(self._on_track_begin, self._on_track_select))
         self.camera_tab.add_side_widget(self.algo_panel)
 
         # 显示画面转发挂到帧提交点: 抓取线程提交场景帧后直接把引用交给
@@ -237,6 +247,18 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         if self.landing_act.isChecked():
             active.append('landing')
         self.algo_panel.set_active(active)
+        # 目标追踪 UI 状态复位: track 分组随算法停止/切换移除后, 框选模式/
+        # 已框选 ROI/追踪全清 —— 画面不可再框选, track 分组标注立即清掉
+        # (不等节点异步响应), latched ROI 同步清除 (防重启节点拿到旧框选)
+        if 'track' not in active and (
+                self._track_roi is not None or self._track_tracking
+                or self._track_selecting):
+            self._track_roi = None
+            self._track_tracking = False
+            self._track_selecting = False
+            self.camera_tab.video.set_select_enabled(False)
+            self.node.clear_annotation_group('track')
+            self.node.publish_track_roi_reset()
         self.algo_panel.refresh()
         self._check_algo_alive()
         self._check_flight_alive()   # 链路进程异常退出则复位按钮
@@ -278,6 +300,40 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._fov_pub_last = fov
             self._fov_pub_t = now_mono
             self.node.publish_camera_fov(fov)
+
+    # ---------- 目标追踪 (面板按钮 + 画面框选联动, 话题见 config.TRACK_*) ----------
+
+    def _on_track_select(self, checked):
+        """面板"框选目标"按钮 -> 画面框选模式开关 (VideoLabel 拖拽框选,
+        松手确认, Esc 取消)。"""
+        self._track_selecting = bool(checked)
+        self.camera_tab.video.set_select_enabled(bool(checked))
+
+    def _on_track_sel_cancelled(self):
+        """画面框选被 Esc 取消: 面板"框选目标"按钮弹回 (退出框选模式)。"""
+        self.algo_panel.set_track_selecting(False)
+
+    def _on_track_bbox(self, x, y, w, h):
+        """画面框选确认: ROI 发给追踪节点 (latched), 弹回框选按钮并解锁
+        "开始追踪" (追踪中禁止框选, 此分支正常只发生在未追踪时)。"""
+        self._track_roi = (int(x), int(y), int(w), int(h))
+        self.node.publish_track_roi(x, y, w, h)
+        self.algo_panel.set_track_selecting(False)
+        self.algo_panel.set_track_state(True, self._track_tracking)
+        self.log.info(f'追踪目标已框选: ({x}, {y}) {w}x{h}')
+
+    def _on_track_begin(self):
+        """面板"开始追踪/取消追踪"按钮: 发对应指令 (节点帧上下文里锁定
+        外观), 按钮文字/门控由 set_track_state 驱动。ROI 进入追踪即消费
+        (画面黄框销毁) —— 取消追踪后需重新框选才能再开始。"""
+        self._track_tracking = not self._track_tracking
+        if self._track_tracking:
+            self._track_roi = None
+        self.node.publish_cmd(
+            config.TRACK_BEGIN_CMD if self._track_tracking
+            else config.TRACK_END_CMD)
+        self.algo_panel.set_track_state(
+            self._track_roi is not None, self._track_tracking)
 
     def _forward_frame(self, arr):
         """帧提交点回调 (抓取线程): 把场景帧引用交给转发器 (O(1)),

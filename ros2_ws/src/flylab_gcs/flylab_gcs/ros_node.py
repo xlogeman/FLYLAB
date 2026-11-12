@@ -220,6 +220,16 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 目标追踪 ROI 发布器 (latched 约定见 config.TRACK_ROI_TOPIC):
+        # 界面框选目标后把矩形发给 yolo_track_node, 后启动的节点一接入
+        # 即拿到当前框选区域
+        self.track_roi_pub = self.create_publisher(
+            String, config.TRACK_ROI_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -398,6 +408,11 @@ class GroundStationNode(Node):
         """立即清空所有算法标注 (取消算法时界面先清, 不等节点响应)。"""
         self.anno_groups.clear()
 
+    def clear_annotation_group(self, algo):
+        """清除单个算法分组的标注 (算法停止/切换时立即清, 不等节点
+        响应; 节点停止指令的异步 clear 到达前防止旧标注残屏)。"""
+        self.anno_groups.pop(algo, None)
+
     def get_algo_fps(self):
         """算法输出帧率 (标注消息到达频率); 超过 1s 无消息视为 0。"""
         if time.monotonic() - self._anno_last_rx > 1.0:
@@ -454,6 +469,20 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = str(name)
         self.aruco_dict_pub.publish(msg)
+
+    def publish_track_roi(self, x, y, w, h):
+        """发布追踪目标框选区域 (显示帧像素, 与转发帧同一坐标系),
+        供 yolo_track_node 锁定目标外观。"""
+        msg = String()
+        msg.data = json.dumps({'roi': [int(x), int(y), int(w), int(h)]})
+        self.track_roi_pub.publish(msg)
+
+    def publish_track_roi_reset(self):
+        """清除追踪目标框选: latched 话题上旧 ROI 会一直投递给后启动的
+        节点, 停止追踪算法时发 reset 让节点同步清掉缓存。"""
+        msg = String()
+        msg.data = json.dumps({'reset': True})
+        self.track_roi_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。
