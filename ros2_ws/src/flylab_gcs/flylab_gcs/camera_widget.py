@@ -16,6 +16,7 @@ add_side_widget() 往右栏插工具按钮 (ground_station 用)
 
 云台面板: AirSim 相机源可用, 摇杆连续转动视角 (偏转量=角速度) + 回中,
 经 simSetCameraPose 实现, 仅影响画面不影响飞机姿态。
+数字变焦是显示层中心裁切, 本机摄像头/视频文件源也可用 (滚轮/双击/滑杆)。
 """
 import os
 import threading
@@ -64,10 +65,12 @@ class CameraViewWidget(QWidget):
         self.cams_found.connect(self._rebuild_src_menu)
 
         self.video = VideoLabel()
-        # 数字变焦: 滚轮放大缩小 / 双击复位 (变焦在抓取层裁切, 见 grabber)
+        # 数字变焦: 滚轮放大缩小 / 双击复位 / 变焦后拖动平移 (裁切在
+        # 抓取层做, 见 grabber)
         self.video.zoom_step.connect(self._on_zoom_step)
         self.video.zoom_reset.connect(
             lambda: self.grabber.set_zoom(1.0))
+        self.video.pan_moved.connect(self.grabber.set_pan_delta)
         self.status = QLabel('未连接')
         self.status.setStyleSheet('color: #666; padding: 2px;')
         self.status.setWordWrap(True)
@@ -167,7 +170,8 @@ class CameraViewWidget(QWidget):
 
     def _build_gimbal(self, in_group=False):
         """云台控制面板: 摇杆连续转动 (偏转量=角速度) + 回中 + 角度读数
-        (限位卡住标红)。仅 AirSim 相机源可用。in_group=True 时不再重复标题。"""
+        (限位卡住标红)。云台本体/视场仅 AirSim 相机源可用; 数字变焦为
+        显示层裁切与源无关。in_group=True 时不再重复标题。"""
         self._gimbal_locked = False   # 视觉反控进行中锁定云台 (见 set_gimbal_locked)
         self._angle_red = {'yaw': False, 'pitch': False}   # 各轴读数标红缓存
 
@@ -221,21 +225,28 @@ class CameraViewWidget(QWidget):
                 f'俯仰 {config.GIMBAL_PITCH_MIN_DEG:.0f}°'
                 f'~+{config.GIMBAL_PITCH_MAX_DEG:.0f}° (被限位卡住时标红)')
             self._gimbal_labels[axis] = lab
+        # 云台本体 (摇杆/按钮/读数) 独立成子面板: AirSim 门控只置灰它和
+        # 视场, 变焦与源无关 (见 _apply_gimbal_enabled)
+        core = QWidget()
+        cg = QGridLayout(core)
+        cg.setContentsMargins(0, 0, 0, 0)
         if not in_group:
-            g.addWidget(title, 0, 0, 1, 2)
-        g.addWidget(self._joy, 1, 0, alignment=Qt.AlignHCenter)
+            g.addWidget(title, 0, 0, 1, 3)
+        cg.addWidget(self._joy, 0, 0, alignment=Qt.AlignHCenter)
         side = QVBoxLayout()
         side.addWidget(btn_center)
         side.addWidget(btn_stab)
         side.addWidget(btn_follow)
         side.addStretch(1)
-        g.addLayout(side, 1, 1)
+        cg.addLayout(side, 0, 1)
         angles = QHBoxLayout()
         angles.setSpacing(10)
         angles.addWidget(self._gimbal_labels['yaw'])
         angles.addWidget(self._gimbal_labels['pitch'])
         angles.addStretch(1)
-        g.addLayout(angles, 2, 0, 1, 2)
+        cg.addLayout(angles, 1, 0, 1, 2)
+        self._gimbal_core = core
+        g.addWidget(core, 1, 0, 2, 1)
 
         # 视场角滑杆 (竖排): 经 simSetCameraFov 实时调整 UE 相机 FOV,
         # 本机/文件源随云台整体置灰。上=广角, 下=拉近
@@ -261,9 +272,14 @@ class CameraViewWidget(QWidget):
         # 滑杆宽度固定, 布局默认靠左放 —— 显式居中, 与上下文字同轴线
         fov_col.addWidget(self.fov_slider, stretch=1, alignment=Qt.AlignHCenter)
         fov_col.addWidget(self.fov_value)
-        g.addLayout(fov_col, 1, 2, 2, 1)   # 右侧整列 (与摇杆/角度读数同高)
+        self._fov_widget = QWidget()   # 独立子面板: 随云台本体一起门控
+        fw = QHBoxLayout(self._fov_widget)
+        fw.setContentsMargins(0, 0, 0, 0)
+        fw.addLayout(fov_col)
+        g.addWidget(self._fov_widget, 1, 1, 2, 1)   # 云台本体右侧同高
 
-        # 数字变焦滑杆 (视场滑杆右侧): 显示层中心裁切, 与 FOV 相互独立;
+        # 数字变焦滑杆 (视场滑杆右侧): 显示层中心裁切, 与 FOV 相互独立,
+        # 且与源无关 —— 本机摄像头/视频文件同样可拖动;
         # 滑杆整数值 = 倍数×100 (分辨率 0.01)
         zoom_col = QVBoxLayout()
         zoom_col.setSpacing(2)
@@ -276,7 +292,8 @@ class CameraViewWidget(QWidget):
         self.zoom_slider.setMinimumHeight(96)
         self.zoom_slider.setToolTip(
             f'数字变焦 (×{config.DISPLAY_ZOOM_MIN:g}~×{config.DISPLAY_ZOOM_MAX:g}): '
-            '画面中心裁切放大, 不改 UE 相机真实视场; 滚轮/双击画面亦可')
+            '画面裁切放大, 不改 UE 相机真实视场; 滚轮/双击画面复位; '
+            '变焦后拖动画面可平移观看其他区域')
         self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
         self.zoom_value = QLabel()
         self.zoom_value.setStyleSheet('color: #444; font-family: monospace;')
@@ -284,7 +301,11 @@ class CameraViewWidget(QWidget):
         zoom_col.addWidget(zoom_title)
         zoom_col.addWidget(self.zoom_slider, stretch=1, alignment=Qt.AlignHCenter)
         zoom_col.addWidget(self.zoom_value)
-        g.addLayout(zoom_col, 1, 3, 2, 1)   # 视场滑杆右侧同高
+        self._zoom_widget = QWidget()  # 独立子面板: 不随 AirSim 门控, 仅反控锁定时禁用
+        zw = QHBoxLayout(self._zoom_widget)
+        zw.setContentsMargins(0, 0, 0, 0)
+        zw.addLayout(zoom_col)
+        g.addWidget(self._zoom_widget, 1, 2, 2, 1)   # 视场滑杆右侧同高
         self._zoom_sync_label(self.zoom_slider.value() / 100.0)
 
     def _on_gimbal_joy(self, x, y):
@@ -332,12 +353,24 @@ class CameraViewWidget(QWidget):
 
     def set_gimbal_locked(self, locked):
         """锁定/解锁云台面板 (视觉反控进行中锁定, 防止反控时转动视角)。
-        锁定立即生效; 解锁交给 _refresh 按可用性恢复。"""
+        锁定立即生效 (含变焦滑杆); 解锁交给 _refresh 按可用性恢复。"""
         if self._gimbal_locked == locked:
             return
         self._gimbal_locked = locked
         if locked:
-            self.gimbal.setEnabled(False)
+            self._apply_gimbal_enabled()
+
+    def _apply_gimbal_enabled(self):
+        """云台面板门控拆分置灰: 云台本体 + 视场仅 AirSim 源且 RPC 已连通
+        可用 (反控锁定期间强制置灰); 数字变焦是显示层中心裁切, 与源无关,
+        本机摄像头/视频文件也可拖动, 仅反控锁定时一并禁用 (变焦会改变
+        转发给算法的显示帧, 反控对帧中作动需要画面稳定)。"""
+        ok = (not self._gimbal_locked
+              and self.grabber.get_gimbal() is not None
+              and self.grabber.airsim_connected())
+        self._gimbal_core.setEnabled(ok)
+        self._fov_widget.setEnabled(ok)
+        self._zoom_widget.setEnabled(not self._gimbal_locked)
 
     def _update_gimbal_limit(self):
         """到限位提示: 被限位卡住时只红对应轴的读数, 恢复可动即清红。
@@ -445,10 +478,9 @@ class CameraViewWidget(QWidget):
     def _refresh(self):
         self._refresh_playback()
         gim = self.grabber.get_gimbal()
-        # 仅 AirSim 源且 RPC 已连通可用 (反控锁定期间强制置灰): 打开地面站/UE 未 play 时默认置灰
-        self.gimbal.setEnabled(
-            not self._gimbal_locked
-            and gim is not None and self.grabber.airsim_connected())
+        # 云台本体/视场仅 AirSim 源且 RPC 已连通可用; 变焦与源无关
+        # (本机/文件源也可拖动), 反控锁定时整体置灰 —— 见 _apply_gimbal_enabled
+        self._apply_gimbal_enabled()
         if gim is not None:
             yaw, pitch = gim
             self._gimbal_labels['yaw'].setText(f'航向 {yaw:+.0f}°')

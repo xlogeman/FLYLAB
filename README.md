@@ -2,6 +2,8 @@
 
 WSL2 (Ubuntu 22.04) + ROS2 Humble，围绕 PX4 + Cosys-AirSim 做无人机自主飞行研究：感知建图、视觉惯导、避障规划与 offboard 控制
 
+> **拿到 Docker 镜像复现的看 [§9 Docker 镜像复现](#9-docker-镜像复现)**，本文档其余部分与本机 WSL 开发流程一一对应
+
 ## 1. 工作区总体
 
 | 目录 | 说明 |
@@ -220,3 +222,74 @@ ros2 run flylab_vision aruco_node --ros-args \
 - **传感器时间轴**：IMU/LiDAR/odom 统一经 `SimClockSync` 映射（`src/sensors/airsim_common.hpp`），三路同一时间轴；bridge_super 去畸变、FAST-LIO 融合都依赖此约定，新传感器节点请保持
 - **WSL 时钟漂移**：高负载下系统时钟漂移可达秒级，timesyncd 步进纠偏会导致时间戳整体跳变（去畸变拖影/FAST-LIO reset）。**已用 chrony slew 模式根治**（时钟永不跳变），timesyncd 已 disable；验证 `chronyc tracking` 的 System time 应为毫秒级
 - **点云抗卡顿**：实时流不允许积压回放——`airsim_lidar` 发布 QoS `KeepLast(2) reliable`，bridge 与 RViz 点云 Queue Size 全部限深 1~2；GPU 雷达过滤跨卡顿帧（段时刻跨度 > 3× 扫描周期直接丢弃，否则去畸变整帧拖影）。诊断：`ros2 topic hz` 的 **min 为负 = 时钟被步进**，max 飙秒级 = 发布端真断流
+
+## 9. Docker 镜像复现
+
+本环境已导出为 Docker 可导入的根文件系统镜像 `flylab-rootfs.tar`（约 32G），ROS2 Humble + 全部依赖 + `install/` 编译产物均已内置。
+
+### 9.1. 导入与运行
+
+```bash
+# 导入 (直接吃 gzip 压缩包，tar.gz 也行)
+docker import flylab-rootfs.tar flylab:v1
+
+# 运行 —— 三个参数都有讲究，缺一不可
+docker run -it --rm \
+  --shm-size=8g \                                   # ① Fast DDS SHM 必需，默认 64M 会让 30Hz 大图转发失败
+  --network host \                                  # ② 与 AirSim 主机 TCP 4560 / 41451 直连（见 9.3）
+  -e DISPLAY=$DISPLAY \                             # ③ GUI：地面站/RViz（Linux 宿主 + X11/WSLg）
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  flylab:v1 bash
+
+# 容器内（用户 root，工作目录 /）
+source /root/flylab/scripts/env.sh      # 环境总入口：ROS2 + install/ + ORB_SLAM3/onnxruntime 库路径 + Fast DDS SHM 配置
+```
+
+| 参数 | 为什么必须 |
+|---|---|
+| `--shm-size=8g` | `env.sh` 挂的 `fastrtps_shm.xml` 让 900KB 级显示帧走 SHM 零拷贝；`/dev/shm` 默认 64M，满了报 `Failed to create segment` 回退 UDP（30Hz 图像转发掉帧） |
+| `--network host` | PX4 SITL 要连 AirSim 的 TCP 4560，传感器节点/GCS 要连 TCP 41451 RPC；host 网络下 `env.sh` 自动把 `PX4_SIM_HOST_ADDR` 设为默认网关，与 WSL 行为一致 |
+| `-e DISPLAY` | `flylab_gcs`（PyQt5）和 RViz 是 GUI 程序；WSLg/Docker Desktop 自带 Wayland-X11 桥时 `DISPLAY` 通常已有值 |
+
+### 9.2. 复现飞行实验的完整步骤（Windows + Docker 组合）
+
+与 WSL 架构一致：**Windows 跑 UE 仿真器，容器跑 PX4 + ROS2**。
+
+1. **Windows 侧**：安装 Cosys-AirSim 的 UE 项目（`BeimingSim`，不在镜像内需单独分发），把 `configs/settings.json` 复制到 `Documents\AirSim\`，其中 `ControlIp` 改为**容器所在主机可达的 IP**（UE 以 1Hz 向 `ControlIp:ControlPortRemote` 发心跳）
+2. **容器内**：
+   ```bash
+   source /root/flylab/scripts/env.sh
+   bash /root/flylab/scripts/run-px4.sh                    # PX4 SITL，默认 none_iris
+   # 或 bash /root/flylab/scripts/run-px4.sh none_fucker_x450 --clean
+   MicroXRCEAgent udp4 -p 8888                             # 通信链路二选一起一个
+   ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14542@ -p tgt_system:=1
+   ros2 launch flylab_flight fly_ego.launch.py             # 任选 §2.1 的链路
+   ros2 run flylab_gcs ground_station                      # 地面站
+   ```
+3. **UE 端点 Play** 后按 §3 的流程起飞；MAVROS 必须 14582↔14542 专属实例（§7 的坑在容器里同样存在）
+
+### 9.3. 网络拓扑与排障
+
+- **`--network host` 时**：`PX4_SIM_HOST_ADDR` 取默认网关——AirSim 与 Docker 同机则天然可达；跨机时 `export PX4_SIM_HOST_ADDR=<AirSim主机IP>` 覆盖
+- **Docker Desktop（Windows/Mac）没有真正的 host 网络**：改用 `-p 4560:4560 -p 41451:41451 -p 14542:14542/udp -p 8888:8888/udp` 端口映射，并手动 `export PX4_SIM_HOST_ADDR=host.docker.internal`；同时 UE 端 `ControlIp` 填宿主机 IP，心跳经映射进容器。**强烈建议在 Linux 宿主上用 host 网络跑**
+- **验证连通**：容器内 `nc -zv $PX4_SIM_HOST_ADDR 4560`（HIL 链路）、`nc -zv $PX4_SIM_HOST_ADDR 41451`（RPC）
+
+### 9.4. 与 WSL 原环境的差异
+
+| 项 | WSL 原环境 | Docker 容器 |
+|---|---|---|
+| 时钟同步 | chrony slew 模式（§8，WSL 时钟漂移根治） | 直接用宿主内核时钟，无漂移问题，chrony 不生效也无需配置 |
+| 摄像头直通 | `usbipd attach`（§3 第 5 步） | 用 `-v /dev/video0:/dev/video0` 或 `--device=/dev/video0` 挂载 |
+| X11 | WSLg 自带 | Linux 宿主靠 `-e DISPLAY` + socket 挂载；纯服务器无显示器则跑不了 GCS/RViz |
+| 改代码重编 | `colcon build` | 同（`MAKEFLAGS=-j$(nproc)` 可放开，WSL 里才需要限 `-j2`） |
+| `env.sh` 里的 SHM 清理脚本 | 每次 source 静默执行 | 同样适用（强杀节点后记得 source 或手动跑） |
+
+### 9.5. 分发
+
+```bash
+# 压缩后体积约 10~13G，docker import 直接支持
+gzip -1 -k flylab-rootfs.tar        # -1 速度优先；-k 保留原 tar
+
+# 接收方校验（可选）
+sha256sum flylab-rootfs.tar.gz
+```

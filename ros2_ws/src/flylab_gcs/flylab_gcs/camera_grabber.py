@@ -104,9 +104,12 @@ class Grabber(threading.Thread):
         # (None=尚未采纳; 连接后查询相机真实 FOV 采纳, 见 _adopt_camera_fov)
         self._fov_dirty = False       # 视场角待下发/待采纳标记
         self._fov_adopt_t = 0.0       # 最近一次 FOV 采纳尝试时刻 (失败重试退避)
-        # 数字变焦 (抓取层中心裁切, 图传/转发/标注同一像素系);
-        # _raw 留未变焦原帧, 档位变化时重提交
+        # 数字变焦 (抓取层裁切, 图传/转发/标注同一像素系);
+        # _raw 留未变焦原帧, 档位/平移变化时重提交。
+        # _pan 为裁切窗口中心相对图像中心的偏移 (原始帧像素, 画面跟手:
+        # 窗口向拖动反方向移动), 裁切时夹在图内
         self._zoom = 1.0
+        self._pan = (0.0, 0.0)
         self._raw = None
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
         self._anim_t_prev = 0.0
@@ -431,18 +434,21 @@ class Grabber(threading.Thread):
     def set_zoom(self, factor):
         """设置数字变焦倍数 (1.0=原图, 上限 config.DISPLAY_ZOOM_MAX):
         立即用缓存的未变焦原帧重提交一帧, 暂停中的文件源也能即时看到;
-        之后每帧按该倍数中心裁切。"""
+        之后每帧按该倍数裁切。缩回 1.0 时平移复位。"""
         with self.lock:
             factor = max(1.0, min(config.DISPLAY_ZOOM_MAX, float(factor)))
             if self._zoom == factor:
                 return
             self._zoom = factor
+            if factor <= 1.0:
+                self._pan = (0.0, 0.0)   # 回到全图, 平移无意义
+            pan = self._pan
             raw, gen = self._raw, self._gen
         if raw is None:
             return
         arr, is_depth = raw
         if factor > 1.0:
-            arr = self._zoom_center(arr, factor)
+            arr = self._zoom_crop(arr, factor, pan)
         with self.lock:
             if gen == self._gen:
                 self.frame = (arr, is_depth)
@@ -451,12 +457,40 @@ class Grabber(threading.Thread):
         with self.lock:
             return self._zoom
 
+    def set_pan_delta(self, dx, dy):
+        """变焦拖动平移: dx/dy 为显示画面坐标位移 (原图像素, 画面跟手)。
+        显示帧是裁切内容放回原分辨率, 折算回原始裁切域需除以倍数;
+        画面跟手 = 裁切窗口反向移动。平移后立即重提交一帧 (暂停的
+        文件源同样即时看到); 未变焦时忽略。"""
+        with self.lock:
+            z = self._zoom
+            if z <= 1.0:
+                return
+            px, py = self._pan
+            self._pan = (px - dx / z, py - dy / z)
+            pan = self._pan
+            raw, gen = self._raw, self._gen
+        if raw is None:
+            return
+        arr, is_depth = raw
+        arr = self._zoom_crop(arr, z, pan)
+        with self.lock:
+            if gen == self._gen:
+                self.frame = (arr, is_depth)
+
     @staticmethod
-    def _zoom_center(arr, z):
-        """中心裁切 1/z 区域并放回原分辨率 (图传/转发/标注坐标不变)。"""
+    def _zoom_crop(arr, z, pan):
+        """按倍数 z 与窗口偏移 pan 裁切 1/z 区域并放回原分辨率
+        (图传/转发/标注坐标不变)。pan 为窗口中心相对图像中心的原始
+        像素偏移, 裁切时夹在图内 —— 缩放档位变化后无需另存钳制。"""
         h, w = arr.shape[:2]
         cw, ch = max(1, int(w / z)), max(1, int(h / z))
-        x0, y0 = (w - cw) // 2, (h - ch) // 2
+        mx, my = (w - cw) / 2.0, (h - ch) / 2.0   # 窗口中心可动半径
+        px = max(-mx, min(mx, pan[0]))
+        py = max(-my, min(my, pan[1]))
+        x0 = int(round(w / 2.0 + px - cw / 2.0))
+        y0 = int(round(h / 2.0 + py - ch / 2.0))
+        x0, y0 = max(0, x0), max(0, y0)
         crop = np.ascontiguousarray(arr[y0:y0 + ch, x0:x0 + cw])
         if cv2 is None:          # 无 OpenCV 只裁不缩, 显示端等比放大兜底
             return crop
@@ -685,9 +719,10 @@ class Grabber(threading.Thread):
             if gen != self._gen:
                 return
             zoom = self._zoom
-            self._raw = (arr, is_depth)   # 未变焦原帧 (变焦档变化时重提交)
+            pan = self._pan
+            self._raw = (arr, is_depth)   # 未变焦原帧 (变焦档/平移变化时重提交)
         if zoom > 1.0:
-            arr = self._zoom_center(arr, zoom)   # 裁切放锁外, 不阻塞 get()
+            arr = self._zoom_crop(arr, zoom, pan)   # 裁切放锁外, 不阻塞 get()
         with self.lock:
             if gen != self._gen:
                 return

@@ -26,6 +26,7 @@ class VideoLabel(QLabel):
     selection_cancelled = pyqtSignal()
     zoom_step = pyqtSignal(int)    # 数字变焦: +1 放大 / -1 缩小 (滚轮)
     zoom_reset = pyqtSignal()      # 数字变焦复位 (双击画面)
+    pan_moved = pyqtSignal(int, int)   # 变焦拖动平移: 显示坐标位移 (px)
 
     def __init__(self, text='等待图像...'):
         super().__init__(text)
@@ -41,6 +42,7 @@ class VideoLabel(QLabel):
         self._frozen = False      # 框选期间冻结画面
         self._sel_start = None    # QPoint (widget 坐标)
         self._sel_cur = None
+        self._pan_start = None    # 变焦拖动平移起点 (QPoint, widget 坐标)
         self._annotations = []    # 模型输出标注 (overlay.py schema)
         self._hud = None          # 画面左上角 HUD 文字 (如图像帧率)
         self._hud_algo = None     # HUD 第二行 (算法输出帧率)
@@ -128,13 +130,25 @@ class VideoLabel(QLabel):
             self._frozen = True
             self._sel_start = self._sel_cur = ev.pos()
             self._redraw()
+        elif self._pixmap is not None and ev.button() == Qt.LeftButton:
+            self._pan_start = ev.pos()   # 变焦拖动平移起点 (松手结束)
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
         if self._sel_start is not None:
             self._sel_cur = ev.pos()
             self._redraw()
+        elif self._pan_start is not None:
+            d = ev.pos() - self._pan_start
+            self._pan_start = ev.pos()
+            if d.x() or d.y():           # 逐段发增量, 抓取层折算窗口移动
+                self.pan_moved.emit(d.x(), d.y())
         super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self._pan_start = None
+        super().mouseReleaseEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
         """双击画面: 框选进行中确认选框, 否则变焦复位到 1.0 (有画面时)。"""
