@@ -53,6 +53,20 @@ class VirtualJoystick(QWidget):
             self.update()
         self.changed.emit(0.0, 0.0)
 
+    def set_external(self, x, y):
+        """外部输入源驱动旋钮 (游戏手柄等): 画面联动 + 走与拖动同一条
+        changed 信号链路, 下发路径与鼠标拖动完全一致。
+        x 右正 / y 前正 (与 changed 信号约定一致), 越界夹紧;
+        值未变化不重发 (手柄 50Hz 静默期零值不会刷屏)。"""
+        x = max(-1.0, min(1.0, float(x)))
+        y = max(-1.0, min(1.0, float(y)))
+        limit = float(self.RADIUS)
+        off = QPointF(x * limit, -y * limit)   # y 前正 → 像素向上 (Qt y 向下取反)
+        if self._knob != off:
+            self._knob = off
+            self.update()
+            self.changed.emit(x, y)
+
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)

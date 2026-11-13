@@ -26,8 +26,7 @@ except ImportError:
     import cosysairsim as airsim
 
 from . import config
-from .camera_sources import (LocalFileReader, colorize_depth,   # noqa: F401 (re-export)
-                             list_local_cameras, cv2)
+from .camera_sources import LocalFileReader, cv2
 from .gimbal import (APPLY_TOL_DEG, MountNotReady, clamp_gimbal,
                      capture_mount)
 from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,

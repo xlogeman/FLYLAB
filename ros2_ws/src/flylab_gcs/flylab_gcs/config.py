@@ -207,6 +207,20 @@ TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node',
               '-p', 'v_z:=3.0',            # 升降速度上限 m/s (默认2.0; 飞控按 MPC_Z_VEL_MAX_UP/DN 二次夹紧)
               '-p', 'yaw_rate_deg:=45.0']  # 须 = GIMBAL_FOLLOW_YAW_RATE_DEG_S
 
+# ---------- 游戏手柄 (双摇杆驱动界面虚拟摇杆, 走同一条遥控下发链路) ----------
+# pygame/SDL 读取; 左手柄杆=高度/偏航, 右手柄杆=平移, 与界面双摇杆同布局。
+# 量只注入画面 (VirtualJoystick.set_external → changed), 下发路径与鼠标
+# 拖动完全一致, 界面上能看到操控力度。WSL 下手柄需 usbipd 直通进系统:
+#   usbipd attach --busid <busid> --wsl <发行版>
+GAMEPAD_POLL_HZ = 50        # 读取频率 (Hz)
+GAMEPAD_DEADZONE = 0.08     # 死区: 内视为回中, 外线性重标定到全行程
+# 轴号按 Linux xpad 驱动原始轴序 (SDL 不做重映射): 左摇杆 0/1, 左扳机 2,
+# 右摇杆 3/4, 右扳机 5 —— 注意与 SDL Xbox 标准布局不同, 扳机平时恒 -1!
+# 其他手柄用 `python3 /root/flylab/scripts/test-gamepad.py` 看轴号后在此覆盖
+GAMEPAD_AXES = {'lx': 0, 'ly': 1, 'rx': 3, 'ry': 4}
+# 摇杆物理上推是负轴值, 统一翻转成 VirtualJoystick 约定 (前/左为正)
+GAMEPAD_INVERT = {'lx': 1.0, 'ly': -1.0, 'rx': 1.0, 'ry': -1.0}
+
 # ---------- 通信链路 (地面站一键拉起) ----------
 # uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888, 供 tracker:=uxrce / aruco_landing 链路
 UXRCE_CMD = ['MicroXRCEAgent', 'udp4', '-p', '8888']

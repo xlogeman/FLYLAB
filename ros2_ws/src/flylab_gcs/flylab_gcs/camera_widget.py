@@ -29,8 +29,8 @@ from PyQt5.QtWidgets import (QFileDialog, QFrame, QGridLayout,
 
 from . import config
 from .camera_grabber import (DEFAULT_CAMERA, DEFAULT_CAMERAS, FILE_PREFIX,
-                           LOCAL_PREFIX, Grabber, colorize_depth,
-                           list_local_cameras)
+                           LOCAL_PREFIX, Grabber)
+from .camera_sources import colorize_depth, list_local_cameras
 from .teleop_pad import VirtualJoystick
 from .video_label import VideoLabel
 

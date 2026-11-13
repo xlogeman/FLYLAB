@@ -65,6 +65,10 @@
       "VehicleCompID": 1,
       "SimSysID": 142,
       "SimCompID": 42,
+      "RC": {
+        "RemoteControlID": -1,
+        "AllowAPIWhenDisconnected": true
+      },
       "PhysicsParams": {
         "Mass": 3.120,
         "MotorAssemblyWeight": 0.090,

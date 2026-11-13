@@ -13,10 +13,11 @@ ArUco检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态 两个模�
 样式常量 _TOOL_BTN_STYLE 定义在 main_window (ui_style.py)。
 """
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QMenu, QToolButton,
-                           QVBoxLayout)
+from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QMenu,
+                           QPushButton, QToolButton, QVBoxLayout)
 
 from .. import config
+from ..gamepad import GamepadReader
 from ..teleop_pad import VirtualJoystick
 
 
@@ -240,6 +241,25 @@ class ControlPanelsMixin:
         pads.addWidget(g_l)
         pads.addWidget(g_r)
         lay.addLayout(pads)
+        # 游戏手柄接管: 打开后手柄双摇杆驱动界面摇杆 (画面旋钮联动, 与鼠标
+        # 拖动同一条下发链路), 可直观看操控力度; 与鼠标拖动互抢, 后动者生效
+        gp_row = QHBoxLayout()
+        self._gamepad_btn = QPushButton('手柄控制')
+        self._gamepad_btn.setCheckable(True)
+        self._gamepad_btn.setToolTip(
+            '游戏手柄双摇杆驱动界面摇杆 (左手柄杆=高度/偏航, 右=平移, 同布局)。\n'
+            'WSL 需先 usbipd 直通: usbipd attach --busid <busid> --wsl <发行版>\n'
+            '轴号不对手柄时改 config.GAMEPAD_AXES (xpad 原始轴序默认)')
+        self._gamepad_status = QLabel('未检测手柄')
+        self._gamepad_status.setStyleSheet('color: #888; font-size: 11px;')
+        gp_row.addWidget(self._gamepad_btn)
+        gp_row.addWidget(self._gamepad_status, 1)
+        lay.addLayout(gp_row)
+        self._gamepad = GamepadReader()
+        self._gamepad.stick.connect(self._on_gamepad_stick)
+        self._gamepad.plugged.connect(self._on_gamepad_plugged)
+        self._gamepad.failed.connect(self._on_gamepad_failed)
+        self._gamepad_btn.toggled.connect(self._on_gamepad_toggle)
         for w in self._teleop_widgets:   # 默认置灰, 接管后解锁
             w.setEnabled(False)
         # 航向跟随外环 (云台面板"跟随"开关, 见 camera_widget): 25Hz P 律,
@@ -292,6 +312,47 @@ class ControlPanelsMixin:
         for key in self._teleop_axes:
             self._teleop_axes[key] = 0.0
         self.node.publish_teleop_twist(0.0, 0.0, 0.0, 0.0)
+
+    # ---------- 游戏手柄输入 (gamepad.py 线程 → 双摇杆联动) ----------
+
+    @staticmethod
+    def _gamepad_status_style(color):
+        return f'color: {color}; font-size: 11px;'
+
+    def _on_gamepad_toggle(self, on):
+        """手柄开关: 控制读取线程生命周期 (连接检测随之启停)。"""
+        if on:
+            self._gamepad.start()
+        else:
+            self._gamepad.stop()
+            self._gamepad_status.setText('未检测手柄')
+            self._gamepad_status.setStyleSheet(
+                self._gamepad_status_style('#888'))
+
+    def _on_gamepad_stick(self, lx, ly, rx, ry):
+        """手柄量 → 双摇杆 set_external: 画面旋钮联动 + 走 changed 信号
+        同一条下发链路 (与鼠标拖动一致)。仅遥控接管中 (engaged) 生效。"""
+        if not self._teleop_live:
+            return
+        self._teleop_joy_l.set_external(lx, ly)
+        self._teleop_joy_r.set_external(rx, ry)
+
+    def _on_gamepad_plugged(self, ok, name):
+        """连接状态 → 面板标签 (绿=已连, 灰=未连)。"""
+        if ok:
+            self._gamepad_status.setText(f'已连接: {name}' if name else '已连接')
+            self._gamepad_status.setStyleSheet(
+                self._gamepad_status_style('#2d8a3e'))
+        else:
+            self._gamepad_status.setText('未检测手柄 (usbipd 直通?)')
+            self._gamepad_status.setStyleSheet(
+                self._gamepad_status_style('#888'))
+
+    def _on_gamepad_failed(self, msg):
+        """线程初始化失败: 只报一次 (线程已退出), 开关弹起防假开。"""
+        self.log.error(msg)
+        if self._gamepad_btn.isChecked():
+            self._gamepad_btn.setChecked(False)   # 触发 toggle(False) → stop
 
     def _on_teleop_toggle(self):
         if self.teleop_act.isChecked():

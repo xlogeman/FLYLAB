@@ -30,8 +30,18 @@ if [ -d "$_ort_capi" ]; then
     unset _ort_capi _d
 fi
 
-# AirSim 所在的 Windows 宿主机 (WSL 默认网关)
-export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
+# AirSim 所在的 Windows 宿主机:
+# - NAT 网络 (WSL 默认 172.16/12): 网关即宿主机 → PX4_SIM_HOST_ADDR=网关
+# - mirrored 网络 (.wslconfig networkingMode=mirrored, 与宿主共享局域网 IP):
+#   网关是路由器而非宿主机 → 宿主即本机回环 127.0.0.1 (实测 RPC 可达)
+_wsl_ip=$(ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+case $_wsl_ip in
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*)
+        export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}') ;;
+    *)
+        export PX4_SIM_HOST_ADDR=127.0.0.1 ;;
+esac
+unset _wsl_ip
 
 # Fast DDS: 同机大图 (900KB 显示帧转发等) 走 SHM 零拷贝, 避开 UDP 分片
 # 背压 (实测 30Hz 原始图转发 publish 阻塞 ~80ms/帧, 见 fastrtps_shm.xml 头注)
