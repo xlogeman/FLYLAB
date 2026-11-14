@@ -8,6 +8,7 @@ flylab_flight 一键 ros2 launch 整链路 (感知建图/避障/VIO/SLAM), 再�
 from PyQt5.QtWidgets import QMenu, QToolButton
 
 from .. import config
+from . import ui_style
 
 
 class FlightPanelMixin:
@@ -34,7 +35,7 @@ class FlightPanelMixin:
         return self.flight_btn
 
     def _rebuild_flight_menu(self):
-        """重建链路菜单: ✓ = 正在运行 (与机型/算法菜单同款交互);
+        """重建链路菜单: 绿点 = 正在运行 (与机型/算法菜单同款交互);
         need_link 的链路 (EGO/SUPER 避障) 在通信链路未开启或手动遥控
         接管中时置灰 —— 跟踪器依赖通信桥, 且与遥控互斥 (都走 offboard)。
         菜单每次展开时重建, 门控状态总是新鲜的。"""
@@ -46,8 +47,7 @@ class FlightPanelMixin:
         for link in config.FLIGHT_LINKS:
             act = menu.addAction(link['name'])
             act.setData(link['name'])
-            act.setCheckable(True)
-            act.setChecked(link['name'] == cur)
+            ui_style.set_menu_icon(act, link['name'] == cur)
             act.setToolTip(' '.join(link['cmd']))
             if link.get('need_link') and not link_ok:
                 act.setEnabled(False)

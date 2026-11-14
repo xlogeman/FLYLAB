@@ -41,8 +41,20 @@ fi
 # 全部完整时秒退。归档瘦身剔除了 git 历史, 首次运行或迁移目录后会触发修复
 bash "$(dirname "$0")/px4-restore-git.sh"
 
-# Windows 网关 IP = WSL 默认路由 (AirSim 在那台机器上监听 TCP 4560)
-export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}')
+# AirSim 地址 (PX4 SITL 经此连 TCP 4560 HIL): 已显式导出则尊重 (env.sh
+# 按网络模式设置过); 未导出时按模式推导 —— mirrored (WSL 共享主机 IP,
+# localhost 即 Windows 主机) 用 127.0.0.1; NAT (WSL IP 在 172.16/12) 下
+# 默认网关即 Windows 主机。注意不能无条件取网关: mirrored 下网关是
+# 路由器, PX4 会把 HIL 连到路由器上导致 AirSim 收不到载具
+if [ -z "$PX4_SIM_HOST_ADDR" ]; then
+    WSL_IP=$(hostname -I | awk '{print $1}')
+    case "$WSL_IP" in
+        172.1[6-9].*|172.2*|172.3[01].*)   # NAT 网段 (172.16/12)
+            export PX4_SIM_HOST_ADDR=$(ip route | grep default | awk '{print $3}') ;;
+        *)                                  # mirrored: WSL IP = 主机 IP
+            export PX4_SIM_HOST_ADDR=127.0.0.1 ;;
+    esac
+fi
 echo "[run-px4] PX4_SIM_HOST_ADDR=$PX4_SIM_HOST_ADDR"
 
 cd "$PX4_DIR"

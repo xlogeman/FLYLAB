@@ -8,6 +8,7 @@
 from PyQt5.QtWidgets import QMenu, QToolButton
 
 from .. import config
+from . import ui_style
 
 
 class Px4PanelMixin:
@@ -32,7 +33,7 @@ class Px4PanelMixin:
         return self.px4_btn
 
     def _rebuild_px4_menu(self):
-        """重建机型菜单: ✓ = 正在运行; 再点运行中的机型即停止
+        """重建机型菜单: 绿点 = 正在运行; 再点运行中的机型即停止
         (与通信链路菜单同款交互, 不设独立"停止"项)。"""
         menu = self.px4_btn.menu()
         menu.clear()
@@ -40,8 +41,7 @@ class Px4PanelMixin:
         for model in config.PX4_MODELS:
             act = menu.addAction(model['name'])
             act.setData(model['target'])
-            act.setCheckable(True)
-            act.setChecked(model['name'] == cur)
+            ui_style.set_menu_icon(act, model['name'] == cur)
 
     def _on_px4_action(self, act):
         """菜单点击: 未运行 → 直接启动; 点运行中的机型 → 停止;
@@ -86,7 +86,7 @@ class Px4PanelMixin:
 
     def _reset_px4_btn(self):
         """按钮复位为空闲态: 文案回 "PX4 SITL", 清除运行中机型 ——
-        菜单的 ✓ 语义是"正在运行", 停止/崩溃/启动失败后不再勾选。"""
+        菜单的绿点语义是"正在运行", 停止/崩溃/启动失败后不再标记。"""
         self.px4_model = None
         self.px4_btn.setText('PX4 SITL')
         self._set_btn_on(self.px4_btn, False)   # 停止/崩溃/失败 → 熄灭

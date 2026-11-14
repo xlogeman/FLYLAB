@@ -11,6 +11,7 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMenu, QToolButton
 
 from .. import config
+from . import ui_style
 
 
 class AlgoPanelMixin:
@@ -24,30 +25,51 @@ class AlgoPanelMixin:
         self.algo_btn.setPopupMode(QToolButton.InstantPopup)
         self.algo_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.algo_btn.setToolTip(
-            '视觉算法 (flylab_vision): 选择即运行 (拉起进程 + 发启动指令, '
-            '结果叠加到画面); 再点运行中的算法即停止, 选其他停旧换新')
+            '视觉算法 (flylab_vision): 一级菜单=任务分组, 二级=具体算法/模型。'
+            '选择即运行 (拉起进程 + 发启动指令, 结果叠加到画面); '
+            '再点运行中的算法即停止, 选其他停旧换新')
         menu = QMenu(self.algo_btn)
         self.algo_btn.setMenu(menu)
         menu.aboutToShow.connect(self._rebuild_algo_menu)
-        menu.triggered.connect(self._on_algo_action)
         return self.algo_btn
 
     def _rebuild_algo_menu(self):
-        """重建算法菜单: ✓ = 正在运行; 再点运行中的算法即停止。"""
+        """重建算法菜单 (一级=任务分组, 二级=具体算法/模型):
+        绿点 = 正在运行; 再点运行中的算法即停止。运行中任务所在的一级
+        分组名前亮绿色圆点并加粗 (无需展开二级即知当前任务) —— QAction
+        文字无法按条目单独上色, 用同色图标 + 字体实现, 配色与工具栏
+        状态灯一致。每个算法项独立连接 triggered —— 不依赖根菜单
+        triggered 对子菜单动作的传播行为, 各 Qt 版本行为一致且不会双触发。"""
         menu = self.algo_btn.menu()
         menu.clear()
         cur = self.running_algo['name'] if self.running_algo else None
-        for algo in config.ALGORITHMS:
-            act = menu.addAction(algo['name'])
-            act.setData(algo['name'])
-            act.setCheckable(True)
-            act.setChecked(algo['name'] == cur)
+        for group in config.ALGORITHMS:
+            if 'items' in group:
+                sub = menu.addMenu(group['name'])
+                target = sub
+                entries = group['items']
+                on = cur is not None and any(
+                    a['name'] == cur for a in entries)
+                gact = sub.menuAction()
+                font = gact.font()
+                font.setBold(on)
+                gact.setFont(font)
+                ui_style.set_menu_icon(gact, on)
+            else:   # 旧式平铺条目 (无 items 键): 直接一级显示
+                target = menu
+                entries = [group]
+            for algo in entries:
+                act = target.addAction(algo['name'])
+                ui_style.set_menu_icon(act, algo['name'] == cur)
+                act.triggered.connect(
+                    lambda _checked=False, name=algo['name']:
+                        self._on_algo_name(name))
 
-    def _on_algo_action(self, act):
+    def _on_algo_name(self, name):
         """菜单点击: 未运行 → 启动 (拉起进程 + 发 start 指令);
         点运行中的算法 → 停止; 运行中选其他算法 → 停旧换新。"""
-        name = act.data()
-        algo = next((a for a in config.ALGORITHMS if a['name'] == name), None)
+        algo = next((a for a in config.iter_algorithms()
+                     if a['name'] == name), None)
         if algo is None:
             return
         if self.running_algo is not None:

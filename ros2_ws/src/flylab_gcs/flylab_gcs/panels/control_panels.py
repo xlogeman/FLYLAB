@@ -2,8 +2,10 @@
 """接管控制下拉菜单 (视觉反控 + 手动遥控) 面板 (MainWindow 的功能域 mixin)。
 
 两者都走 offboard, 门控逻辑互相咬合 (互斥 + 遥控最高优先防炸机出口),
-故放在同一模块。菜单项为常驻 QAction (勾选 = 运行中, 再点取消),
-门控状态由 33ms 轮询落在 QAction 的 enabled 上, 菜单展开即见最新。
+故放在同一模块。菜单为常驻双层结构: 逻辑 QAction (checkable, 不进菜单)
+承载勾选状态机, 菜单显示项 (非 checkable, 绿点 = 运行中, 再点取消) 经
+triggered -> 逻辑项 toggle、逻辑项 changed -> 显示项图标/门控联动;
+门控状态由 33ms 轮询落在逻辑 QAction 的 enabled 上, 菜单展开即见最新。
 
 视觉反控按运行中的算法展开模式子菜单 (反控行为因算法而异): 目前只有
 ArUco检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态 两个模式项,
@@ -13,28 +15,35 @@ ArUco检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态 两个模�
 样式常量 _TOOL_BTN_STYLE 定义在 main_window (ui_style.py)。
 """
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QMenu,
+from PyQt5.QtWidgets import (QAction, QGroupBox, QHBoxLayout, QLabel, QMenu,
                            QPushButton, QToolButton, QVBoxLayout)
 
 from .. import config
 from ..gamepad import GamepadReader
+from . import ui_style
 from ..teleop_pad import VirtualJoystick
 
 
 class LandingActions:
-    """视觉反控菜单全部 QAction (模式子菜单两项 + 普通单项) 的统一句柄,
+    """视觉反控全部 QAction (逻辑三项 + 菜单显示三项) 的统一句柄,
     对外兼容旧 landing_act 单项语义:
-    - isChecked() = 任一形态运行中
+    - isChecked() = 任一形态运行中 (读逻辑项)
     - setChecked(False) = 全部弹起 (勾选由用户点选, 不支持 True)
-    - setEnabled() = 同步门控到全部项
+    - setEnabled() = 同步门控到全部逻辑项与显示项
     菜单形态按运行中的算法切换 (_update_landing_menu_shape): 声明多个
     landing_modes 的算法 (ArUco检测) 用模式子菜单, 其余用普通单项。
+    显示项的绿点图标由 logic.changed 联动 (_build_takeover_button), 门控
+    enabled 双侧同步由本句柄与 changed 各覆盖一半。
     """
 
-    def __init__(self, flat_act, image_act, pose_act):
+    def __init__(self, flat_act, image_act, pose_act,
+                 flat_disp, image_disp, pose_disp):
         self.flat = flat_act
         self.image = image_act
         self.pose = pose_act
+        self.disp_flat = flat_disp
+        self.disp_image = image_disp
+        self.disp_pose = pose_disp
 
     def mode_action(self, mode):
         """模式常量 -> 对应菜单项 (普通单项不走模式, 由调用方显式传入)。"""
@@ -55,6 +64,9 @@ class LandingActions:
         self.flat.setEnabled(enabled)
         self.image.setEnabled(enabled)
         self.pose.setEnabled(enabled)
+        self.disp_flat.setEnabled(enabled)
+        self.disp_image.setEnabled(enabled)
+        self.disp_pose.setEnabled(enabled)
 
 
 class ControlPanelsMixin:
@@ -452,21 +464,32 @@ class ControlPanelsMixin:
             '手动遥控 = 摇杆控速度。均需先开启通信链路')
         menu = QMenu(self.takeover_btn)
         self.takeover_btn.setMenu(menu)
+        # 双层结构: 逻辑 QAction 不进菜单, 承载勾选状态机 (isChecked/toggled
+        # 驱动启停流程与互斥门控); 菜单里放配套的显示项 —— 显示项不做
+        # checkable, 因为可勾选菜单项会被 Qt 画成空心方块 (白框), 状态改用
+        # 绿点图标标记 (sync 联动逻辑项的 enabled/checked)
+        def _pair(parent_menu, text, tooltip):
+            logic = QAction(parent_menu)
+            logic.setText(text)
+            logic.setCheckable(True)   # 勾选状态机在逻辑项上 (不进菜单)
+            logic.setEnabled(False)
+            disp = parent_menu.addAction(text)
+            disp.setEnabled(False)
+            disp.setToolTip(tooltip)
+            disp.triggered.connect(logic.toggle)
+            return logic, disp
+
         # 形态一: 视觉反控模式子菜单 (仅声明多个 landing_modes 的算法运行时显示)
         self.landing_menu = menu.addMenu('视觉反控')
-        self.landing_img_act = self.landing_menu.addAction('图像空间')
-        self.landing_img_act.setCheckable(True)
-        self.landing_img_act.setEnabled(False)
-        self.landing_img_act.setToolTip(
+        self.landing_img_act, self.landing_img_disp = _pair(
+            self.landing_menu, '图像空间',
             '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开。'
             '按图像空间量 (对中/面积) 对准码下降并自动降落; 再点取消')
         self.landing_img_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_IMAGE))
-        self.landing_pose_act = self.landing_menu.addAction('3D 姿态')
-        self.landing_pose_act.setCheckable(True)
-        self.landing_pose_act.setEnabled(False)
-        self.landing_pose_act.setToolTip(
+        self.landing_pose_act, self.landing_pose_disp = _pair(
+            self.landing_menu, '3D 姿态',
             '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开 + 码边长准确 '
             '(位姿尺度可信)。按码的 3D 位姿换算机体系米级误差: 水平 P 对中, '
             '下降速度随离码高度调度, 近地自动切 AUTO.LAND; 再点取消')
@@ -475,25 +498,35 @@ class ControlPanelsMixin:
                 config.LANDING_MODE_POSE3D))
         # 形态二: 普通"视觉反控"单项 (其余反控算法 / 无算法运行时显示),
         # 按图像模式启动 (模式参数对未实现的节点无感, 见 config 注释)
-        self.landing_flat_act = menu.addAction('视觉反控')
-        self.landing_flat_act.setCheckable(True)
-        self.landing_flat_act.setEnabled(False)
-        self.landing_flat_act.setToolTip(
+        self.landing_flat_act, self.landing_flat_disp = _pair(
+            menu, '视觉反控',
             '需先: 反控算法运行中 + 已解锁升空 + 通信链路已开。'
             '按当前视觉算法的输出反控降落; 再点取消')
         self.landing_flat_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_IMAGE, self.landing_flat_act))
-        # 统一句柄 (兼容旧 landing_act 单项语义, 其余引用方零改动)
-        self.landing_act = LandingActions(
-            self.landing_flat_act, self.landing_img_act, self.landing_pose_act)
-        self.teleop_act = menu.addAction('手动遥控')
-        self.teleop_act.setCheckable(True)
-        self.teleop_act.setEnabled(False)
-        self.teleop_act.setToolTip(
+        self.teleop_act, self.teleop_disp = _pair(
+            menu, '手动遥控',
             '需先开启通信链路。开启后接管 offboard, 右栏摇杆控速度 '
             '(回中=悬停); 再点交还控制权')
         self.teleop_act.toggled.connect(self._on_teleop_toggle)
+        # 显示项联动: 逻辑项 enabled/checked 任何变化同步到菜单显示项
+        # (绿点 = 运行中); 33ms 轮询门控落在逻辑项上, 显示项跟随
+        def _sync(logic, disp):
+            disp.setEnabled(logic.isEnabled())
+            ui_style.set_menu_icon(disp, logic.isChecked())
+        for logic, disp in (
+                (self.landing_img_act, self.landing_img_disp),
+                (self.landing_pose_act, self.landing_pose_disp),
+                (self.landing_flat_act, self.landing_flat_disp),
+                (self.teleop_act, self.teleop_disp)):
+            logic.changed.connect(lambda l=logic, d=disp: _sync(l, d))
+            _sync(logic, disp)
+        # 统一句柄 (兼容旧 landing_act 单项语义, 其余引用方零改动)
+        self.landing_act = LandingActions(
+            self.landing_flat_act, self.landing_img_act, self.landing_pose_act,
+            self.landing_flat_disp, self.landing_img_disp,
+            self.landing_pose_disp)
         self._update_landing_menu_shape()   # 初始无算法 → 普通单项形态
         return self.takeover_btn
 
@@ -507,4 +540,4 @@ class ControlPanelsMixin:
         modes = algo.get('landing_modes') if algo is not None else None
         use_menu = bool(modes) and len(modes) > 1
         self.landing_menu.menuAction().setVisible(use_menu)
-        self.landing_flat_act.setVisible(not use_menu)
+        self.landing_flat_disp.setVisible(not use_menu)

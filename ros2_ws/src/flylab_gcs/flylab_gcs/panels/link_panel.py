@@ -8,6 +8,7 @@ uXRCE-DDS / MAVROS 互斥起停 (一次只开一条), 进程异常退出自动�
 from PyQt5.QtWidgets import QMenu, QToolButton
 
 from .. import config
+from . import ui_style
 from ..processes import ManagedProcess
 
 
@@ -22,7 +23,7 @@ class LinkPanelMixin:
     )
 
     def _build_link_button(self):
-        """通信链路工具按钮: 点击弹出链路菜单 (✓=开启中), 点已勾选项即停,
+        """通信链路工具按钮: 点击弹出链路菜单 (绿点=开启中), 点已标记项即停,
         点其他项先停旧的再开 (互斥)。按钮文字跟随当前链路。"""
         self.link_btn = QToolButton()
         self.link_btn.setText('通信链路')
@@ -38,15 +39,14 @@ class LinkPanelMixin:
         return self.link_btn
 
     def _rebuild_link_menu(self):
-        """重建链路菜单: 每条链路一个勾选项 (✓=开启中)。"""
+        """重建链路菜单: 每条链路一个选项 (绿点=开启中)。"""
         menu = self.link_btn.menu()
         menu.clear()
         running = self._selected_link()
         for key, text, cmd in self._LINKS:
             act = menu.addAction(text)
             act.setData(key)
-            act.setCheckable(True)
-            act.setChecked(key == running)
+            ui_style.set_menu_icon(act, key == running)
             act.setToolTip(' '.join(cmd))
 
     def _on_link_action(self, act):

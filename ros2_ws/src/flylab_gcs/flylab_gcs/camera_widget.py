@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (QFileDialog, QFrame, QGridLayout,
                            QVBoxLayout, QWidget)
 
 from . import config
+from .panels import ui_style
 from .camera_grabber import (DEFAULT_CAMERA, DEFAULT_CAMERAS, FILE_PREFIX,
                            LOCAL_PREFIX, Grabber)
 from .camera_sources import colorize_depth, list_local_cameras
@@ -410,8 +411,7 @@ class CameraViewWidget(QWidget):
             for raw in group:
                 act = menu.addAction(self._src_display(raw))
                 act.setData(raw)
-                act.setCheckable(True)
-                act.setChecked(raw == cur)
+                ui_style.set_menu_icon(act, raw == cur)
             if group:
                 menu.addSeparator()
         menu.addAction(FILE_OPEN_ITEM)
