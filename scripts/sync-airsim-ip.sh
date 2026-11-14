@@ -39,6 +39,8 @@ FILES=(
     /root/flylab/ros2_ws/src/flylab_flight/configs/settings.json
     /root/flylab/ros2_ws/src/flylab_flight/configs/*/settings.json
     /mnt/c/Users/*/Documents/AirSim/settings.json
+    # 机型模板 (换机型时复制成 settings.json, 不同步会把过期 IP 带回来)
+    /mnt/c/Users/*/Documents/AirSim/settings_*.json
 )
 for f in "${FILES[@]}"; do
     [ -f "$f" ] || continue

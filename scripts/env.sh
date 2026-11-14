@@ -43,6 +43,11 @@ case $_wsl_ip in
 esac
 unset _wsl_ip
 
+# AirSim ControlIp 同步: NAT 模式下 WSL IP 重启常变, ControlIp 过期会让
+# 解锁/起飞类 RPC 全部 "Request timed out" (心跳发不到 PX4)。静默自适应
+# 同步 (mirrored→127.0.0.1 / NAT→WSL IP); UE 启动时才读, 改完需重启 UE
+bash /root/flylab/scripts/sync-airsim-ip.sh
+
 # Fast DDS: 同机大图 (900KB 显示帧转发等) 走 SHM 零拷贝, 避开 UDP 分片
 # 背压 (实测 30Hz 原始图转发 publish 阻塞 ~80ms/帧, 见 fastrtps_shm.xml 头注)
 export FASTRTPS_DEFAULT_PROFILES_FILE=/root/flylab/scripts/fastrtps_shm.xml

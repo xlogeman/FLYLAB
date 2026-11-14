@@ -324,6 +324,13 @@ ALGORITHMS = [
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
          'panel': 'track'},   # 右栏面板: 框选/追踪按钮 + 状态 (SECTIONS['track'])
+        # ORTrack (CVPR 2025): 模板匹配式单目标追踪, 无需检测候选,
+        # 框选即锁定; 与 yolo26s-track 共用右栏追踪面板与框选/开始按钮
+        {'name': 'ORTrack (CVPR25)',
+         'cmd': ['ros2', 'run', 'flylab_vision', 'ortrack_node',
+                 '--ros-args', '-p', 'device:=cuda'],
+         'start': 'track_start', 'stop': 'track_stop',
+         'panel': 'track'},
     ]},
 ]
 
