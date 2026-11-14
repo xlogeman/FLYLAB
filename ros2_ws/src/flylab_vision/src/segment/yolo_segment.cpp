@@ -14,7 +14,7 @@
 ///
 /// 与 yolo_detector 的差异: 输出多一路原型掩码 + 32 个掩码系数通道,
 /// 解码后多做掩码还原与轮廓提取; 检测框部分流程完全相同。
-#include "yolo/yolo_segment.hpp"
+#include "segment/yolo_segment.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,7 +28,7 @@
 
 #include <opencv2/imgproc.hpp>
 
-#include "yolo/yolo_detector.hpp"   // coco_names() (分割同为 COCO 80 类)
+#include "detect/yolo_detector.hpp"   // coco_names() (分割同为 COCO 80 类)
 
 namespace flylab_vision
 {

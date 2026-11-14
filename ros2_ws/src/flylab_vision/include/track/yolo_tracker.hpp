@@ -8,7 +8,7 @@
 
 #include <opencv2/core.hpp>
 
-#include "yolo/yolo_detector.hpp"
+#include "detect/yolo_detector.hpp"
 
 namespace flylab_vision
 {

@@ -59,30 +59,32 @@ endfunction()
 # ---------- 核心算法库 (无 ROS 依赖) ----------
 flylab_algo(aruco_detector src/aruco/aruco_detector.cpp)
 
-# 各任务一个子目录: src/yolo/<task>/ (算法库 + 展示节点成对放置)
-flylab_algo(yolo_detector src/yolo/detector/yolo_detector.cpp ${ORT_LIB})
-flylab_algo(yolo_classifier src/yolo/classifier/yolo_classifier.cpp ${ORT_LIB})
-flylab_algo(yolo_depth src/yolo/depth/yolo_depth.cpp ${ORT_LIB})
-flylab_algo(yolo_obb src/yolo/obb/yolo_obb.cpp ${ORT_LIB})
-flylab_algo(yolo_pose src/yolo/pose/yolo_pose.cpp ${ORT_LIB})
+# 任务一个子目录: src/<task>/ (命名与 models/<task>/ 对齐, 同一任务可挂
+# 多种算法/模型变体), 算法库 + 展示节点成对放置
+flylab_algo(yolo_detector src/detect/yolo_detector.cpp ${ORT_LIB})
+flylab_algo(yolo_classifier src/classify/yolo_classifier.cpp ${ORT_LIB})
+flylab_algo(yolo_depth src/depth/yolo_depth.cpp ${ORT_LIB})
+flylab_algo(yolo_obb src/obb/yolo_obb.cpp ${ORT_LIB})
+flylab_algo(yolo_pose src/pose/yolo_pose.cpp ${ORT_LIB})
 # 链接 yolo_detector 复用 coco_names() (分割同为 COCO 80 类)
-flylab_algo(yolo_segment src/yolo/segment/yolo_segment.cpp yolo_detector ${ORT_LIB})
-flylab_algo(yolo_semantic src/yolo/semantic/yolo_semantic.cpp ${ORT_LIB})
-# 目标追踪: ReID 单目标跟踪 (链接 yolo_detector 复用 YoloDetection/色板)
-flylab_algo(yolo_tracker src/yolo/track/yolo_tracker.cpp yolo_detector ${ORT_LIB})
+flylab_algo(yolo_segment src/segment/yolo_segment.cpp yolo_detector ${ORT_LIB})
+flylab_algo(yolo_semantic src/semantic/yolo_semantic.cpp ${ORT_LIB})
+# 目标追踪任务 (src/track/, 对应 models/track/): ReID 单目标跟踪
+# (链接 yolo_detector 复用 YoloDetection/色板) + ORTrack 模板匹配式
+flylab_algo(yolo_tracker src/track/yolo_tracker.cpp yolo_detector ${ORT_LIB})
 # 目标追踪: ORTrack 模板匹配式单目标跟踪 (CVPR 2025, 纯模板+搜索区前向)
 flylab_algo(ortrack src/track/ortrack.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
-flylab_node(yolo_detector_node src/yolo/detector/yolo_detector_node.cpp yolo_detector)
-flylab_node(yolo_cls_node src/yolo/classifier/yolo_cls_node.cpp yolo_classifier)
-flylab_node(yolo_depth_node src/yolo/depth/yolo_depth_node.cpp yolo_depth)
-flylab_node(yolo_obb_node src/yolo/obb/yolo_obb_node.cpp yolo_obb)
-flylab_node(yolo_pose_node src/yolo/pose/yolo_pose_node.cpp yolo_pose)
-flylab_node(yolo_segment_node src/yolo/segment/yolo_segment_node.cpp yolo_segment)
-flylab_node(yolo_semantic_node src/yolo/semantic/yolo_semantic_node.cpp yolo_semantic)
-flylab_node(yolo_track_node src/yolo/track/yolo_track_node.cpp yolo_tracker yolo_detector)
+flylab_node(yolo_detector_node src/detect/yolo_detector_node.cpp yolo_detector)
+flylab_node(yolo_cls_node src/classify/yolo_cls_node.cpp yolo_classifier)
+flylab_node(yolo_depth_node src/depth/yolo_depth_node.cpp yolo_depth)
+flylab_node(yolo_obb_node src/obb/yolo_obb_node.cpp yolo_obb)
+flylab_node(yolo_pose_node src/pose/yolo_pose_node.cpp yolo_pose)
+flylab_node(yolo_segment_node src/segment/yolo_segment_node.cpp yolo_segment)
+flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic)
+flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------

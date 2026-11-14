@@ -10,7 +10,7 @@
 /// 与 yolo_detector 的差异: 第 5 通道是角度, NMS 必须用旋转框 IoU
 /// (cv::dnn::NMSBoxes 只支持水平框) —— 自定义贪心抑制, 交叠面积用
 /// cv::rotatedRectangleIntersection 求。
-#include "yolo/yolo_obb.hpp"
+#include "obb/yolo_obb.hpp"
 
 #include <algorithm>
 #include <array>

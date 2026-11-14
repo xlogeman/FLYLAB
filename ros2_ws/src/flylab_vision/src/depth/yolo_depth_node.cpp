@@ -28,7 +28,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_depth.hpp"
+#include "depth/yolo_depth.hpp"
 
 namespace flylab_vision
 {

@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_classifier.hpp"
+#include "classify/yolo_classifier.hpp"
 
 namespace flylab_vision
 {

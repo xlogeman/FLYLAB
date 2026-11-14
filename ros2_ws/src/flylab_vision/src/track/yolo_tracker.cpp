@@ -9,7 +9,7 @@
 ///
 /// 为什么用 onnxruntime: 同 YoloDetector (系统 OpenCV 4.5.x DNN 解析不了
 /// yolo26 attention 的动态 Split 节点), 库随包发布在 thirdparty/onnxruntime/。
-#include "yolo/yolo_tracker.hpp"
+#include "track/yolo_tracker.hpp"
 
 #include <algorithm>
 #include <array>

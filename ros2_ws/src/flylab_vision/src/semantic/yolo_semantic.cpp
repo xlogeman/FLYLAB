@@ -11,7 +11,7 @@
 ///
 /// 与 yolo_segment (实例分割) 的差异: 无检测框/原型掩码/NMS, 输出是整幅
 /// 像素级类别图, 展示走 cityscapes 配色缩略图进右栏面板 (to_semantic_info_json)。
-#include "yolo/yolo_semantic.hpp"
+#include "semantic/yolo_semantic.hpp"
 
 #include <algorithm>
 #include <array>

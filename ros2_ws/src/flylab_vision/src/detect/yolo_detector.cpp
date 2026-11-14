@@ -10,7 +10,7 @@
 /// 解析不了 yolo26 attention 里的动态 Split 节点 (已实测), python 侧
 /// pip OpenCV 5.0 虽然支持但 C++ 侧不能依赖。库随包发布在
 /// thirdparty/onnxruntime/, 安装时拷到 lib/ 由 rpath 解析。
-#include "yolo/yolo_detector.hpp"
+#include "detect/yolo_detector.hpp"
 
 #include <algorithm>
 #include <array>

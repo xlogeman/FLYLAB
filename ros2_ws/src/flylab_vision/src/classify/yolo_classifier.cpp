@@ -9,7 +9,7 @@
 /// 标签解析: Ultralytics 导出把类别名表写进 ONNX metadata "names"
 ///   ("{0: 'tench, Tinca tinca', 1: 'goldfish, Carassius auratus', ...}"),
 ///   直接从模型里取, 无需随包分发标签文件; 取不到再走外部文件/占位名。
-#include "yolo/yolo_classifier.hpp"
+#include "classify/yolo_classifier.hpp"
 
 #include <algorithm>
 #include <array>

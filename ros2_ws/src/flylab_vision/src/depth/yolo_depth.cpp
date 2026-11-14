@@ -9,7 +9,7 @@
 /// 裁 letterbox 无效区 -> (裸 log 导出时才 exp) -> 缩放回原帧
 /// (逐像素对齐原图); 展示走 min-max 归一化 + turbo 伪彩 + JPEG(base64)
 /// 经 image 图元画中画叠加。
-#include "yolo/yolo_depth.hpp"
+#include "depth/yolo_depth.hpp"
 
 #include <algorithm>
 #include <array>

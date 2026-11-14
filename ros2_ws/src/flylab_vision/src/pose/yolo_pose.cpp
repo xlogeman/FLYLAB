@@ -11,7 +11,7 @@
 /// 与 yolo_detector 的差异: 通道尾部是关键点 (x/y/conf 交错), 解码时按
 /// (x - pad)/scale 映射回原图; NMS 用水平框即可 (cv::dnn::NMSBoxes 同思路,
 /// 这里手写贪心保持与 obb 一致的风格)。
-#include "yolo/yolo_pose.hpp"
+#include "pose/yolo_pose.hpp"
 
 #include <algorithm>
 #include <array>

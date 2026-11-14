@@ -31,8 +31,8 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_detector.hpp"
-#include "yolo/yolo_tracker.hpp"
+#include "detect/yolo_detector.hpp"
+#include "track/yolo_tracker.hpp"
 
 namespace flylab_vision
 {

@@ -30,7 +30,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_semantic.hpp"
+#include "semantic/yolo_semantic.hpp"
 
 namespace flylab_vision
 {

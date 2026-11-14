@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_pose.hpp"
+#include "pose/yolo_pose.hpp"
 
 namespace flylab_vision
 {

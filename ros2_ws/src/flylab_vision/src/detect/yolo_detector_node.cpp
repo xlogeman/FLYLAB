@@ -1,18 +1,17 @@
 // Copyright 2026 flylab
-/// YOLO OBB (旋转框) 检测 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
+/// YOLO 目标检测 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
 ///
-/// 链路 (与 yolo_detector_node 相同, 话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
+/// 链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
-///   2. 工具按钮: /flylab/vision_cmd 收 obb_start / obb_stop 启停
-///   3. 画面叠加: 检测结果转 JSON 标注发 /flylab/annotations
-///      (组名 "obb", 4 角点闭合多边形 + 类别置信度文字)
+///   2. 工具按钮: /flylab/vision_cmd 收 detect_start / detect_stop 启停
+///   3. 画面叠加: 检测结果转 JSON 标注发 /flylab/annotations (组名 "yolo")
 ///
-/// 模型默认取 share/flylab_vision/models/obb/yolo26s-obb.onnx
-/// (CMakeLists 安装), 可用 model 参数覆盖; 默认输入边长 1024。
+/// 模型默认取 share/flylab_vision/models/detect/yolo26s.onnx
+/// (CMakeLists 安装), 可用 model 参数覆盖。
 ///
 /// 运行:
-///   ros2 run flylab_vision yolo_obb_node
-///   ros2 run flylab_vision yolo_obb_node --ros-args
+///   ros2 run flylab_vision yolo_detector_node
+///   ros2 run flylab_vision yolo_detector_node --ros-args
 ///       -p model:=/path/to/xx.onnx -p conf:=0.35 -p device:=cuda
 #include <algorithm>
 #include <memory>
@@ -21,30 +20,30 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
-#include "yolo/yolo_obb.hpp"
+#include "detect/yolo_detector.hpp"
 
 namespace flylab_vision
 {
 
-class YoloObbNode final : public DisplayVisionNode
+class YoloDetectorNode final : public DisplayVisionNode
 {
 public:
-  YoloObbNode()
-  : DisplayVisionNode("yolo_obb_node",
-      {"obb_start", "obb_stop", "obb", "OBB 检测"})
+  YoloDetectorNode()
+  : DisplayVisionNode("yolo_detector_node",
+      {"detect_start", "detect_stop", "yolo", "检测"})
   {
     // ---------- 参数 ----------
     const auto model = declare_parameter<std::string>(
-      "model", default_model_path("obb", "yolo26s-obb.onnx"));
-    const auto input_size = declare_parameter<int>("input_size", 1024);
+      "model", default_model_path("detect", "yolo26s.onnx"));
+    const auto input_size = declare_parameter<int>("input_size", 640);
     const auto conf = declare_parameter<double>("conf", 0.25);
     const auto iou = declare_parameter<double>("iou", 0.45);
     const auto device = declare_parameter<std::string>("device", "cpu");
-    // 逗号分隔的类别名过滤器, 空 = 全部 15 类
+    // 逗号分隔的类别名过滤器, 空 = 全部 80 类
     const auto classes = declare_parameter<std::string>("classes", "");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
-    YoloObbConfig cfg;
+    YoloConfig cfg;
     cfg.model_path = model;
     cfg.input_size = input_size;
     cfg.conf_thres = static_cast<float>(conf);
@@ -54,7 +53,7 @@ public:
       std::stringstream ss(classes);
       std::string name;
       while (std::getline(ss, name, ',')) {
-        const auto & names = dota_names();
+        const auto & names = coco_names();
         const auto it = std::find(names.begin(), names.end(), name);
         if (it == names.end()) {
           throw std::invalid_argument("未知类别名: " + name);
@@ -62,7 +61,7 @@ public:
         cfg.class_filter.push_back(static_cast<int>(it - names.begin()));
       }
     }
-    detector_ = std::make_unique<YoloObbDetector>(cfg);
+    detector_ = std::make_unique<YoloDetector>(cfg);
     RCLCPP_INFO(
       get_logger(),
       "模型加载完成: %s [%s, input %d, conf %.2f, iou %.2f]",
@@ -74,7 +73,7 @@ public:
         detector_->cuda_error().c_str());
     }
 
-    log_ready("YOLO OBB");
+    log_ready("YOLO 检测");
   }
 
 protected:
@@ -87,7 +86,7 @@ protected:
 
   std::string clear_json() const override
   {
-    return to_annotations_json(std::vector<YoloObbDetection>{}, algo_group());
+    return to_annotations_json(std::vector<YoloDetection>{}, algo_group());
   }
 
   void log_first_infer(long ms) override
@@ -97,7 +96,7 @@ protected:
   }
 
 private:
-  std::unique_ptr<YoloObbDetector> detector_;
+  std::unique_ptr<YoloDetector> detector_;
   size_t last_count_ = 0;
 };
 
@@ -106,7 +105,7 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<flylab_vision::YoloObbNode>();
+  auto node = std::make_shared<flylab_vision::YoloDetectorNode>();
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node);
   executor.spin();
