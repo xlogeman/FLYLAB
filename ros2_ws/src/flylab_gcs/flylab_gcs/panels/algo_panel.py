@@ -27,7 +27,8 @@ class AlgoPanelMixin:
         self.algo_btn.setToolTip(
             '视觉算法 (flylab_vision): 一级菜单=任务分组, 二级=具体算法/模型。'
             '选择即运行 (拉起进程 + 发启动指令, 结果叠加到画面); '
-            '再点运行中的算法即停止, 选其他停旧换新')
+            '再点运行中的算法即停止, 选其他停旧换新; '
+            '菜单末尾"停止算法"一键停止运行中的算法')
         menu = QMenu(self.algo_btn)
         self.algo_btn.setMenu(menu)
         menu.aboutToShow.connect(self._rebuild_algo_menu)
@@ -64,6 +65,13 @@ class AlgoPanelMixin:
                 act.triggered.connect(
                     lambda _checked=False, name=algo['name']:
                         self._on_algo_name(name))
+        # 末尾固定"停止当前算法"项: 免去进二级菜单找运行中条目的操作。
+        # 无算法运行时置灰 (红点也清空), 运行中显示算法名
+        menu.addSeparator()
+        stop_act = menu.addAction('停止算法')
+        stop_act.setEnabled(cur is not None)
+        ui_style.set_stop_menu_icon(stop_act, cur is not None)
+        stop_act.triggered.connect(self._stop_algo)
 
     def _on_algo_name(self, name):
         """菜单点击: 未运行 → 启动 (拉起进程 + 发 start 指令);
