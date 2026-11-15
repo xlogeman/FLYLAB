@@ -4,9 +4,10 @@
 /// 链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 track_start / track_stop 启停
-///   3. 框选目标: /flylab/track_roi (latched) 收地面站右栏"框选目标"按钮
-///      框出的矩形 {"roi":[x,y,w,h]} (显示帧像素)
-///   4. 开始/取消: /flylab/vision_cmd 收 track_begin / track_end
+///   3. 框选目标: /flylab/track_roi (latched) 收地面站画面拖拽框选的
+///      矩形 {"roi":[x,y,w,h]} (显示帧像素), 松开即自动开始
+///   4. 开始: /flylab/vision_cmd 收 track_begin (松开框选自动发送);
+///      追踪中重新框选即换目标 (复位后重新锁定), 停止靠 track_stop
 ///   5. 画面叠加: 检测/目标框转 JSON 标注发 /flylab/annotations (组名 "track")
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
 ///
@@ -112,10 +113,15 @@ public:
 protected:
   std::string process(const cv::Mat & bgr, int /*frame_width*/) override
   {
-    // begin 请求在帧上下文里处理: 锁定需要当前帧来裁外观块
+    // begin 请求在帧上下文里处理: 锁定需要当前帧来裁外观块;
+    // 追踪中带新框选的 begin 视为换目标 (复位后重新锁定)
     if (begin_req_) {
       begin_req_ = false;
-      if (!tracking_) {
+      if (has_roi_) {
+        if (tracking_) {
+          tracking_ = false;
+          tracker_->reset();
+        }
         begin_tracking(bgr);
       }
     }
@@ -205,6 +211,8 @@ private:
       static_cast<float>(v[0]), static_cast<float>(v[1]),
       static_cast<float>(v[2]), static_cast<float>(v[3]));
     has_roi_ = true;
+    // 松开即开始: 帧上下文里锁定 (不依赖后续 begin; 追踪中即换目标)
+    begin_req_ = true;
     RCLCPP_INFO(
       get_logger(), "收到目标框选区域: (%.0f, %.0f, %.0fx%.0f)",
       roi_.x, roi_.y, roi_.width, roi_.height);
@@ -213,30 +221,16 @@ private:
 
   void on_ctl(const std_msgs::msg::String & msg)
   {
-    if (msg.data == "track_begin" && !tracking_) {
-      begin_req_ = true;   // 帧上下文里锁定 (需要裁外观块)
-    } else if (msg.data == "track_end" && tracking_) {
-      tracking_ = false;
-      tracker_->reset();
-      track_state_ = "IDLE";   // ROI 已随开始追踪消费, 需重新框选
-      // 清面板快照: 否则 IDLE 态残留上次目标的类别/尺寸/相似度
-      track_box_ = cv::Rect2f();
-      last_name_.clear();
-      last_conf_ = 0.f;
-      last_sim_ = 0.f;
-      RCLCPP_INFO(get_logger(), "追踪已取消 (重新追踪请重新框选目标)");
-      publish_info(0, true);
+    if (msg.data == "track_begin") {
+      // 帧上下文里锁定 (需要裁外观块); 追踪中收到且带新框选即换目标
+      begin_req_ = true;
     }
   }
 
-  /// 开始追踪: 框选区内 IoU 最大的检测作目标裁块出外观向量; 区内无
-  /// 检测时直接用框选区域兜底 (检测器漏检的目标也能跟)
+  /// 开始追踪 (调用方保证 has_roi_): 框选区内 IoU 最大的检测作目标
+  /// 裁块出外观向量; 区内无检测时直接用框选区域兜底 (漏检目标也能跟)
   void begin_tracking(const cv::Mat & bgr)
   {
-    if (!has_roi_) {
-      RCLCPP_WARN(get_logger(), "尚未框选目标, 无法开始追踪");
-      return;
-    }
     const auto dets = detector_->detect(bgr);
     const YoloDetection * best = nullptr;
     float best_iou = 0.01f;   // 低于此 IoU 视为框内无检测
@@ -349,7 +343,8 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr roi_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ctl_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;
-  // 追踪状态 (proc_group_ 单线程访问; track_end 在 ROS 回调线程处理)
+  // 追踪状态 (proc_group_ 单线程访问; on_roi/on_ctl 在 ROS 回调线程处理,
+  // begin 经 begin_req_ 落到帧上下文, 与 ortrack_node 同一约定)
   cv::Rect2f roi_;
   bool has_roi_ = false;
   bool tracking_ = false;

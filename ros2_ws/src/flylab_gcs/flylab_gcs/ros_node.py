@@ -221,8 +221,8 @@ class GroundStationNode(Node):
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
         # 目标追踪 ROI 发布器 (latched 约定见 config.TRACK_ROI_TOPIC):
-        # 界面框选目标后把矩形发给 yolo_track_node, 后启动的节点一接入
-        # 即拿到当前框选区域
+        # 界面框选目标后把矩形发给追踪节点 (yolo_track/ortrack), 后启动
+        # 的节点一接入即拿到当前框选区域
         self.track_roi_pub = self.create_publisher(
             String, config.TRACK_ROI_TOPIC,
             QoSProfile(

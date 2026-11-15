@@ -173,15 +173,13 @@ LANDING_YAW_OFFSET_MAX = 360       # 度 (上限)
 LANDING_YAW_OFFSET_STEP = 5        # 度 (上下箭头单步)
 LANDING_YAW_OFFSET_DEFAULT = 0     # 度 (初始显示值, 与 aruco.yaml 的 yaw_offset_deg 一致)
 
-# ---------- 目标追踪 (右栏"算法信息"面板按钮交互) ----------
-# 流程: 菜单启动 yolo_track_node (逐帧检测) → 点面板"框选目标"在画面拖出
-# 矩形 (回车/双击确认) → ROI 经 latched 话题发给节点 → 点"开始追踪"锁定
-# (框选区检测裁块出 ReID 外观向量, 逐帧余弦相似度续跟), 再点"取消追踪"
-# 结束。ROI 进入追踪即消费 (画面黄框销毁), 取消后需重新框选。
-# 门控: 开始追踪需先框选; 追踪中不能再框选 (见 algo_output_panel)。
+# ---------- 目标追踪 (画面框选即追踪) ----------
+# 流程: 菜单启动追踪节点 (yolo_track/ortrack) → 画面拖出矩形松开即发 ROI
+# (latched) + track_begin 自动锁定 (yolo: 框选区检测裁块出 ReID 外观向量,
+# 逐帧余弦相似度续跟; ortrack: 直接裁 128 模板逐帧匹配), 追踪中重新框选
+# 即换目标; 停止靠工具栏"停止算法" (无独立取消指令)。ROI 进入追踪即消费。
 TRACK_ROI_TOPIC = '/flylab/track_roi'
 TRACK_BEGIN_CMD = 'track_begin'
-TRACK_END_CMD = 'track_end'
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）
@@ -323,7 +321,7 @@ ALGORITHMS = [
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_track_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
-         'panel': 'track'},   # 右栏面板: 框选/追踪按钮 + 状态 (SECTIONS['track'])
+         'panel': 'track'},   # 右栏面板: 追踪状态卡片 (框选在画面完成)
         # ORTrack (CVPR 2025): 模板匹配式单目标追踪, 无需检测候选,
         # 框选即锁定; 与 yolo26s-track 共用右栏追踪面板与框选/开始按钮
         {'name': 'ORTrack (CVPR25)',

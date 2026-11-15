@@ -24,7 +24,6 @@ class VideoLabel(QLabel):
     (只取消画框, 不退出框选模式)。"""
 
     bbox_selected = pyqtSignal(int, int, int, int)   # 原图坐标 x, y, w, h
-    selection_cancelled = pyqtSignal()
     zoom_step = pyqtSignal(int)    # 数字变焦: +1 放大 / -1 缩小 (滚轮)
     zoom_reset = pyqtSignal()      # 数字变焦复位 (双击画面)
     pan_moved = pyqtSignal(int, int)   # 变焦拖动平移: 显示坐标位移 (px)
@@ -83,9 +82,7 @@ class VideoLabel(QLabel):
             self._cancel_selection()
 
     def _cancel_selection(self):
-        if self._frozen:
-            self._frozen = False
-            self.selection_cancelled.emit()
+        self._frozen = False
         self._sel_start = self._sel_cur = None
         self._redraw()
 

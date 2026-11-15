@@ -9,14 +9,16 @@
 /// 链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 track_start / track_stop 启停
-///   3. 框选目标: /flylab/track_roi (latched) 收 {"roi":[x,y,w,h]}
-///   4. 开始/取消: /flylab/vision_cmd 收 track_begin / track_end
+///   3. 框选目标: /flylab/track_roi (latched) 收 {"roi":[x,y,w,h]},
+///      松开即自动开始
+///   4. 开始: /flylab/vision_cmd 收 track_begin (松开框选自动发送);
+///      追踪中重新框选即换目标 (重裁模板重新锁定), 停止靠 track_stop
 ///   5. 画面叠加: 目标框转 JSON 标注发 /flylab/annotations (组名 "track")
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
 ///
-/// 流程: track_start 启动 → 右栏"框选目标"框住目标 → track_begin 锁定
-/// (当前帧裁 128x128 模板, 全程固定不更新) → 逐帧以上帧结果为中心裁
-/// 256x256 搜索区推理, Hann 窗加权解码目标框。track_end 取消后需重新框选。
+/// 流程: track_start 启动 → 画面拖框框住目标 (松开即自动锁定) → 当前帧
+/// 裁 128x128 模板, 全程固定不更新 → 逐帧以上帧结果为中心裁
+/// 256x256 搜索区推理, Hann 窗加权解码目标框; 追踪中重新框选即换目标。
 ///
 /// 模型: models/track/ortrack_deit_tiny.onnx (CMakeLists 安装, 可用
 /// model 参数覆盖); device:=cuda 时 CUDA EP 注册失败自动回退 CPU。
@@ -84,10 +86,14 @@ public:
 protected:
   std::string process(const cv::Mat & bgr, int /*frame_width*/) override
   {
-    // begin 请求在帧上下文里处理: 锁定需要当前帧来裁模板
+    // begin 请求在帧上下文里处理: 锁定需要当前帧来裁模板;
+    // 追踪中带新框选的 begin 视为换目标 (重裁模板重新锁定)
     if (begin_req_) {
       begin_req_ = false;
-      if (!tracker_->tracking()) {
+      if (has_roi_) {
+        if (tracker_->tracking()) {
+          tracker_->reset();   // 清旧模板, 随后 initialize 重锁新目标
+        }
         begin_tracking(bgr);
       }
     }
@@ -165,6 +171,8 @@ private:
       static_cast<float>(v[0]), static_cast<float>(v[1]),
       static_cast<float>(v[2]), static_cast<float>(v[3]));
     has_roi_ = true;
+    // 松开即开始: 帧上下文里锁定 (不依赖后续 begin; 追踪中即换目标)
+    begin_req_ = true;
     RCLCPP_INFO(
       get_logger(), "收到目标框选区域: (%.0f, %.0f, %.0fx%.0f)",
       roi_.x, roi_.y, roi_.width, roi_.height);
@@ -173,25 +181,15 @@ private:
 
   void on_ctl(const std_msgs::msg::String & msg)
   {
-    if (msg.data == "track_begin" && !tracker_->tracking()) {
-      begin_req_ = true;   // 帧上下文里锁定 (需要裁模板)
-    } else if (msg.data == "track_end" && tracker_->tracking()) {
-      tracker_->reset();
-      track_state_ = "IDLE";   // ROI 已随开始追踪消费, 需重新框选
-      track_box_ = cv::Rect2f();
-      last_score_ = 0.f;
-      RCLCPP_INFO(get_logger(), "追踪已取消 (重新追踪请重新框选目标)");
-      publish_info(true);
+    if (msg.data == "track_begin") {
+      // 帧上下文里锁定 (需要裁模板); 追踪中收到且带新框选即换目标
+      begin_req_ = true;
     }
   }
 
-  /// 开始追踪: 框选区域即目标, 当前帧裁模板锁定
+  /// 开始追踪 (调用方保证 has_roi_): 框选区域即目标, 当前帧裁模板锁定
   void begin_tracking(const cv::Mat & bgr)
   {
-    if (!has_roi_) {
-      RCLCPP_WARN(get_logger(), "尚未框选目标, 无法开始追踪");
-      return;
-    }
     if (tracker_->initialize(bgr, roi_)) {
       tracking_started();
       RCLCPP_INFO(
