@@ -224,7 +224,7 @@ private:
     }
   }
 
-  /// 锁定成功: ROI 已消费 (画面黄框随之消失), 取消追踪后需重新框选
+  /// 锁定成功: ROI 已消费 (画面黄框随之消失); 停止算法后再框选重新开始
   void tracking_started()
   {
     has_roi_ = false;

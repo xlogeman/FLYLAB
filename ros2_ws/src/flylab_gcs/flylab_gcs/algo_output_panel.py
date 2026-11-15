@@ -24,6 +24,8 @@
   landing  —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
   depth    —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
   semantic —— yolo_semantic_node 语义分割 (配色类别图 + 类别图例)
+  seg      —— yolo_segment_node 实例分割 (前 3 实例并列表格, 按置信度降序)
+  pose     —— yolo_pose_node 姿态估计 (前 3 人体并列表格, 按置信度降序)
   track    —— yolo_track_node/ortrack_node 目标追踪 (状态字段卡片, 框选在画面完成)
 
 分组 spec 可带 'image': True —— 分组顶部多一个固定高度 (IMG_ROW_HEIGHT)
@@ -205,7 +207,8 @@ def _track_fields(data):
     return out
 
 
-# 分组注册表: key (= 消息 src) -> {title, title_fn, fields}
+# 分组注册表: key (= 消息 src) -> {title, title_fn, fields} 或表格模式
+# {table: 列数, rows: [(属性, extract(item, col))]}
 # fields: [(label, extract)] —— extract(data) -> 文本 | None (显示 '—')
 # | HIDE_ROW (整行隐藏)
 # 行序在并列显示的分组间保持语义对应 (同行 = 同类信息), 新分组接入时照此排列
@@ -258,6 +261,40 @@ SECTIONS = {
             # 图例长度逐帧变化: 固定 3 行高防右栏布局跳动 (见 _Section opts)
             ('图例', lambda d: _semantic_fields(d)['图例'], {'wrap': 3}),
             ('画幅', lambda d: _semantic_fields(d)['画幅']),
+        ],
+    },
+    'seg': {
+        'title': '实例分割',
+        # 表格模式: 前 3 个实例并列成列 (节点端按置信度降序), 目标数不足整列隐藏;
+        # 检出数为汇总行, 置于表格上方跨全部列
+        'table': 3,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 个"),
+        'rows': [
+            ('类别', lambda item, i: item.get('cls') or None),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+            ('占比', lambda item, i: f"{item.get('area', 0):.1f}%"),
+        ],
+    },
+    'pose': {
+        'title': '姿态估计',
+        # 表格模式: 前 3 个人体并列成列 (节点端按置信度降序), 目标数不足整列
+        # 隐藏; 检出数为汇总行置于表格上方跨全部列 (单类 person 无类别行)
+        'table': 3,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 人"),
+        'rows': [
+            # 编号 = 列序 (1 起始), 与画面上人体框左上角的编号对应
+            ('编号', lambda item, i: str(i + 1)),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+            ('可见点', lambda item, i:
+                f"{item.get('kpts', 0)}/{item.get('kpts_total', 17)}"),
         ],
     },
     'track': {
@@ -313,14 +350,27 @@ class _ImageRow(QLabel):
 
 
 class _Section(QGroupBox):
-    """单个算法分组: 固定字段表 + 超时置灰; title_fn 可随数据动态改标题。"""
+    """单个算法分组: 固定字段表 + 超时置灰; title_fn 可随数据动态改标题。
+    表格模式 (spec['table'] = 列数): 每个目标一列并列显示, 属性行共享
+    标签 (spec['rows'], extract(item, col) -> 文本|None), 目标数不足时
+    整列隐藏 —— 供实例分割等多目标摘要用。"""
 
     def __init__(self, spec, parent=None):
         super().__init__(spec['title'], parent)
-        self._fields = spec['fields']
         self._title_fn = spec.get('title_fn')
         self._texts = {}   # 行 -> 上次文本 (相同不重绘)
         self._last_img = None   # 上次渲染的 "img" base64 (相同帧不重复解码)
+        # 两种模式共用 update_entry 的公共前缀, 先统一初始化默认值
+        self._img = None
+        self._extracts = []
+        self._rows = []   # (key, val) 标签对, HIDE_ROW 时整行 setVisible(False)
+        self._vals = []
+        self._table_cols = spec.get('table', 0)
+        if self._table_cols:
+            self._build_table(spec)
+            self.update_entry(None, time.monotonic())   # 初始占位
+            return
+        self._fields = spec['fields']
         form = QFormLayout(self)
         form.setContentsMargins(6, 2, 6, 4)
         form.setSpacing(1)
@@ -330,9 +380,6 @@ class _Section(QGroupBox):
         self._img = _ImageRow(IMG_ROW_HEIGHT) if spec.get('image') else None
         if self._img is not None:
             form.addRow(self._img)
-        self._extracts = []
-        self._rows = []   # (key, val) 标签对, HIDE_ROW 时整行 setVisible(False)
-        self._vals = []
         for lbl, extract, *rest in self._fields:
             opts = rest[0] if rest else {}
             key = QLabel(lbl + '：')
@@ -381,6 +428,9 @@ class _Section(QGroupBox):
                     self._img.set_image(pix)
                 else:
                     self._img.clear_image()
+        if self._table_cols:
+            self._update_table(data)
+            return
         if data is None:
             for val in self._vals:
                 self._set(val, '—')
@@ -393,6 +443,70 @@ class _Section(QGroupBox):
             val.setVisible(not hidden)
             if not hidden:
                 self._set(val, text if text is not None else '—')
+
+    def _build_table(self, spec):
+        """表格模式构造: 每个目标一列 (列数 = spec['table']), 属性行
+        共享左列标签; 行定义 spec['rows']: [(属性名, extract(item, col))]。
+        可选 spec['summary']: (标签, extract(data)) 汇总行 (如检出数),
+        置于表格上方、值跨全部数据列。"""
+        self._table_extracts = [extract for _lbl, extract in spec['rows']]
+        self._table_summary = spec.get('summary')
+        self._table_summary_val = None
+        self._table_cells = []   # [row][col] -> QLabel
+        grid = QGridLayout(self)
+        grid.setContentsMargins(6, 2, 6, 4)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(1)
+        grid.setColumnStretch(0, 0)
+        mono = 'font-family: monospace;'
+        row = 0
+        if self._table_summary is not None:
+            lbl, _extract = self._table_summary
+            grid.addWidget(QLabel(lbl + '：'), row, 0)
+            val = QLabel('—')
+            val.setStyleSheet(mono)
+            grid.addWidget(val, row, 1, 1, self._table_cols)
+            self._table_summary_val = val
+            row = 1
+        for col in range(self._table_cols):
+            grid.setColumnStretch(col + 1, 1)
+        for r, (_lbl, _extract) in enumerate(spec['rows'], start=row + 1):
+            key = QLabel(lbl + '：')
+            grid.addWidget(key, r, 0)
+            cells = []
+            for col in range(self._table_cols):
+                val = QLabel('—')
+                val.setStyleSheet(mono)
+                grid.addWidget(val, r, col + 1)
+                cells.append(val)
+            self._table_cells.append(cells)
+
+    def _update_table(self, data):
+        """表格模式刷新: data = {"items": [目标...]} (节点端按置信度降序,
+        取前 table_cols 列)。目标数不足时整列隐藏; 数据超时 (None) 保持
+        布局只把值置 '—' (与字段模式同约定, 置灰由标题色表达)。"""
+        if data is None:
+            if self._table_summary_val is not None:
+                self._set(self._table_summary_val, '—')
+            for cells in self._table_cells:
+                for val in cells:
+                    self._set(val, '—')
+            return
+        if self._table_summary_val is not None:
+            text = self._table_summary[1](data)
+            self._set(self._table_summary_val,
+                      text if text is not None else '—')
+        items = data.get('items', []) if data else []
+        n = min(len(items), self._table_cols)
+        for col in range(self._table_cols):
+            visible = col < n
+            for cells in self._table_cells:
+                cells[col].setVisible(visible)
+        for r, extract in enumerate(self._table_extracts):
+            for col in range(n):
+                text = extract(items[col], col)
+                self._set(self._table_cells[r][col],
+                          text if text is not None else '—')
 
     def _set(self, label, text):
         if self._texts.get(id(label)) != text:

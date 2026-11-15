@@ -323,7 +323,8 @@ std::vector<YoloPoseDetection> YoloPoseDetector::detect(const cv::Mat & bgr)
 }
 
 std::string to_annotations_json(
-  const std::vector<YoloPoseDetection> & results, const std::string & algo)
+  const std::vector<YoloPoseDetection> & results, const std::string & algo,
+  const std::vector<int> & ranks)
 {
   std::ostringstream os;
   os << "{\"algo\":\"" << algo << "\",\"items\":[";
@@ -338,8 +339,18 @@ std::string to_annotations_json(
     const int b = static_cast<int>(c[0]);
     const int nk = static_cast<int>(d.keypoints.size());
 
-    // 骨架连线 (两端关键点均可见才画, 每段一条不闭合 polyline)
+    // 画面编号 (框左上角, 骨架同色, 与右栏面板列序对应); 框顶贴近画面
+    // 上缘时改画到框内, 避免背景条出画
     bool first_item = true;
+    if (i < ranks.size() && ranks[i] > 0) {
+      first_item = false;
+      const float ty = d.box.y > 20.f ? d.box.y - 6.f : d.box.y + 18.f;
+      os << "{\"type\":\"text\",\"pos\":[" << num(d.box.x) << ","
+         << num(ty) << "],\"text\":\"" << ranks[i] << "\","
+         << "\"px\":16,\"color\":[" << r << "," << g << "," << b << "]}";
+    }
+
+    // 骨架连线 (两端关键点均可见才画, 每段一条不闭合 polyline)
     for (const auto & seg : kCocoSkeleton) {
       if (seg.first >= nk || seg.second >= nk) {
         continue;

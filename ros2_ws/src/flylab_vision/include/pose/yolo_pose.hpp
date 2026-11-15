@@ -71,9 +71,12 @@ private:
 ///   骨架连线 polyline (close=false) + 可见关键点 point
 /// (box/conf 只用于内部解码与 NMS, 不输出到画面 —— 单人类别下骨架
 /// 本身即完整定位信息, 再画框属于冗余)
+/// ranks: 每个结果的画面编号 (1 起始, 画在人体框左上角, 骨架同色;
+/// 0 = 不标号), 与右栏面板列序对应; 空容器 = 全部不标号。
 /// 坐标为原图像素, 图像源须与地面站显示的相机/分辨率一致。
 std::string to_annotations_json(
-  const std::vector<YoloPoseDetection> & results, const std::string & algo = "pose");
+  const std::vector<YoloPoseDetection> & results, const std::string & algo,
+  const std::vector<int> & ranks = {});
 
 }  // namespace flylab_vision
 

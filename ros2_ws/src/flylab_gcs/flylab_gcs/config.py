@@ -301,7 +301,8 @@ ALGORITHMS = [
         {'name': 'yolo26s-seg',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_segment_node',
                  '--ros-args', '-p', 'device:=cuda'],
-         'start': 'seg_start', 'stop': 'seg_stop'},
+         'start': 'seg_start', 'stop': 'seg_stop',
+         'panel': 'seg'},   # 右栏算法信息面板: 实例数 + 主目标摘要 (SECTIONS['seg'])
     ]},
     {'name': '语义分割', 'items': [
         {'name': 'yolo26s-sem',
@@ -314,7 +315,8 @@ ALGORITHMS = [
         {'name': 'yolo26s-pose',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_pose_node',
                  '--ros-args', '-p', 'device:=cuda'],
-         'start': 'pose_start', 'stop': 'pose_stop'},
+         'start': 'pose_start', 'stop': 'pose_stop',
+         'panel': 'pose'},   # 右栏算法信息面板: 人数 + 主目标摘要 (SECTIONS['pose'])
     ]},
     {'name': '目标追踪', 'items': [
         {'name': 'yolo26s-track',

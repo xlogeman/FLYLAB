@@ -259,7 +259,7 @@ private:
     if (ok) {
       tracking_ = true;
       // ROI 已消费: 进入追踪即销毁框选区域 (画面黄框随之消失, 未追踪
-      // 状态才画黄框); 取消追踪后需重新框选才能再开始
+      // 状态才画黄框); 停止算法后再框选重新开始
       has_roi_ = false;
       roi_ = cv::Rect2f();
       track_state_ = "TRACK";
