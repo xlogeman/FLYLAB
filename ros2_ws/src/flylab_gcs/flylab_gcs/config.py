@@ -267,7 +267,7 @@ ALGORITHMS = [
          # 下展开模式子项 (ArUco: 图像空间/3D 姿态); 未声明或单项的反控算法
          # 只显示普通"视觉反控"单项, 无下级选项
          'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
-         'panel': 'detect'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
+         'panel': 'aruco'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
     ]},
     {'name': '目标检测', 'items': [
         {'name': 'yolo26s (默认)',
@@ -275,14 +275,16 @@ ALGORITHMS = [
                  '--ros-args', '-p', 'device:=cuda'],
          # device 须用 cuda: CPU 推理 236~250ms/帧 (attention 结构跑不动),
          # cuda 17~25ms; 整链输出 ≈ 抓取帧率, 瓶颈在抓取侧而非推理侧
-         'start': 'detect_start', 'stop': 'detect_stop'},
+         'start': 'detect_start', 'stop': 'detect_stop',
+         'panel': 'detect'},   # 右栏算法信息面板: 检出数 + 前 3 目标摘要 (SECTIONS['detect'])
         # 变体在此往下加 (见上方"加模型变体"示例)
     ]},
     {'name': '图像分类', 'items': [
         {'name': 'yolo26s-cls',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_cls_node',
                  '--ros-args', '-p', 'device:=cuda'],
-         'start': 'cls_start', 'stop': 'cls_stop'},
+         'start': 'cls_start', 'stop': 'cls_stop',
+         'panel': 'cls'},   # 右栏算法信息面板: top-3 类别摘要 (SECTIONS['cls'])
     ]},
     {'name': '深度估计', 'items': [
         {'name': 'yolo26s-depth',
@@ -295,7 +297,8 @@ ALGORITHMS = [
         {'name': 'yolo26s-obb',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_obb_node',
                  '--ros-args', '-p', 'device:=cuda'],
-         'start': 'obb_start', 'stop': 'obb_stop'},
+         'start': 'obb_start', 'stop': 'obb_stop',
+         'panel': 'obb'},   # 右栏算法信息面板: 检出数 + 前 3 旋转框摘要 (SECTIONS['obb'])
     ]},
     {'name': '实例分割', 'items': [
         {'name': 'yolo26s-seg',

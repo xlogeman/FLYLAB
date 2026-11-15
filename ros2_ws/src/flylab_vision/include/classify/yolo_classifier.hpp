@@ -67,16 +67,6 @@ private:
   ClsConfig config_;
 };
 
-/// 分类结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
-/// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, top-k 逐行渲染为
-/// 右上角自由文字 (type=text, 右对齐, 右边距 12px): 第 1 行 top-1 用类别
-/// 稳定色, 其余灰白色。frame_width 为当前帧像素宽 (右对齐锚点需要);
-/// <=0 时退化为左上角显示。
-std::string to_cls_annotations_json(
-  const std::vector<ClsPrediction> & preds,
-  const std::string & algo = "yolo_cls",
-  int frame_width = 0);
-
 }  // namespace flylab_vision
 
 #endif  // FLYLAB_VISION__YOLO_CLASSIFIER_HPP_

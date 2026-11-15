@@ -15,7 +15,6 @@
 #include <array>
 #include <cmath>
 #include <fstream>
-#include <iomanip>
 #include <onnxruntime_cxx_api.h>
 #include <regex>
 #include <sstream>
@@ -124,38 +123,6 @@ std::vector<std::string> load_labels_file(const std::string & path)
     if (!line.empty()) {
       out.push_back(line);
     }
-  }
-  return out;
-}
-
-std::string num(double v, int prec = 2)
-{
-  std::ostringstream os;
-  os << std::fixed << std::setprecision(prec) << v;
-  return os.str();
-}
-
-/// 按类别 id 生成稳定的 BGR 颜色 (与 YoloDetector::class_color 同款逻辑,
-/// 库间不互相链接, 各自带一份)
-cv::Scalar cls_color(int class_id)
-{
-  const int hue = (class_id * 37) % 180;
-  cv::Mat hsv(1, 1, CV_8UC3), bgr;
-  hsv.at<cv::Vec3b>(0, 0) = cv::Vec3b(static_cast<uchar>(hue), 235, 255);
-  cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
-  const cv::Vec3b v = bgr.at<cv::Vec3b>(0, 0);
-  return cv::Scalar(v[0], v[1], v[2]);
-}
-
-/// JSON 字符串转义 (标签来自模型 metadata, 保守处理引号/反斜杠)
-std::string json_escape(const std::string & s)
-{
-  std::string out;
-  for (const char c : s) {
-    if (c == '"' || c == '\\') {
-      out += '\\';
-    }
-    out += c;
   }
   return out;
 }
@@ -356,41 +323,6 @@ std::vector<ClsPrediction> YoloClassifier::classify(const cv::Mat & bgr)
     results.push_back({id, impl_->labels[id], prob[id]});
   }
   return results;
-}
-
-std::string to_cls_annotations_json(
-  const std::vector<ClsPrediction> & preds, const std::string & algo,
-  int frame_width)
-{
-  std::ostringstream os;
-  os << "{\"algo\":\"" << algo << "\",\"items\":[";
-  // 右上角逐行文字 (右对齐, 右边距 12px): 地面站 HUD 在左上角, 右上角空闲;
-  // top-1 用类别稳定色 (同检测框配色逻辑), 其余灰白。
-  // 帧宽未知 (frame_width<=0) 时退化为左上角
-  const bool right = frame_width > 0;
-  const int x = right ? frame_width - 12 : 12;
-  const int y0 = right ? 26 : 70, dy = 28;
-  for (size_t i = 0; i < preds.size(); ++i) {
-    const auto & p = preds[i];
-    if (i > 0) {
-      os << ",";
-    }
-    std::ostringstream item;
-    item << "{\"type\":\"text\""
-         << (right ? ",\"align\":\"right\"" : "")
-         << ",\"pos\":[" << x << "," << y0 + dy * static_cast<int>(i) << "],"
-         << "\"text\":\"" << json_escape(p.name) << " " << num(p.conf) << "\"";
-    if (i == 0) {
-      const cv::Scalar c = cls_color(p.class_id);
-      item << ",\"color\":[" << static_cast<int>(c[0]) << ","
-           << static_cast<int>(c[1]) << "," << static_cast<int>(c[2]) << "]}";
-    } else {
-      item << ",\"color\":[255,255,255]}";
-    }
-    os << item.str();
-  }
-  os << "]}";
-  return os.str();
 }
 
 }  // namespace flylab_vision

@@ -221,7 +221,7 @@ private:
     }
     last_info_pub_ = t;
     std::ostringstream js;
-    js << "{\"src\":\"detect\",\"count\":" << count << ",\"largest\":";
+    js << "{\"src\":\"aruco\",\"count\":" << count << ",\"largest\":";
     if (largest == nullptr) {
       js << "null}";
     } else {

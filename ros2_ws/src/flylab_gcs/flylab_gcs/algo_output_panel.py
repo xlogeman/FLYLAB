@@ -20,12 +20,15 @@
    显示该分组, 停止自动移除
 
 内置分组:
-  detect   —— aruco_node 最大码摘要
+  aruco    —— aruco_node 最大码摘要
   landing  —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
   depth    —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
   semantic —— yolo_semantic_node 语义分割 (配色类别图 + 类别图例)
   seg      —— yolo_segment_node 实例分割 (前 3 实例并列表格, 按置信度降序)
   pose     —— yolo_pose_node 姿态估计 (前 3 人体并列表格, 按置信度降序)
+  detect   —— yolo_detector_node 目标检测 (前 3 目标并列表格, 按置信度降序)
+  obb      —— yolo_obb_node 旋转框检测 (前 3 旋转框并列表格, 按置信度降序)
+  cls      —— yolo_cls_node 图像分类 (top-3 类别并列表格, 按置信度降序)
   track    —— yolo_track_node/ortrack_node 目标追踪 (状态字段卡片, 框选在画面完成)
 
 分组 spec 可带 'image': True —— 分组顶部多一个固定高度 (IMG_ROW_HEIGHT)
@@ -213,7 +216,7 @@ def _track_fields(data):
 # | HIDE_ROW (整行隐藏)
 # 行序在并列显示的分组间保持语义对应 (同行 = 同类信息), 新分组接入时照此排列
 SECTIONS = {
-    'detect': {
+    'aruco': {
         'title': 'ArUco 检测',
         'fields': [
             ('码号', lambda d: _detect_fields(d)['码号']),
@@ -295,6 +298,50 @@ SECTIONS = {
                 f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
             ('可见点', lambda item, i:
                 f"{item.get('kpts', 0)}/{item.get('kpts_total', 17)}"),
+        ],
+    },
+    'detect': {
+        'title': '目标检测',
+        # 表格模式: 前 3 个目标并列成列 (节点端按置信度降序), 目标数不足
+        # 整列隐藏; 检出数为汇总行置于表格上方跨全部列 (多类别, 有类别行)
+        'table': 3,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 个"),
+        'rows': [
+            ('类别', lambda item, i: item.get('cls') or None),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+            ('占比', lambda item, i: f"{item.get('area', 0):.1f}%"),
+        ],
+    },
+    'obb': {
+        'title': '旋转框检测',
+        # 表格模式: 前 3 个旋转框并列成列 (节点端按置信度降序), 目标数不足
+        # 整列隐藏; 检出数为汇总行置于表格上方跨全部列 (多类别, 有类别行);
+        # 角度 = RotatedRect::angle (度, 画面坐标系下相对水平的倾斜角)
+        'table': 3,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 个"),
+        'rows': [
+            ('类别', lambda item, i: item.get('cls') or None),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+            ('角度', lambda item, i: f"{item.get('angle', 0):.1f}°"),
+        ],
+    },
+    'cls': {
+        'title': '图像分类',
+        # 表格模式: top-3 类别并列成列 (节点端按置信度降序, 整图分类无
+        # 检出数, 无汇总行); 画面无叠加标注, 分类结果只在此显示
+        'table': 3,
+        'rows': [
+            ('名次', lambda item, i: str(i + 1)),
+            ('类别', lambda item, i: item.get('cls') or None),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
         ],
     },
     'track': {
@@ -470,7 +517,7 @@ class _Section(QGroupBox):
             row = 1
         for col in range(self._table_cols):
             grid.setColumnStretch(col + 1, 1)
-        for r, (_lbl, _extract) in enumerate(spec['rows'], start=row + 1):
+        for r, (lbl, _extract) in enumerate(spec['rows'], start=row + 1):
             key = QLabel(lbl + '：')
             grid.addWidget(key, r, 0)
             cells = []
@@ -668,7 +715,7 @@ class AlgoOutputPanel(QGroupBox):
         """底部调节行随激活分组显隐: 码边长滑杆/字典切换对检测与降落都
         有意义 (降落节点同样检测码), 有 detect 或 landing 即显示;
         降落朝向偏置只属于降落, 仅 landing 时显示; 全无则整行隐藏。"""
-        aruco_on = 'detect' in keys or 'landing' in keys
+        aruco_on = 'aruco' in keys or 'landing' in keys
         landing_on = 'landing' in keys
         if self._marker_box is not None:
             self._marker_box.setVisible(aruco_on)
