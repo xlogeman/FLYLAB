@@ -41,31 +41,31 @@ def generate_launch_description():
 
     # 用上面depth_image_proc转换出的点云信息生成为地图
     lensson4_octomap_server_node = launch_ros.actions.Node(
-            package='octomap_server',          # 包名
-            executable='octomap_server_node',  # 可执行文件名
-            name='octomap_server',             # 节点名称
+            package='octomap_server',
+            executable='octomap_server_node',
+            name='octomap_server',
             parameters=[
-                {'frame_id': 'world'},             # 地图坐标系 (官方版 ENU)
-                {'base_frame_id': 'PX4/depth_cam_optical'},  #无人机参考坐标 # PX4/depth_cam_optical, PX4/depth_cam_body, PX4/depth_cam_body/static
-                {'resolution': map_resolution},              # 地图分辨率，单位：米，当前0.25米的分辨率
-                {'compress_map': False},           # 是否压缩地图，启用后会减少网络数据传输，但会加大CPU计算量。用于分布式协同系统
-                {'ground_filter': False},          # 过滤地面相关的配置，使用point_cloud_max_z来代替
+                {'frame_id': 'world'},                       # 地图坐标系 (官方版 ENU)
+                {'base_frame_id': 'PX4/depth_cam_optical'},  # 备选: PX4/depth_cam_body, PX4/depth_cam_body/static
+                {'resolution': map_resolution},
+                {'compress_map': False},                     # 压缩减网络传输但增 CPU (分布式协同用)
+                {'ground_filter': False},                    # 关地面过滤, 用 point_cloud_max_z 代替
                 {'ground_filter.distance': 0.05},
                 {'ground_filter.plane_distance': 0.06},
-                {'sensor_model.max_range': camera_max_range},  # 传感器最大有效距离，也就是深度摄像头的能力
-                {'publish_free_space': False},     # 是否发布空的地点值(无阻挡的空间)，避障逻辑会使用
-                {'use_height_map': True},          # 地图是否用不同的颜色标记高度
+                {'sensor_model.max_range': camera_max_range},
+                {'publish_free_space': False},               # 发布空闲体, 避障逻辑会使用
+                {'use_height_map': True},
                 {'point_cloud_max_x': 200.0},
                 {'point_cloud_min_x': -200.0},
                 {'point_cloud_max_y': 200.0},
                 {'point_cloud_min_y': -200.0},
-                {'point_cloud_max_z': 50.0},       # ENU: 0.17~50m 高于起飞点 (原 NED: -50~-0.17)
+                {'point_cloud_max_z': 50.0},                 # ENU: 0.17~50m 高于起飞点 (原 NED: -50~-0.17)
                 {'point_cloud_min_z': 0.17},
                 {'occupancy_max_z': 50.0},
                 {'occupancy_min_z': 0.17},
                 {'min_x_size': 0.0},
                 {'min_y_size': 0.0},
-                {'latch': False}                  # True for a static map, false if no initial map is given。设置为false能够加快处理速度
+                {'latch': False}                             # 非静态地图, 增量更新更快
             ],
             remappings=[
                 ('cloud_in', '/depth_camera/pointers')  # 输入点云话题重映射
@@ -80,7 +80,6 @@ def generate_launch_description():
     )
 
 
-    # Create the launch description and populate
     ld = LaunchDescription()
     ld.add_action(camera_max_range_arg)
     ld.add_action(map_resolution_arg)

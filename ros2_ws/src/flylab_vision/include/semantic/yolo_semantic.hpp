@@ -73,8 +73,8 @@ private:
 /// cityscapes 19 类类别名 (下标 = 类别 id, 与 ONNX 元数据 names 一致)
 const std::vector<std::string> & cityscapes_names();
 
-/// 19 类配色表 (RGB, 下标 = 类别 id): 自定义清新风格, 类别图缩略图与
-/// 图例色块共用 (原为 Cityscapes 标准配色, 因整体偏沉闷替换)
+/// 19 类配色表 (RGB, 下标 = 类别 id): 自定义清新风格 (Cityscapes 标准配色
+/// 整体偏沉闷), 类别图缩略图与图例色块共用
 const std::vector<cv::Vec3b> & cityscapes_palette_rgb();
 
 /// 语义分割结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/aruco_info,

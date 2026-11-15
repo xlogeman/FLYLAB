@@ -10,7 +10,7 @@
   processes.py        托管子进程 (PX4 SITL/通信链路/算法/降落节点的生命周期)
   log_panel.py        画面下方日志框 (TeeLogger 分流 + PX4 输出接管, 抗刷屏)
   功能域面板 (mixin, 纯搬移自本文件, 见 panels/ 子包):
-    panels/px4_panel.py      PX4 SITL 一键启停 (+ AirSim 导出项目联动)
+    panels/px4_panel.py      PX4 SITL 一键启停
     panels/link_panel.py     通信链路互斥起停 (uXRCE-DDS / MAVROS)
     panels/vehicle_panel.py  飞行控制命令菜单 (AirSim RPC 直发)
     panels/algo_panel.py     视觉算法启停
@@ -96,7 +96,6 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.flight_proc = ManagedProcess(self.log, '飞行链路')   # ros2 launch 整链路
         self.land_proc = ManagedProcess(self.log, '降落节点')
         self.teleop_proc = ManagedProcess(self.log, '遥控节点')
-        self.airsim_proc = ManagedProcess(self.log, 'AirSim 项目')  # PX4 联动的 UE 导出项目
 
         # 飞行控制: 独立 RPC 会话 (与相机抓取互不拖累)
         self.veh_ctrl = VehicleController(self.log, host, config.AIRSIM_RPC_PORT)
@@ -203,12 +202,12 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
 
     def _poll_once(self):
         # 驱动 ROS 收包 (节点无独立 spin 线程, 回调因此天然在主线程执行)。
-        # 2026-11-09: 单次 spin_once 只执行一个就绪回调, 33ms 一拍上限
-        # 30 个/秒还要与其他订阅分摊 —— 算法节点 30fps 标注成簇回传
-        # (帧队列排空后 2~3 帧标注同一 tick 连发), 每拍只收下第一条,
-        # HUD 解算帧率被腰斩 (实测 30fps 回传只显示 15)。改为每拍最多
-        # 排空 16 个就绪回调 (240/s 吞吐, rclpy Humble 的 spin_once 无法
-        # 探测"还有无剩余工作", 固定预算兜底; 空转一拍 ~0.1ms 可忽略)
+        # 单次 spin_once 只执行一个就绪回调, 33ms 一拍上限 30 个/秒还要与其
+        # 他订阅分摊 —— 算法节点 30fps 标注成簇回传 (帧队列排空后 2~3 帧标注
+        # 同一 tick 连发), 每拍只收下第一条, HUD 解算帧率被腰斩 (实测 30fps
+        # 回传只显示 15)。故每拍最多排空 16 个就绪回调 (240/s 吞吐, rclpy
+        # Humble 的 spin_once 无法探测"还有无剩余工作", 固定预算兜底;
+        # 空转一拍 ~0.1ms 可忽略)
         try:
             for _ in range(16):
                 rclpy.spin_once(self.node, timeout_sec=0)

@@ -19,9 +19,7 @@ struct YawAlignOut
   double yaw_gate = 1.0;      // 航向门控 [0,1]: 关闭对齐或已锁定 = 1
   double gimbal_rate = 0.0;   // 云台偏航速率指令 (°/s, 右正, 0=停转)
   double yaw_rate_rad = 0.0;  // 机头跟随注入偏航角速率 (rad/s, 正=右转)
-  bool follow_ok = false;     // 跟随误差本次可用
   bool locked = false;        // 航向已锁定 (含超时强制放行)
-  bool just_locked = false;   // 本次 update 恰好进入锁定 (边沿)
   bool turning = false;       // 云台正在转动 (未锁定且未超时)
 };
 
@@ -79,8 +77,6 @@ public:
   }
 
   bool locked() const {return locked_;}
-  bool enabled() const {return p_.enabled;}
-  double offsetDeg() const {return p_.offset_deg;}
 
   /// 每个控制拍调用一次 (须在云台姿态新鲜时调用, 方位测量才可信)。
   ///   target_id: 当前跟踪码 ID (切换时自动复位重新对齐)
@@ -92,7 +88,6 @@ public:
     bool follow_ok, double follow_err_deg)
   {
     YawAlignOut out;
-    out.follow_ok = follow_ok;
     if (!p_.enabled) {
       last_id_ = target_id;
       return out;
@@ -134,7 +129,6 @@ public:
     if (count_ >= p_.min_frames) {
       locked_ = true;
       out.locked = true;
-      out.just_locked = true;
       RCLCPP_INFO(
         logger_,
         "\033[32m云台已对准码朝向且机头已跟随 (云台偏差 %.1f°, 跟随误差 %.1f°, "
@@ -160,7 +154,6 @@ public:
         wait_t_, err, follow_err_deg);
       locked_ = true;   // 仅放行后续流程, 不再重试对齐
       out.locked = true;
-      out.just_locked = true;
       out.turning = false;
       out.gimbal_rate = 0.0;
       out.yaw_rate_rad = 0.0;

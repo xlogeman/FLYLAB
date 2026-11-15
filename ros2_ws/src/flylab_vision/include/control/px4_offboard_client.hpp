@@ -3,8 +3,8 @@
 #define PX4_OFFBOARD_CLIENT_HPP_
 
 /// PX4 offboard 执行层 (双链路) —— 总入口。
-/// 可复用组件, 供 flylab_vision/src/control 下所有"通过 PX4 控制飞机"的
-/// 算法节点使用 (视觉降落 / 目标追踪控制 / ...)。
+/// 可复用组件, 供 flylab_vision 下所有"通过 PX4 控制飞机"的算法节点使用
+/// (视觉降落 / 手动遥控 / ...)。
 ///
 /// 文件组织:
 ///   px4_offboard_client_base.hpp    公共接口 (基类 + Takeover + LocalPosNED + 坐标约定)

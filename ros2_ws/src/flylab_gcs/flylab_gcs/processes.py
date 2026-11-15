@@ -22,27 +22,23 @@ _ANSI_RE = re.compile(
 class ManagedProcess:
     """一个被地面站托管的外部进程。"""
 
-    def __init__(self, log, name, on_line=None, kill_cmd=None):
+    def __init__(self, log, name, on_line=None):
         """log: 带 .info/.error 的日志器 (TeeLogger, 自动分流界面日志框);
-        name: 日志显示名; on_line: 输出行回调 (仅 capture_output=True 时);
-        kill_cmd: 补充击杀命令 (跨子系统进程 killpg 杀不到真实进程时用,
-        如 WSL 经 interop 启动的 Windows exe 需 taskkill, 见 stop())。"""
+        name: 日志显示名; on_line: 输出行回调 (仅 capture_output=True 时)。"""
         self.log = log
         self.name = name
         self.on_line = on_line
-        self.kill_cmd = kill_cmd
         self.proc = None
 
-    def start(self, cmd, capture_output=False, cwd=None):
-        """拉起进程 (已在运行则忽略并返回 True)。cwd: 子进程工作目录
-        (UE 导出项目等依赖相对路径资源的进程传 exe 所在目录)。
+    def start(self, cmd, capture_output=False):
+        """拉起进程 (已在运行则忽略并返回 True)。
         启动失败 (OSError / 可执行文件不在 PATH) 返回 False 并记日志。"""
         if self.is_running():
             return True
         self.log.info(f'启动 {self.name}: {" ".join(cmd)}')
         try:
             self.proc = subprocess.Popen(
-                cmd, start_new_session=True, cwd=cwd,
+                cmd, start_new_session=True,
                 stdout=subprocess.PIPE if capture_output else None,
                 stderr=subprocess.STDOUT if capture_output else None,
                 text=True, bufsize=1, errors='replace')
@@ -77,19 +73,10 @@ class ManagedProcess:
     def stop(self, timeout=2.0):
         """SIGTERM 整个进程组, 超时再 SIGKILL。
         直接子进程可能先于孤儿孙进程退出, wait() 立刻返回, 故等待结束后
-        无条件对组 SIGKILL 兜底 (组已空则 ProcessLookupError 跳过)。
-        设有 kill_cmd 时先执行: WSL 启动的 Windows exe 不随 Linux 侧中继
-        死亡, 须 taskkill 按映像名补杀。"""
+        无条件对组 SIGKILL 兜底 (组已空则 ProcessLookupError 跳过)。"""
         proc, self.proc = self.proc, None
         if proc is None or proc.poll() is not None:
             return
-        if self.kill_cmd is not None:
-            try:
-                subprocess.run(self.kill_cmd, timeout=timeout,
-                               stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.TimeoutExpired) as e:
-                self.log.warning(f'{self.name} 补杀命令执行失败: {e}')
         pgid = proc.pid
         try:
             os.killpg(pgid, signal.SIGTERM)

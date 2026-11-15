@@ -106,9 +106,9 @@ private:
     }
     if (!client_->gotStatus()) {
       // mavros/uXRCE 刚启动时状态话题要几秒才通, 而地面站按 500ms 重发
-      // start —— 早到的 start 不再报致命错误 (进程会被界面回收, 用户要点
-      // 好几次才撞上一次成功), 改为置 pending 等状态一到自动接管 (限时),
-      // 见 tick() 的 IDLE 分支
+      // start —— 早到的 start 置 pending 等状态一到自动接管 (限时, 见
+      // tick() 的 IDLE 分支); 报致命错误的话进程会被界面回收, 用户要
+      // 点好几次才撞上一次成功
       if (!start_pending_) {
         start_pending_ = true;
         pending_deadline_ = now() + rclcpp::Duration::from_seconds(kPendingSec);
@@ -124,8 +124,8 @@ private:
       publishStatus("error: 未解锁起飞");
       return;
     }
-    // 注: 不再拒绝 AUTO.LAND —— 飞行控制下发的自动降落可被开遥控打断
-    // 接管 (防炸机出口); offboard 接管即切走 AUTO.LAND。接管成功后若
+    // 注: 允许在 AUTO.LAND 下接管 —— 飞行控制下发的自动降落可被开遥控
+    // 打断 (防炸机出口); offboard 接管即切走 AUTO.LAND。接管成功后若
     // 又进入 AUTO.LAND (failsafe), ENGAGED 态的安全防御仍会退出遥控
     client_->takeoverReset(now());
     state_ = State::ENGAGING;

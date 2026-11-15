@@ -83,9 +83,6 @@ constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机
 constexpr const char kStatusIdle[] = "idle";             // 流程结束/取消/中止
 constexpr double kStartPendingTimeout = 15.0;  // 挂起的 landing_start 等待飞控状态的最长时间 (s)
 
-// 纯数学助手 (clampd/quat_rot/landing_angle_deg/wrap180/descend_schedule/
-// TrendAngleEstimator) 抽到 include/aruco/landing_math.hpp
-
 // AttitudeNED -> 四元数消息 (quat_rot 的输入约定: R(q)·v)
 geometry_msgs::msg::Quaternion quat_from(const Px4OffboardClientBase::AttitudeNED & a)
 {
@@ -1075,9 +1072,6 @@ private:
       toIdle();
     }
   }
-
-  // 下降速度调度 descend_schedule() 与趋势角估计 TrendAngleEstimator
-  // 抽到 include/aruco/landing_math.hpp
 
   // ---------------- LANDING: 切 AUTO.LAND, 由 PX4 完成降落 ----------------
   void tickLanding(const rclcpp::Time & now_t)

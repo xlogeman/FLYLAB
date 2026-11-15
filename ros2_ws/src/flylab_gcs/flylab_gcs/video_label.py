@@ -14,12 +14,10 @@ from PyQt5.QtWidgets import QLabel
 
 
 class VideoLabel(QLabel):
-    """视频画面 + 可选的拖拽框选交互 (休眠接口, 默认关闭)。
+    """视频画面 + 可选的拖拽框选交互 (默认关闭)。
 
-    地面站当前由目标追踪消费目标框 (主窗口接 bbox_selected 发 ROI)。
-    重新启用只需两行:
-        video.set_select_enabled(True)          # 按下左键冻结画面, 拖出矩形
-        video.bbox_selected.connect(handler)    # 回调收到原图坐标 x, y, w, h
+    目标追踪消费目标框: 主窗口接 bbox_selected 发 ROI, 追踪期间经
+    set_select_enabled(True/False) 开关框选。
     确认: 松手 (拖出 ≥6px 矩形) 或回车/双击; 取消: Esc 或松手时框太小
     (只取消画框, 不退出框选模式)。"""
 

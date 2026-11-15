@@ -61,9 +61,6 @@ class GamepadReader(QObject):
             t.join(timeout=2.0)
         self._thread = None
 
-    def is_running(self):
-        return self._thread is not None and self._thread.is_alive()
-
     # ---------- 读取循环 ----------
 
     def _run(self):

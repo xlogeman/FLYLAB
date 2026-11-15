@@ -14,13 +14,12 @@
 //   imu_name     AirSim 端 IMU 传感器名 (默认 "Imu")
 //   period_ms    采集周期 (默认 5ms = 200Hz)
 //   inject_bias  注入模拟校准残余偏置 (依据 settings.json 的 ARW/VRW 自动定级,
-//                默认关闭; 原 ego/orb 链路为开启)
+//                默认关闭; 旧 ego/orb 链路曾开启)
 //   vehicle_name 默认 PX4
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 
 #include <chrono>
-#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <string>

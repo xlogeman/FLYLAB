@@ -123,9 +123,7 @@ private:
                 return true;
             }
         }
-        q_out = hist_.back().q;
-        p_out = hist_.back().p;
-        return true;
+        return false;  // 不可达兜底 (时间戳单调, 区间必命中)
     }
 
     static sensor_msgs::msg::PointField make_field(

@@ -31,23 +31,23 @@ def generate_launch_description():
     )
 
     lensson4_octomap_server_node = launch_ros.actions.Node(
-            package='octomap_server',          # 包名
-            executable='octomap_server_node',  # 可执行文件名
-            name='octomap_server',             # 节点名称
+            package='octomap_server',
+            executable='octomap_server_node',
+            name='octomap_server',
             parameters=[
                 {'frame_id': 'world'},            # 地图坐标系 (官方版 ENU)
                 {'base_frame_id': 'world'},       # 过滤地面时，使用该坐标
                 {'resolution': 0.25},             # 地图分辨率，单位：米
                 {'dynamic': True},                # 启用动态边界扩展
                 {'sensor_model.max_range': 50.0}, # 传感器最大有效距离
-                {'compress_map': False},          # 是否压缩地图，启用后会减少网络数据传输，但会加大CPU计算量。用于分布式协同系统
+                {'compress_map': False},          # 压缩减网络传输但增 CPU (分布式协同用)
                 {'colored_map': True},
                 {'ground_filter': True},          # 过滤地面，即不显示地面，降低计算量
                 {'ground_filter.distance': 0.2},  # 小于多少米都算作地面
                 {'ground_filter.plane_distance': 0.21},
                 {'publish_free_space': False},    # 是否发布空的地点值(无阻挡的空间)，避障逻辑会使用
                 {'point_cloud_min_z': 0.0},       # ENU: 过滤起飞点高度以下的点 (原 NED: max_z<=0)
-                {'latch': False}                  # default: True for a static map, false if no initial map is given
+                {'latch': False}
             ],
             remappings=[
                 ('cloud_in', '/point_cloud_xyzrgb_node/depth_color_cloud')  # 输入点云话题重映射
@@ -61,7 +61,6 @@ def generate_launch_description():
     )
 
 
-    # Create the launch description and populate
     ld = LaunchDescription()
     ld.add_action(airsim_node_launch)
     ld.add_action(lensson4_depth_image_proc_node)
