@@ -278,7 +278,8 @@ private:
        << num(st.box.y) << "," << num(st.box.width) << ","
        << num(st.box.height) << "],";
     if (st.has) {
-      os << "\"label\":\"目标 " << num(st.sim, 2) << "\","
+      // 框上标签 = 类别名 + 检测置信度 (无前缀, 相似度只在右下面板看)
+      os << "\"label\":\"" << st.name << " " << num(st.conf, 2) << "\","
          << "\"color\":[0,255,255]}";
     } else {
       os << "\"label\":\"目标丢失\","
@@ -309,11 +310,12 @@ private:
     return base;
   }
 
-  /// 面板数据 {"src":"track", ...}: 10Hz 限频, force=True 状态切换立即发
+  /// 面板数据 {"src":"track", ...}: ~30Hz 限频 (对齐地面站 33ms 轮询,
+  /// 值不变时面板端自动去重), force=True 状态切换立即发
   void publish_info(int count, bool force = false)
   {
     const auto now = std::chrono::steady_clock::now();
-    if (!force && now - info_last_ < std::chrono::milliseconds(100)) {
+    if (!force && now - info_last_ < std::chrono::milliseconds(33)) {
       return;
     }
     info_last_ = now;

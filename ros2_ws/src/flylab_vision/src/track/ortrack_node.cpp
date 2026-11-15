@@ -21,7 +21,9 @@
 /// 256x256 搜索区推理, Hann 窗加权解码目标框; 追踪中重新框选即换目标。
 ///
 /// 模型: models/track/ortrack_deit_tiny.onnx (CMakeLists 安装, 可用
-/// model 参数覆盖); device:=cuda 时 CUDA EP 注册失败自动回退 CPU。
+/// model 参数覆盖) + 类别 models/classify/yolo26s-cls.onnx (模板匹配无
+/// 类别输出, 追踪框裁块按 cls_interval 限频分类, 结果上面板"目标"栏);
+/// device:=cuda 时 CUDA EP 注册失败自动回退 CPU。
 ///
 /// 运行:
 ///   ros2 run flylab_vision ortrack_node
@@ -32,6 +34,7 @@
 #include <sstream>
 #include <string>
 
+#include "classify/yolo_classifier.hpp"
 #include "common/display_vision_node.hpp"
 #include "track/ortrack.hpp"
 
@@ -48,6 +51,10 @@ public:
     // ---------- 参数 ----------
     const auto model = declare_parameter<std::string>(
       "model", default_model_path("track", "ortrack_deit_tiny.onnx"));
+    const auto cls_model = declare_parameter<std::string>(
+      "cls_model", default_model_path("classify", "yolo26s-cls.onnx"));
+    // 类别识别限频 (秒): 追踪框裁块跑 cls 模型的最小间隔
+    const auto cls_interval = declare_parameter<double>("cls_interval", 0.5);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto roi_topic =
       declare_parameter<std::string>("roi_topic", "/flylab/track_roi");
@@ -69,6 +76,22 @@ public:
         get_logger(), "CUDA EP 注册失败, 已回退 CPU: %s",
         tracker_->cuda_error().c_str());
     }
+    // 类别模型 (ORTrack 无类别输出): 追踪框裁块跑 YOLO cls, 结果上面板
+    ClsConfig ccfg;
+    ccfg.model_path = cls_model;
+    ccfg.topk = 1;
+    ccfg.use_cuda = cfg.use_cuda;
+    classifier_ = std::make_unique<YoloClassifier>(ccfg);
+    RCLCPP_INFO(
+      get_logger(), "类别模型加载完成: %s [%s, classes %d], 分类间隔 %.1fs",
+      cls_model.c_str(), classifier_->cuda_active() ? "cuda" : "cpu",
+      classifier_->num_classes(), cls_interval);
+    if (cfg.use_cuda && !classifier_->cuda_active()) {
+      RCLCPP_WARN(
+        get_logger(), "类别 CUDA EP 注册失败, 已回退 CPU: %s",
+        classifier_->cuda_error().c_str());
+    }
+    cls_interval_ = cls_interval;
 
     // ---------- 通信 (基类之外: ROI 框选 / 开始取消指令 / 面板数据) ----------
     // latched: 地面站先框选后启动节点也能拿到当前框选区域
@@ -102,6 +125,7 @@ protected:
       const cv::Rect2f box = tracker_->track(bgr);
       track_box_ = box;
       track_state_ = "TRACK";
+      classify_target(bgr, box);
       json = track_annotations(box, tracker_->last_score());
       publish_info();
     } else {
@@ -205,11 +229,37 @@ private:
   {
     has_roi_ = false;
     roi_ = cv::Rect2f();
+    cls_name_.clear();   // 换目标清类别快照, 立即重分类新目标
+    cls_conf_ = 0.f;
+    cls_last_ = {};
     track_state_ = "TRACK";
     publish_info(true);
   }
 
-  /// 追踪中标注: 只画目标框 (青色, 峰值响应作置信度参考)
+  /// 目标类别识别: 追踪框裁块跑 YOLO cls 模型, 按 cls_interval 限频
+  /// 更新快照 (面板"目标"栏显示; ORTrack 本身无类别输出)
+  void classify_target(const cv::Mat & bgr, const cv::Rect2f & box)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - cls_last_ < std::chrono::duration<double>(cls_interval_)) {
+      return;
+    }
+    // 追踪框夹回画面内 (输出可能贴边越界), 退化裁块跳过本轮
+    const cv::Rect roi = cv::Rect(box) & cv::Rect(0, 0, bgr.cols, bgr.rows);
+    if (roi.width < 2 || roi.height < 2) {
+      return;
+    }
+    const auto preds = classifier_->classify(bgr(roi));
+    cls_last_ = now;
+    if (!preds.empty()) {
+      cls_name_ = preds.front().name;
+      cls_conf_ = preds.front().conf;
+      publish_info(true);   // 类别快照刷新即上屏
+    }
+  }
+
+  /// 追踪中标注: 只画目标框 (青色); 框上标签 = 类别名 + 概率 (无前缀,
+  /// 相似度只在右下面板看), 首帧分类未出前不显示文字
   std::string track_annotations(const cv::Rect2f & box, float score)
   {
     last_score_ = score;
@@ -218,8 +268,11 @@ private:
        << "{\"type\":\"bbox\",\"box\":[" << num(box.x) << ","
        << num(box.y) << "," << num(box.width) << ","
        << num(box.height) << "],"
-       << "\"label\":\"目标 " << num(score, 2) << "\","
-       << "\"color\":[0,255,255]}]}";
+       << "\"label\":\"";
+    if (!cls_name_.empty()) {
+      os << cls_name_ << " " << num(cls_conf_, 2);
+    }
+    os << "\",\"color\":[0,255,255]}]}";
     return os.str();
   }
 
@@ -236,24 +289,27 @@ private:
     return os.str();
   }
 
-  /// 面板数据 {"src":"track", ...}: 10Hz 限频, force=True 状态切换立即发
-  /// (字段与 yolo_track_node 同 schema, 右栏共用目标追踪面板)
+  /// 面板数据 {"src":"track", ...}: ~30Hz 限频 (对齐地面站 33ms 轮询,
+  /// 值不变时面板端自动去重), force=True 状态切换立即发
+  /// (字段与 yolo_track_node 同 schema, 右栏共用目标追踪面板; 无 count
+  /// 字段 —— 模板匹配无检测候选, 地面站据此隐藏"检出"行)
   void publish_info(bool force = false)
   {
     const auto now = std::chrono::steady_clock::now();
-    if (!force && now - info_last_ < std::chrono::milliseconds(100)) {
+    if (!force && now - info_last_ < std::chrono::milliseconds(33)) {
       return;
     }
     info_last_ = now;
+    // cls/conf: 类别模型快照 (未出首帧分类前退化为 ORTrack + 追踪峰值分)
+    const bool has_cls = !cls_name_.empty();
     std::ostringstream os;
     os << "{\"src\":\"" << algo_group() << "\","
        << "\"state\":\"" << track_state_ << "\","
-       << "\"cls\":\"ORTrack\","
-       << "\"conf\":" << num(last_score_, 2) << ","
+       << "\"cls\":\"" << (has_cls ? cls_name_ : "ORTrack") << "\","
+       << "\"conf\":" << num(has_cls ? cls_conf_ : last_score_, 2) << ","
        << "\"sim\":" << num(last_score_, 2) << ","
        << "\"w\":" << num(track_box_.width, 0) << ","
-       << "\"h\":" << num(track_box_.height, 0) << ","
-       << "\"count\":0}";
+       << "\"h\":" << num(track_box_.height, 0) << "}";
     std_msgs::msg::String out;
     out.data = os.str();
     info_pub_->publish(out);
@@ -267,6 +323,8 @@ private:
   }
 
   std::unique_ptr<ORTracker> tracker_;
+  std::unique_ptr<YoloClassifier> classifier_;   // 类别模型 (面板"目标"栏)
+  double cls_interval_ = 0.5;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr roi_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ctl_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;
@@ -280,6 +338,10 @@ private:
   cv::Rect2f track_box_;
   float last_score_ = 0.f;
   std::chrono::steady_clock::time_point info_last_;
+  // 类别识别快照 (cls_last_ 为上次分类时刻, epoch = 尚未分类)
+  std::string cls_name_;
+  float cls_conf_ = 0.f;
+  std::chrono::steady_clock::time_point cls_last_;
 };
 
 }  // namespace flylab_vision

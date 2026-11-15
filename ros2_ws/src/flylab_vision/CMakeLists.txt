@@ -85,7 +85,7 @@ flylab_node(yolo_pose_node src/pose/yolo_pose_node.cpp yolo_pose)
 flylab_node(yolo_segment_node src/segment/yolo_segment_node.cpp yolo_segment)
 flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic)
 flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
-flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack)
+flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack yolo_classifier)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同

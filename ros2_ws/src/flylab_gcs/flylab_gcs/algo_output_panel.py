@@ -44,6 +44,10 @@ from . import config
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
 IMG_ROW_HEIGHT = 195  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
 
+# 字段 extract 的返回哨兵: 整行隐藏 (按数据源动态显隐, 如 ortrack 无
+# 检测候选时隐藏"检出"行); None 仍显示 '—'
+HIDE_ROW = object()
+
 # 目标追踪状态机 -> 界面文案
 _TRACK_STATE_TEXT = {
     'IDLE': '未选目标',
@@ -183,8 +187,8 @@ def _semantic_fields(data):
 
 
 def _track_fields(data):
-    """yolo_track_node 追踪状态 -> {字段名: 文本|None}。"""
-    out = {'目标': None, '相似度': None, '尺寸': None, '检出': None}
+    """追踪节点状态 -> {字段名: 文本|None|HIDE_ROW}。"""
+    out = {'目标': None, '相似度': None, '尺寸': None, '检出': HIDE_ROW}
     if data.get('cls'):
         out['目标'] = f"{data['cls']} {data.get('conf', 0.0):.2f}"
     sim = data.get('sim')
@@ -193,12 +197,17 @@ def _track_fields(data):
     w, h = data.get('w'), data.get('h')
     if w and h:
         out['尺寸'] = f'{w}x{h}px'
-    out['检出'] = f"{data.get('count', 0)} 个"
+    # 检出数仅 yolo_track 有意义 (逐帧检测候选数); ortrack 无检测候选
+    # 不发 count, 整行隐藏
+    count = data.get('count')
+    if count is not None:
+        out['检出'] = f'{count} 个'
     return out
 
 
 # 分组注册表: key (= 消息 src) -> {title, title_fn, fields}
 # fields: [(label, extract)] —— extract(data) -> 文本 | None (显示 '—')
+# | HIDE_ROW (整行隐藏)
 # 行序在并列显示的分组间保持语义对应 (同行 = 同类信息), 新分组接入时照此排列
 SECTIONS = {
     'detect': {
@@ -322,6 +331,7 @@ class _Section(QGroupBox):
         if self._img is not None:
             form.addRow(self._img)
         self._extracts = []
+        self._rows = []   # (key, val) 标签对, HIDE_ROW 时整行 setVisible(False)
         self._vals = []
         for lbl, extract, *rest in self._fields:
             opts = rest[0] if rest else {}
@@ -348,6 +358,7 @@ class _Section(QGroupBox):
                 val.setStyleSheet('font-family: monospace;')
             form.addRow(key, val)
             self._extracts.append(extract)
+            self._rows.append((key, val))
             self._vals.append(val)
         self.update_entry(None, time.monotonic())   # 初始占位
 
@@ -374,9 +385,14 @@ class _Section(QGroupBox):
             for val in self._vals:
                 self._set(val, '—')
             return
-        for val, extract in zip(self._vals, self._extracts):
+        for (key, val), extract in zip(self._rows, self._extracts):
             text = extract(data)
-            self._set(val, text if text is not None else '—')
+            # HIDE_ROW: 该数据源无此字段, 整行隐藏 (两侧都藏行才不留空)
+            hidden = text is HIDE_ROW
+            key.setVisible(not hidden)
+            val.setVisible(not hidden)
+            if not hidden:
+                self._set(val, text if text is not None else '—')
 
     def _set(self, label, text):
         if self._texts.get(id(label)) != text:
