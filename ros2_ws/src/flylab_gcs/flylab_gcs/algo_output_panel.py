@@ -27,6 +27,7 @@
   seg      —— yolo_segment_node 实例分割 (前 3 实例并列表格, 按置信度降序)
   pose     —— yolo_pose_node 姿态估计 (前 3 人体并列表格, 按置信度降序)
   detect   —— yolo_detector_node 目标检测 (前 3 目标并列表格, 按置信度降序)
+  face     —— face_detect_node 人脸检测 (前 3 张脸并列表格, 按置信度降序)
   obb      —— yolo_obb_node 旋转框检测 (前 3 旋转框并列表格, 按置信度降序)
   cls      —— yolo_cls_node 图像分类 (top-3 类别并列表格, 按置信度降序)
   track    —— yolo_track_node/ortrack_node 目标追踪 (状态字段卡片, 框选在画面完成)
@@ -298,6 +299,23 @@ SECTIONS = {
                 f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
             ('可见点', lambda item, i:
                 f"{item.get('kpts', 0)}/{item.get('kpts_total', 17)}"),
+        ],
+    },
+    'face': {
+        'title': '人脸检测',
+        # 表格模式: 前 3 张脸并列成列 (节点端按置信度降序), 不足整列隐藏;
+        # 人脸数为汇总行置于表格上方跨全部列 (单类 face 无类别行)
+        'table': 3,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 张"),
+        'rows': [
+            # 编号 = 列序 (1 起始), 与画面上人脸框左上角的编号对应
+            ('编号', lambda item, i: str(i + 1)),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+            ('占比', lambda item, i: f"{item.get('area', 0):.1f}%"),
         ],
     },
     'detect': {

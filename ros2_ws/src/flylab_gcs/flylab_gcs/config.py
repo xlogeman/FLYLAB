@@ -270,7 +270,7 @@ ALGORITHMS = [
          'panel': 'aruco'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
     ]},
     {'name': '目标检测', 'items': [
-        {'name': 'yolo26s (默认)',
+        {'name': 'yolo26s',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_detector_node',
                  '--ros-args', '-p', 'device:=cuda'],
          # device 须用 cuda: CPU 推理 236~250ms/帧 (attention 结构跑不动),
@@ -325,11 +325,20 @@ ALGORITHMS = [
         # WiLoR (CVPR25): 3D 手部定位+重建, 两级 ONNX 管线。模型在包内
         # models/hand/ (detector.onnx + wilor_fp16.onnx 单文件), 换模型用
         # -p detector_model/wilor_model 覆盖
-        {'name': 'WiLoR (CVPR25)',
+        {'name': 'WiLoR',
          'cmd': ['ros2', 'run', 'flylab_vision', 'wilor_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'wilor_start', 'stop': 'wilor_stop',
          'panel': 'wilor'},   # 右栏算法信息面板: 手数 + 左右手摘要 (SECTIONS['wilor'])
+    ]},
+    {'name': '人脸检测', 'items': [
+        # SCRFD-10G 人脸检测 (insightface, facexformer 前置检测器同款):
+        # 框 + 5 关键点标注, 模型在包内 models/face/, 换模型用 -p model:=覆盖
+        {'name': 'SCRFD',
+         'cmd': ['ros2', 'run', 'flylab_vision', 'face_detect_node',
+                 '--ros-args', '-p', 'device:=cuda'],
+         'start': 'face_start', 'stop': 'face_stop',
+         'panel': 'face'},   # 右栏算法信息面板: 人脸数 + 前 3 张脸摘要 (SECTIONS['face'])
     ]},
     {'name': '目标追踪', 'items': [
         {'name': 'yolo26s-track',
@@ -339,7 +348,7 @@ ALGORITHMS = [
          'panel': 'track'},   # 右栏面板: 追踪状态卡片 (框选在画面完成)
         # ORTrack (CVPR 2025): 模板匹配式单目标追踪, 无需检测候选,
         # 框选即锁定; 与 yolo26s-track 共用右栏追踪面板与框选/开始按钮
-        {'name': 'ORTrack (CVPR25)',
+        {'name': 'ORTrack',
          'cmd': ['ros2', 'run', 'flylab_vision', 'ortrack_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',

@@ -77,6 +77,9 @@ flylab_algo(ortrack src/track/ortrack.cpp ${ORT_LIB})
 # 手部姿态: WiLoR (CVPR 2025) 两级管线 —— YOLO 手部检测 + 逐手 MANO
 # 回归, 21 关键点经逆仿射回原图 (include/wilor/, src/wilor/)
 flylab_algo(wilor src/wilor/wilor.cpp ${ORT_LIB})
+# 人脸检测任务 (src/face/, 对应 models/face/): insightface SCRFD-10G
+# (9 输出 = 3 尺度 score/框距离/5 关键点距离, distance 解码 + NMS)
+flylab_algo(scrfd_detector src/face/scrfd_detector.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
@@ -90,6 +93,7 @@ flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic
 flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack yolo_classifier)
 flylab_node(wilor_node src/wilor/wilor_node.cpp wilor)
+flylab_node(face_detect_node src/face/face_detect_node.cpp scrfd_detector)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
@@ -124,8 +128,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   FILES_MATCHING PATTERN "libonnxruntime*")
 
 install(TARGETS vision_common
-  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor
-  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node aruco_landing_node teleop_node
+  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector
+  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
