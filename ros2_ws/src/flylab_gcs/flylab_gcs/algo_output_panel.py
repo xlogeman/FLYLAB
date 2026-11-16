@@ -344,6 +344,23 @@ SECTIONS = {
             ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
         ],
     },
+    'wilor': {
+        'title': '手部姿态',
+        # 顶部图片行: 节点端 MANO 网格 z-buffer 着色渲染小图 ("img" base64 JPEG)
+        'image': True,
+        # 表格模式: 最多 2 只手并列成列 (节点端按检出顺序), 单手只显示一列;
+        # 手数为汇总行置于表格上方跨全部列
+        'table': 2,
+        'summary': ('检出', lambda d: f"{d.get('count', 0)} 只手"),
+        'rows': [
+            ('左右手', lambda item, i: item.get('side') or None),
+            ('置信度', lambda item, i: f"{item.get('conf', 0):.2f}"),
+            ('位置', lambda item, i:
+                f"({item.get('x', 0):.0f}, {item.get('y', 0):.0f})"),
+            ('尺寸', lambda item, i:
+                f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
+        ],
+    },
     'track': {
         'title': '目标追踪',
         # 状态不占行位, 动态显示在分组标题里 (未选目标/已框选/追踪中/目标丢失)

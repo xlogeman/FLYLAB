@@ -321,6 +321,16 @@ ALGORITHMS = [
          'start': 'pose_start', 'stop': 'pose_stop',
          'panel': 'pose'},   # 右栏算法信息面板: 人数 + 主目标摘要 (SECTIONS['pose'])
     ]},
+    {'name': '手部姿态', 'items': [
+        # WiLoR (CVPR25): 3D 手部定位+重建, 两级 ONNX 管线。模型在包内
+        # models/hand/ (detector.onnx + wilor_fp16.onnx 单文件), 换模型用
+        # -p detector_model/wilor_model 覆盖
+        {'name': 'WiLoR (CVPR25)',
+         'cmd': ['ros2', 'run', 'flylab_vision', 'wilor_node',
+                 '--ros-args', '-p', 'device:=cuda'],
+         'start': 'wilor_start', 'stop': 'wilor_stop',
+         'panel': 'wilor'},   # 右栏算法信息面板: 手数 + 左右手摘要 (SECTIONS['wilor'])
+    ]},
     {'name': '目标追踪', 'items': [
         {'name': 'yolo26s-track',
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_track_node',

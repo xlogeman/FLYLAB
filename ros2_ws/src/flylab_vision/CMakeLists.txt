@@ -74,6 +74,9 @@ flylab_algo(yolo_semantic src/semantic/yolo_semantic.cpp ${ORT_LIB})
 flylab_algo(yolo_tracker src/track/yolo_tracker.cpp yolo_detector ${ORT_LIB})
 # 目标追踪: ORTrack 模板匹配式单目标跟踪 (CVPR 2025, 纯模板+搜索区前向)
 flylab_algo(ortrack src/track/ortrack.cpp ${ORT_LIB})
+# 手部姿态: WiLoR (CVPR 2025) 两级管线 —— YOLO 手部检测 + 逐手 MANO
+# 回归, 21 关键点经逆仿射回原图 (include/wilor/, src/wilor/)
+flylab_algo(wilor src/wilor/wilor.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
@@ -86,6 +89,7 @@ flylab_node(yolo_segment_node src/segment/yolo_segment_node.cpp yolo_segment)
 flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic)
 flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack yolo_classifier)
+flylab_node(wilor_node src/wilor/wilor_node.cpp wilor)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
@@ -98,6 +102,13 @@ ament_target_dependencies(
 add_executable(teleop_node src/teleop/teleop_node.cpp)
 target_link_libraries(teleop_node vision_common)
 ament_target_dependencies(teleop_node rclcpp std_msgs px4_msgs geometry_msgs mavros_msgs)
+
+# WiLoR 模型 (models/hand/): 只装 detector.onnx + wilor_fp16.onnx (fp16
+# 权重已内联单文件), 共 ~1.3GB; MANO 网格拓扑 (原 mano_faces.npy) 已烘焙
+# 进 include/wilor/mano_faces.hpp, 节点经 ament share 解析,
+# detector_model/wilor_model 参数可覆盖
+install(DIRECTORY models/hand
+  DESTINATION share/${PROJECT_NAME}/models)
 
 # 模型权重装到 share/<pkg>/models/, 各节点经 ament_index 解析默认路径。
 # 只装 .onnx 推理模型: .pt 是训练权重 (~200MB), 运行时无用, 不随包拷贝
@@ -113,8 +124,8 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   FILES_MATCHING PATTERN "libonnxruntime*")
 
 install(TARGETS vision_common
-  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack
-  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node aruco_landing_node teleop_node
+  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor
+  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
