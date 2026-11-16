@@ -30,13 +30,19 @@ def v4l2_index(dev):
     return int(dev.rsplit('video', 1)[1])
 
 
-def list_local_cameras():
+def list_local_cameras(skip=()):
     """探测本机可用摄像头：遍历 /dev/video*，能成功 grab 到帧的才算。
-    一台相机常暴露多个 video 节点，只有 capture 节点能出帧。"""
+    一台相机常暴露多个 video 节点，只有 capture 节点能出帧。
+    skip 里的设备直接视为存在不探测 —— 抓取线程独占中的设备第二次
+    打开必然 grab 失败, probe 会把它误判成"已拔出" (V4L2 capture 节点
+    不允许第二个流), 且 probe 忙设备还可能干扰正在跑的流。"""
     if cv2 is None:
         return []
     cams = []
     for dev in sorted(glob.glob('/dev/video*')):
+        if dev in skip:
+            cams.append(dev)
+            continue
         try:
             cap = cv2.VideoCapture(v4l2_index(dev), cv2.CAP_V4L2)
             ok = cap.isOpened() and cap.grab()

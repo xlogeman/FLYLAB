@@ -419,13 +419,18 @@ class CameraViewWidget(QWidget):
 
     def _scan_local_cams(self):
         """后台重扫 /dev/video*，新插入的摄像头即时出现在菜单里。
-        本地探测不经 AirSim，没开 UE 也能选；WSL2 下摄像头需先 usbipd attach。"""
+        本地探测不经 AirSim，没开 UE 也能选；WSL2 下摄像头需先 usbipd attach。
+        当前正在用的本机源跳过探测直接保留 (设备被抓取线程独占, probe
+        必失败, 见 camera_sources.list_local_cameras)。"""
         if self._scanning:
             return
         self._scanning = True
 
         def scan():
-            cams = list_local_cameras()
+            cur = self.grabber.camera
+            skip = (cur[len(LOCAL_PREFIX):],) if cur.startswith(
+                LOCAL_PREFIX) else ()
+            cams = list_local_cameras(skip)
             self._scanning = False
             if cams != self._local_cams:
                 self._local_cams = cams
