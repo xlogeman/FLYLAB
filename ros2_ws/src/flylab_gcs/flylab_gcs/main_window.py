@@ -4,7 +4,8 @@
 模块分层 (细节见各文件):
   config.py           全局配置 (话题/端口/机型/算法注册表, 改这里)
   ros_node.py         ROS 节点 (订阅/发布 + TeeLogger 日志分流)
-  camera_grabber.py   视频源抓取线程 (AirSim RPC/本机摄像头/文件) + 软件云台
+  camera_grabber.py   视频源抓取线程 (AirSim RPC/本机摄像头/文件)
+  gimbal_controller.py 云台控制器 (云台/FOV/航向跟随状态机 + 独立 RPC 线程)
                       (支撑: quat_math.py / gimbal.py / camera_sources.py)
   vehicle_control.py  飞行控制 (独立 RPC 会话: 解锁/起飞/降落/悬停/返航/上锁)
   processes.py        托管子进程 (PX4 SITL/通信链路/算法/降落节点的生命周期)
@@ -15,7 +16,8 @@
     panels/vehicle_panel.py  飞行控制命令菜单 (AirSim RPC 直发)
     panels/algo_panel.py     视觉算法启停
     panels/flight_panel.py   飞行链路一键 launch
-    panels/control_panels.py 接管控制菜单 (视觉反控 ArUco降落 + 手动遥控 offboard 互斥门控)
+    panels/landing_panel.py  接管控制菜单本体 + 视觉反控 ArUco降落 + 互斥门控
+    panels/teleop_panel.py   手动遥控 (双摇杆/手柄/航向跟随外环)
   main_window.py      本文件: 工具栏/面板组装 + 33ms 轮询调度 + 门控汇总
 
 界面结构:
@@ -40,10 +42,11 @@ from .log_panel import LogPanel
 from .map_view import MapView
 from .panels import ui_style
 from .panels.algo_panel import AlgoPanelMixin
-from .panels.control_panels import ControlPanelsMixin
 from .panels.flight_panel import FlightPanelMixin
+from .panels.landing_panel import LandingPanelMixin
 from .panels.link_panel import LinkPanelMixin
 from .panels.px4_panel import Px4PanelMixin
+from .panels.teleop_panel import TeleopPanelMixin
 from .panels.vehicle_panel import VehiclePanelMixin
 from .processes import ManagedProcess
 from .telemetry_bar import TelemetryBar
@@ -51,8 +54,8 @@ from .vehicle_control import VehicleController
 
 
 class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
-                 AlgoPanelMixin, FlightPanelMixin, ControlPanelsMixin,
-                 QMainWindow):
+                 AlgoPanelMixin, FlightPanelMixin, LandingPanelMixin,
+                 TeleopPanelMixin, QMainWindow):
     """主窗口: 组装各功能域面板 (mixin 提供) + 33ms 主轮询调度,
     功能域方法通过 self.* 访问主窗口共享状态。"""
 

@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """AirSim 相机抓取器 —— 直连 RPC 拉图 + 本机 V4L2 摄像头, 与界面解耦。
 
-被 camera_view (独立调试) 和 ground_station 共用。附带软件云台: 经
-simSetCameraPose 旋转相机视角; 世界系稳定云台把视线方位/仰角钉在世界系,
-机体转动/倾斜由周期重下发 (GIMBAL_HOLD_HZ) 补偿。云台/FOV/跟随 RPC 在
-独立线程 (_gimbal_loop) 用自己的连接下发, 不与拉图串行 —— 否则机体运动
-时姿态跟随会把图传帧率拉低一半。
+被 camera_view (独立调试) 和 ground_station 共用。只负责视频源抓取与
+帧提交 (多 worker 并发 RPC、本机/文件源、数字变焦裁切、转发挂钩);
+软件云台/视场角/航向跟随的状态机与独立 RPC 线程在 gimbal_controller.py,
+本类持有其实例并把公有接口原样委托出去 (界面与主窗口无感)。
 
-支撑模块 (本文件只留抓取线程与云台运行时状态):
-  quat_math.py      四元数数学工具 (纯函数)
-  gimbal.py         云台限位/状态持久化/安装基准采集
-  camera_sources.py 本机摄像头/视频文件设备 IO (colorize_depth 也在此)
+支撑模块:
+  gimbal_controller.py 云台控制器 (状态机 + 独立 RPC 线程, 世界系稳定)
+  quat_math.py         四元数数学工具 (纯函数)
+  gimbal.py            云台限位/状态持久化/安装基准采集 (纯函数)
+  camera_sources.py    本机摄像头/视频文件设备 IO (colorize_depth 也在此)
 """
-import math
 import threading
 import time
 
@@ -27,12 +26,10 @@ except ImportError:
 
 from . import config
 from .camera_sources import LocalFileReader, cv2
-from .gimbal import (APPLY_TOL_DEG, MountNotReady, clamp_gimbal,
-                     capture_mount)
-from .quat_math import (gimbal_pitch_quat, gimbal_yaw_quat, quat_conj,
-                        quat_mul, quat_rot_vec, quat_yaw_el)
+# DEFAULT_CAMERAS 在 gimbal_controller (云台逐相机下发/首拍同步用),
+# 此处再导出供 camera_widget 源菜单等引用方使用
+from .gimbal_controller import (DEFAULT_CAMERAS, VEHICLE, GimbalController)
 
-VEHICLE = 'PX4'
 GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RPC往返延迟))
 # AirSim 拉图流水线 worker 数: 每个 worker 独立 RPC 连接并发拉图。
 # 单连接每帧串行等完整 RPC 往返 (实测 55~75ms -> 13~18fps), 帧率 =
@@ -42,22 +39,15 @@ GRAB_HZ = 60        # AirSim 拉取频率上限 (实际帧率 = min(该值, 1/RP
 # 提到 3 worker (~37fps 源头) 对冲成对帧坍缩损耗
 AIRSIM_FETCH_THREADS = 3
 LOCAL_HZ = 30       # 本机摄像头拉取频率上限
-# 云台线程循环节拍: 摇杆步进/回中动画的推进频率 (下发频率仍由
-# GIMBAL_HOLD_HZ 节流; RPC 与拉图分离, 姿态跟随重下发不占抓取往返)
-GIMBAL_LOOP_HZ = 50
 
-DEFAULT_CAMERAS = ['left_cam', 'front_cam', 'right_cam', 'depth_cam']
 DEFAULT_CAMERA = 'front_cam'   # 启动默认源 (AirSim)
 LOCAL_PREFIX = 'local:'   # 本机摄像头在下拉框里的条目前缀, 如 local:/dev/video0
 FILE_PREFIX = 'file:'     # 视频文件源前缀, 如 file:/path/to/demo.mp4 (循环播放)
 
 
-def _wrap180(deg):
-    """角度归一化到 [-180, 180)。"""
-    d = math.fmod(deg + 180.0, 360.0)
-    if d < 0:
-        d += 360.0
-    return d - 180.0
+def _is_airsim_src(name):
+    """源名 -> 是否 AirSim 相机 (本机摄像头/视频文件无云台与 FOV)。"""
+    return not name.startswith((LOCAL_PREFIX, FILE_PREFIX))
 
 
 def _to_np(data, dtype):
@@ -71,7 +61,9 @@ def _to_np(data, dtype):
 
 
 class Grabber(threading.Thread):
-    """后台线程：以 GRAB_HZ/LOCAL_HZ 持续拉取当前相机的最新一帧。"""
+    """后台线程：以 GRAB_HZ/LOCAL_HZ 持续拉取当前相机的最新一帧。
+    云台/FOV/航向跟随方法为 gimbal_controller.GimbalController 的委托
+    (对外接口与拆分前一致)。"""
 
     def __init__(self, log, host, port):
         super().__init__(daemon=True)
@@ -94,15 +86,8 @@ class Grabber(threading.Thread):
         # 本机摄像头/视频文件设备 IO (见 camera_sources.LocalFileReader;
         # 设备仅在抓取线程访问, 播放控制标志位由界面线程设置)
         self.reader = LocalFileReader(log)
-        # 软件云台: 全局角度 (yaw, pitch), 作用于所有 AirSim 相机。
-        # 无持久化: 每次连接 AirSim 从回中开始, 安装基准重采 (见连接处)
-        self._gimbal = (0.0, 0.0)
-        self._gimbal_mount = {}    # 相机安装位姿 (连接后按需重采)
-        self._gimbal_last = {}     # 本会话各相机最近一次下发姿态
-        self._fov = None           # 全局视场角 (度): 所有相机共用
-        # (None=尚未采纳; 连接后查询相机真实 FOV 采纳, 见 _adopt_camera_fov)
-        self._fov_dirty = False       # 视场角待下发/待采纳标记
-        self._fov_adopt_t = 0.0       # 最近一次 FOV 采纳尝试时刻 (失败重试退避)
+        # 软件云台/FOV/航向跟随: 状态机 + 独立 RPC 线程 (见 gimbal_controller)
+        self.gimbal = GimbalController(log, host, port, DEFAULT_CAMERA)
         # 数字变焦 (抓取层裁切, 图传/转发/标注同一像素系);
         # _raw 留未变焦原帧, 档位/平移变化时重提交。
         # _pan 为裁切窗口中心相对图像中心的偏移 (原始帧像素, 画面跟手:
@@ -110,34 +95,8 @@ class Grabber(threading.Thread):
         self._zoom = 1.0
         self._pan = (0.0, 0.0)
         self._raw = None
-        self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
-        self._anim_t_prev = 0.0
-        # 摇杆连续转动: 当前角速度 (°/s) 与上次帧时刻 (None=未在转动)
-        self._gimbal_rate = (0.0, 0.0)
-        self._rate_t_prev = None
-        self._gimbal_dirty = False
-        # 云台稳定 (follow 模式): 云台角按 GIMBAL_HOLD_HZ 世界系持续重下发
-        # (俯仰/横滚不随机体晃动, 偏航跟随机头); 关闭为刚性挂载 (FPV 手感)。
-        # UE 原生 Gimbal.Stabilization 与 simSetCameraPose 互斥, 故在地面站侧实现
-        self._gimbal_stab = True
-        # 上次成功下发的 (机体姿态, 云台角, 相机) 指纹: 悬停抖动在容差内
-        # 则跳过下发 RPC, 省下的串行等待直接转化为图传帧率
-        self._gimbal_apply_key = None
         # PNG 压缩传输 (config.DISPLAY_SCENE_COMPRESS); 服务端不支持时回退原始传输
         self._scene_compress = config.DISPLAY_SCENE_COMPRESS and cv2 is not None
-        # 会话内限位拒绝标记 (方向 -> bool), 按键被限位卡住时标红, 不持久化
-        self._gimbal_blocked = {'yaw+': False, 'yaw-': False,
-                                'pitch+': False, 'pitch-': False}
-        self._gimbal_apply_t = 0.0   # 上次云台下发时刻 (姿态跟随节流用)
-        # 航向跟随 (云台偏航带动机头): _follow 开启后偏航语义从"跟随机头"
-        # 翻转为"世界系锚定" —— 偏航输入写世界方位锚点 _az_target, 抓取
-        # 每拍把存储 yaw 反卷回 wrap(锚点 − 航向), 机头转动时 yaw 收敛回 0;
-        # _veh_yaw_t 为最近一次机体航向测量时刻 (外环新鲜度依据)
-        self._follow = False
-        self._follow_src = 'ui'      # 跟随来源: 'ui'(teleop) / 'algo'(反控算法)
-        self._algo_cmd_t = None      # 最近一次算法云台指令时刻 (心跳判定)
-        self._az_target = None       # 视线世界方位锚点 (度, 北偏东右+), None=待快照
-        self._veh_yaw_t = None       # 航向测量时刻 (monotonic, 秒)
         self.running = True
         self._airsim_ok = False     # AirSim RPC 是否已连通 (云台可用性依据)
 
@@ -146,12 +105,11 @@ class Grabber(threading.Thread):
             self.camera = name
             self._gen += 1      # 旧源读取阻塞期间的帧提交时被代数拒绝
             self.frame = None   # 丢弃旧相机画面，避免切换时闪现错图
-            # 切源后视角/视场已过时, 置 dirty 让下一拍立即补下发
-            self._gimbal_dirty = True
-            self._fov_dirty = True
+        self.gimbal.on_camera_changed(name, _is_airsim_src(name))
 
     def stop(self):
         self.running = False
+        self.gimbal.stop()
 
     def release_local(self):
         """释放本机摄像头设备 (须在抓取线程 join 之后调用)。"""
@@ -185,97 +143,19 @@ class Grabber(threading.Thread):
                 return self.reader.progress()
         return None
 
-    # ---------- 软件云台 (界面线程调用, 角度由抓取线程经 RPC 写入相机) ----------
+    # ---------- 软件云台/视场角/航向跟随 (委托 GimbalController) ----------
 
     def gimbal_set_rate(self, yaw_rate, pitch_rate):
-        """设置云台连续转动角速度 (°/s, 摇杆控制), 每帧按限位夹紧步进,
-        回零即停; 限位卡住的方向记入 _gimbal_blocked 供标红。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return
-            if yaw_rate == 0.0 and pitch_rate == 0.0:
-                self._gimbal_rate = (0.0, 0.0)
-                return
-            self._gimbal_rate = (yaw_rate, pitch_rate)
-            self._gimbal_anim = None   # 摇杆打断回中/摆位动画
-            self._rate_t_prev = None   # 下一帧重新计时
-
-    def _rate_tick(self):
-        """摇杆连续转动: 每帧按角速度步进 (限位夹紧并标红)。
-        航向跟随中偏航输入改写世界方位锚点 (yaw 由 _follow_tick 反卷
-        生成, 限位也由其按"最大超前角"收口), 俯仰照旧。"""
-        ry, rp = self._gimbal_rate
-        if ry == 0.0 and rp == 0.0:
-            self._rate_t_prev = None
-            return
-        now = time.monotonic()
-        if self._rate_t_prev is None:
-            self._rate_t_prev = now
-            return
-        dt = min(0.1, now - self._rate_t_prev)
-        self._rate_t_prev = now
-        yaw, pitch = self._gimbal
-        if self._follow:
-            self._az_target = _wrap180(self._az_target + ry * dt)
-            npitch = clamp_gimbal(yaw, pitch + rp * dt)[1]
-            if rp > 0:
-                self._gimbal_blocked['pitch+'] = npitch == pitch
-                if npitch != pitch:
-                    self._gimbal_blocked['pitch-'] = False
-            elif rp < 0:
-                self._gimbal_blocked['pitch-'] = npitch == pitch
-                if npitch != pitch:
-                    self._gimbal_blocked['pitch+'] = False
-            if npitch != pitch:
-                self._gimbal = (yaw, npitch)
-                self._gimbal_dirty = True
-            return
-        nyaw, npitch = clamp_gimbal(yaw + ry * dt, pitch + rp * dt)
-        # 限位拒绝标记: 该方向被夹住 => 标红; 有实际动作 => 清对向红
-        if ry > 0:
-            self._gimbal_blocked['yaw+'] = nyaw == yaw
-            if nyaw != yaw:
-                self._gimbal_blocked['yaw-'] = False
-        elif ry < 0:
-            self._gimbal_blocked['yaw-'] = nyaw == yaw
-            if nyaw != yaw:
-                self._gimbal_blocked['yaw+'] = False
-        if rp > 0:
-            self._gimbal_blocked['pitch+'] = npitch == pitch
-            if npitch != pitch:
-                self._gimbal_blocked['pitch-'] = False
-        elif rp < 0:
-            self._gimbal_blocked['pitch-'] = npitch == pitch
-            if npitch != pitch:
-                self._gimbal_blocked['pitch+'] = False
-        if (nyaw, npitch) != (yaw, pitch):
-            self._gimbal = (nyaw, npitch)
-            self._gimbal_dirty = True   # RPC 下发由节流周期负责
+        """云台连续转动角速度 (°/s, 摇杆控制), 见 GimbalController。"""
+        self.gimbal.gimbal_set_rate(yaw_rate, pitch_rate)
 
     def gimbal_reset(self):
-        """云台回中: 启动平滑回中动画 (非瞬跳), 角速度见
-        config.GIMBAL_SLEW_RATE_DEG_S; 摇杆可打断。
-        航向跟随中偏航归反卷所有 (yaw 恒为锚点−航向), 回中只收俯仰。"""
-        with self.lock:
-            self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                self._gimbal = (0.0, 0.0)
-                return
-            yaw_tgt = self._gimbal[0] if self._follow else 0.0
-            self._gimbal_anim = (yaw_tgt, 0.0)
-            self._anim_t_prev = time.monotonic()
+        """云台回中 (平滑动画), 见 GimbalController。"""
+        self.gimbal.gimbal_reset()
 
     def gimbal_pitch_bottom(self):
-        """视觉反控前自动摆位: 仅俯仰平滑转到垂直向下限位, 偏航保持
-        当前值不动 (用户手动调好的视角不被打断); 复用回中动画机制
-        匀速转动。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return
-            self._gimbal_blocked = {k: False for k in self._gimbal_blocked}
-            self._gimbal_anim = (self._gimbal[0],
-                                 config.GIMBAL_PITCH_MIN_DEG)
-            self._anim_t_prev = time.monotonic()
+        """视觉反控前自动摆位 (俯仰转垂直向下), 见 GimbalController。"""
+        self.gimbal.gimbal_pitch_bottom()
 
     def airsim_connected(self):
         """AirSim RPC 是否已连通 (断线/未 play 时为 False)。"""
@@ -284,149 +164,59 @@ class Grabber(threading.Thread):
 
     def get_gimbal(self):
         """当前云台角度 (yaw, pitch)；非 AirSim 源返回 None。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return None
-            return self._gimbal
+        return self.gimbal.get_gimbal()
 
     def get_gimbal_blocked(self):
-        """会话内被限位卡住的方向 (按键不再动作), 界面标红用;
-        非 AirSim 源恒为全 False。"""
-        with self.lock:
-            return dict(self._gimbal_blocked)
+        """会话内被限位卡住的方向 (界面标红用)。"""
+        return self.gimbal.get_gimbal_blocked()
 
     def get_gimbal_stab(self):
-        """云台稳定 (follow 模式) 是否开启 (界面开关初始态)。"""
-        with self.lock:
-            return self._gimbal_stab
+        """云台稳定 (follow 模式) 是否开启。"""
+        return self.gimbal.get_gimbal_stab()
 
     def set_gimbal_stab(self, on):
-        """开关云台稳定: 开启立即补一拍下发 (视角马上稳定);
-        关闭即停在当前姿态转为刚性跟随。"""
-        with self.lock:
-            if self._gimbal_stab == on:
-                return
-            self._gimbal_stab = on
-            self._gimbal_dirty = True
-
-    # ---------- 航向跟随 (云台偏航带动机头) ----------
-    # 两个来源: 'ui' = 界面按钮 (指令走 teleop offboard 通道, GCS P 律);
-    # 'algo' = 反控算法经 gimbal_follow 请求 (算法是 offboard 唯一写者,
-    # 偏航指令由算法注入, GCS 只做反卷与误差广播)。相机侧反卷与来源
-    # 无关, 哪个来源开启都照跑。
+        """开关云台稳定 (世界系重下发 vs 刚性挂载)。"""
+        self.gimbal.set_gimbal_stab(on)
 
     def set_follow(self, on, source='ui'):
-        """开关航向跟随。开启: 打断回中动画 (其偏航目标与反卷冲突),
-        方位锚点置 None 待 _follow_tick 首拍快照 (航向+当前偏航, 视角不跳);
-        关闭: 偏航语义无声切回"跟随机头", 视角连续不跳变。
-        来源归属不同时互不越权: UI 只能退自己的, 反之亦然。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return
-            if on:
-                if self._follow and self._follow_src == source:
-                    return
-                self._follow = True
-                self._follow_src = source
-                self._az_target = None   # 来源切换重快照 (值不变, 仅换归属)
-                self._gimbal_anim = None
-            else:
-                if not self._follow or self._follow_src != source:
-                    return
-                self._follow = False
-                self._az_target = None
-            self._gimbal_dirty = True
+        """开关航向跟随 (云台偏航带动机头)。"""
+        self.gimbal.set_follow(on, source=source)
 
     def clear_ui_follow(self):
-        """交还遥控/异常复位时调用: 仅退出 UI 来源的跟随, 算法来源的
-        跟随不受遥控生命周期影响 (由算法自己退或心跳超时退)。"""
-        self.set_follow(False, source='ui')
+        """仅退出 UI 来源的跟随 (交还遥控/异常复位)。"""
+        self.gimbal.clear_ui_follow()
 
     def set_algo_follow(self, on):
-        """反控算法经 /flylab/gimbal_follow 请求/取消跟随 (ros_node 转发)。"""
-        self.set_follow(on, source='algo')
+        """反控算法经 /flylab/gimbal_follow 请求/取消跟随。"""
+        self.gimbal.set_algo_follow(on)
 
     def note_algo_cmd(self, yaw_rate, pitch_rate):
-        """算法云台指令入口 (ros_node 转发, 复用摇杆速率通道):
-        [yaw_rate, pitch_rate] (°/s), 同时作为算法 follow 的心跳
-        (断流超时自动退跟随, 见 _follow_timeout_check)。"""
-        with self.lock:
-            self._algo_cmd_t = time.monotonic()
-        self.gimbal_set_rate(yaw_rate, pitch_rate)
+        """算法云台指令入口 (兼算法 follow 心跳)。"""
+        self.gimbal.note_algo_cmd(yaw_rate, pitch_rate)
 
     def get_follow(self):
         """航向跟随是否开启 (界面按钮状态同步依据)。"""
-        with self.lock:
-            return self._follow
+        return self.gimbal.get_follow()
 
     def get_follow_error(self):
-        """航向跟随误差 (度, 右+ = 视线在机头右侧): 真实视线方位 − 航向。
-        取最近一次实际下发的相机机体系姿态 (_gimbal_last) 的"屏幕上方"
-        方位角, 而非存储云台角的模型值 —— 安装基准若被污染 (重采把已转动
-        的相机位姿采进去), 模型值与真实视线差一个基准偏移, 跟随会把机头
-        收敛到偏移后的航向 (图像与面板都显示对准、机头却不对准码朝向)。
-        未跟随 / 航向测量过期 / 相机姿态缺失 返回 None, 外环按 0 处理
-        (停止转向, 遥控量保持悬停)。"""
-        with self.lock:
-            if not self._follow or self._veh_yaw_t is None:
-                return None
-            if time.monotonic() - self._veh_yaw_t \
-                    > config.GIMBAL_FOLLOW_FRESH_SEC:
-                return None
-            q = self._gimbal_last.get(self.camera)
-            if q is None:
-                return self._gimbal[0]   # 尚未下发过 (理论少见): 退回模型值
-            up = quat_rot_vec(q, airsim.Vector3r(0.0, 0.0, -1.0))
-            return math.degrees(math.atan2(up.y_val, up.x_val))
-
-    def _follow_timeout_check(self):
-        """算法来源跟随的心跳超时 (仅抓取线程调用): gimbal_cmd 断流
-        (算法崩溃/停发) 超时后自动退跟随, 偏航语义切回跟随机头
-        (视角连续), 并上屏告警。"""
-        with self.lock:
-            if not (self._follow and self._follow_src == 'algo'):
-                return
-            if self._algo_cmd_t is None or time.monotonic() - self._algo_cmd_t \
-                    <= config.GIMBAL_FOLLOW_ALGO_TIMEOUT_SEC:
-                return
-            self._follow = False
-            self._az_target = None
-            self._gimbal_dirty = True
-        self.log('航向跟随: 算法云台指令断流超时 '
-                 f'(>{config.GIMBAL_FOLLOW_ALGO_TIMEOUT_SEC:.0f}s), 已自动退出')
-
-    # ---------- 视场角 (界面线程调用, 由抓取线程经 RPC 写入相机) ----------
+        """航向跟随误差 (度, 右+); 未跟随/数据过期返回 None。"""
+        return self.gimbal.get_follow_error()
 
     def set_fov(self, deg):
-        """设置全局视场角 (度): 记忆 + 置 dirty, 下一拍下发到当前相机。
-        滑杆高频调用, 节流靠抓取帧率 (每拍最多一次 RPC)。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return
-            deg = max(config.GIMBAL_FOV_MIN_DEG,
-                      min(config.GIMBAL_FOV_MAX_DEG, float(deg)))
-            if self._fov == deg:
-                return
-            self._fov = deg
-            self._fov_dirty = True
+        """设置全局视场角 (度), 下一拍经 RPC 下发。"""
+        self.gimbal.set_fov(deg)
 
     def get_fov(self):
-        """全局视场角 (度); 未调整过返回默认 (界面滑杆显示用)。
-        本机/视频文件源返回 None (界面置灰依据)。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return None
-            return self._fov if self._fov is not None \
-                else config.GIMBAL_FOV_DEFAULT_DEG
+        """全局视场角 (度); 未调整过返回默认, 本机/文件源返回 None。"""
+        return self.gimbal.get_fov()
 
     def get_fov_applied(self):
-        """实际生效的全局视场角 (度); 用户从未调整过返回 None
-        (视场角同步发布依据: 不拿界面默认值冒充相机真实 FOV)。
-        本机/视频文件源返回 None。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return None
-            return self._fov
+        """实际生效 FOV; 用户从未调整过返回 None (同步发布依据)。"""
+        return self.gimbal.get_fov_applied()
+
+    def get_cam_orientation(self):
+        """当前相机的机体系姿态四元数; 非 AirSim 源返回 None。"""
+        return self.gimbal.get_cam_orientation()
 
     # ---------- 数字变焦 (界面滚轮/双击/滑杆, 裁切由抓取线程在 _commit 做) ----------
 
@@ -495,217 +285,7 @@ class Grabber(threading.Thread):
             return crop
         return cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    def get_cam_orientation(self):
-        """当前显示相机的机体系姿态四元数 (x, y, z, w)；非 AirSim 源返回 None。
-
-        语义: 相机 NED 体约定 (x 视轴, y 图右, z 图下) 相对机体 FRD 的旋转,
-        取最近一次实际下发的机体相对姿态, 云台未动过时回退安装基准。
-        供 aruco_landing 做图像方向 -> 机体系的泛化映射。"""
-        with self.lock:
-            if self.camera.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                return None
-            q = self._gimbal_last.get(self.camera)
-            if q is None:
-                mount = self._gimbal_mount.get(self.camera)
-                if mount is None:
-                    return None
-                q = mount[1]
-            return (q.x_val, q.y_val, q.z_val, q.w_val)
-
-    def _anim_tick(self):
-        """回中动画推进一步 (仅抓取线程调用, 须持锁): 以恒定角速度朝目标
-        (0,0) 推进, 时间驱动不受帧率影响; 到位后停用动画并持久化。"""
-        if self._gimbal_anim is None:
-            return
-        ty, tp = self._gimbal_anim
-        yaw, pitch = self._gimbal
-        dy, dp = ty - yaw, tp - pitch
-        dist = math.hypot(dy, dp)
-        now = time.monotonic()
-        dt = min(0.1, now - self._anim_t_prev)
-        self._anim_t_prev = now
-        max_d = config.GIMBAL_SLEW_RATE_DEG_S * dt
-        if dist <= max_d:
-            self._gimbal = (ty, tp)
-            self._gimbal_anim = None
-        else:
-            s = max_d / dist
-            self._gimbal = clamp_gimbal(yaw + dy * s, pitch + dp * s)
-        self._gimbal_dirty = True
-
-    def _follow_tick(self, client):
-        """航向跟随的相机侧半环 (仅抓取线程, 抓取每拍调用):
-        测量机体航向并缓存; 跟随中把存储偏航反卷回世界方位锚点
-        (yaw = wrap(锚点 − 航向)) —— 视线钉在世界系, 航向转动时 yaw
-        自然收敛回 0, 机头追上视线即停。限位在此按"最大超前角"收口
-        (锚点同步回拉), 限位标红方向随之更新。返回机体姿态四元数
-        (供 _apply_gimbal 复用, 省一次 RPC); 测量失败返回 None。"""
-        try:
-            q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
-        except Exception:
-            return None
-        yaw_b, _ = quat_yaw_el(q_b)
-        with self.lock:
-            self._veh_yaw_t = time.monotonic()
-            if not self._follow:
-                return q_b
-            if self._az_target is None:
-                # 进入跟随后的首次测量: 快照锚点 = 航向 + 当前偏航 (不跳变)
-                self._az_target = _wrap180(yaw_b + self._gimbal[0])
-            yaw = _wrap180(self._az_target - yaw_b)
-            limit = config.GIMBAL_YAW_LIMIT_DEG
-            if abs(yaw) > limit:
-                # 超前角到限位: yaw 夹住, 锚点回拉随航向 (持续追到顶
-                # = 机头以最大角速率追视线, 视线方位不再前伸), 标红该向
-                self._gimbal_blocked['yaw+' if yaw > 0 else 'yaw-'] = True
-                self._gimbal_blocked['yaw-' if yaw > 0 else 'yaw+'] = False
-                yaw = limit if yaw > 0 else -limit
-                self._az_target = _wrap180(yaw_b + yaw)
-            else:
-                self._gimbal_blocked['yaw+'] = False
-                self._gimbal_blocked['yaw-'] = False
-            if yaw != self._gimbal[0]:
-                self._gimbal = (yaw, self._gimbal[1])
-                self._gimbal_dirty = True
-        return q_b
-
-    def _reset_gimbal(self):
-        """连接建立时云台状态复核 (重连/重 play): 复位跟随/动画/限位标红,
-        置 dirty 触发重下发。安装基准、云台角与下发记录保留 —— RPC 断连
-        不会移动 UE 端相机, 保留的状态仍与实际一致, 重下发即恢复原视角
-        (无跳变, 降落中云台姿态也不会中断); 若按旧逻辑清基准重采, 会把
-        重连前已被转动的相机位姿污染进安装基准 —— 错位视觉上无感, 却让
-        跟随收敛到偏移的航向。UE 重 play 场景: 相机自己回到安装位, 保留
-        的基准仍然正确, 重下发同样一致。航向跟随一并退出 (重连后航向/
-        锚点均失效, 界面按钮随状态同步弹起)。"""
-        with self.lock:
-            self._gimbal_anim = None
-            self._gimbal_rate = (0.0, 0.0)
-            self._gimbal_dirty = True
-            self._gimbal_blocked = {k: False
-                                    for k in self._gimbal_blocked}
-            self._follow = False
-            self._follow_src = 'ui'
-            self._algo_cmd_t = None
-            self._az_target = None
-            self._veh_yaw_t = None
-
-    def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur, q_b=None):
-        """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。
-        q_b: 预取的机体姿态四元数 (航向跟随每拍已测, 复用省一次 RPC);
-        None 则自行获取。
-
-        只持续下发当前相机; 其余相机仅在首次同步时下发一次 (供 UE 重玩
-        检测), 切到它时指纹含相机名必失配, 下一拍立即补发。飞行中每拍
-        只有 1 次 kinematics + 1 次 simSetCameraPose, 且走云台专用 RPC
-        连接, 不阻塞拉图。
-
-        simSetCameraPose 按"机体相对位姿"解释输入, 若把云台角直接叠加在
-        机体系安装姿态上, 偏航绕的是机体 z 轴 (斜轴), 连续步进会沿斜锥面
-        进动、视角甩偏。改为世界系稳定云台: 目标视线用 (方位角, 仰角) 在
-        世界系直接重建 —— 方位 = 机体前向方位 + 云台偏航 + 安装偏航,
-        仰角 = 安装仰角 + 云台俯仰, roll=0。视线钉在世界系, 方向键与机体
-        姿态完全无关。"""
-        try:
-            if q_b is None:
-                q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
-            # 指纹 = (机体姿态, 云台角, 当前相机), 姿态按四元数夹角容差判定
-            # (|dot| = cos(θ/2)): 悬停抖动在容差内跳过下发, 真实机动照常补偿
-            last = self._gimbal_apply_key
-            if last is not None:
-                lq, lyaw, lpitch, lcam = last
-                dot = abs(q_b.x_val * lq.x_val + q_b.y_val * lq.y_val
-                          + q_b.z_val * lq.z_val + q_b.w_val * lq.w_val)
-                if (lcam == cam_cur and lyaw == yaw_deg and lpitch == pitch_deg
-                        and dot >= math.cos(math.radians(APPLY_TOL_DEG) / 2.0)):
-                    return
-            applied = {}
-            for cam in DEFAULT_CAMERAS:
-                if cam != cam_cur and cam in self._gimbal_last:
-                    continue   # 非当前相机且已同步过: 切到它时才会再下发
-                if cam not in self._gimbal_mount:
-                    try:
-                        self._gimbal_mount[cam] = capture_mount(client, cam)
-                    except MountNotReady:
-                        # 基准未就绪 (刚连上时机体弹跳/运动学未就绪): 整批
-                        # 跳过本拍, 靠稳定模式的周期重下发下一拍重采 ——
-                        # 污染的基准会把相机错位到机身外, 云台一动拍到机体
-                        return
-                    except Exception as e:
-                        self._gimbal_mount[cam] = None   # 该相机不可用, 跳过
-                        self.log(f'云台: 获取 {cam} 安装位姿失败, 跳过: {e}')
-                        continue
-                mount = self._gimbal_mount[cam]
-                if mount is None:
-                    continue
-                pos, ori = mount
-                # 世界系重建目标姿态 (方位/仰角, roll=0), 再反算回机体系下发
-                yaw_b, _ = quat_yaw_el(q_b)
-                yaw_m, el_m = quat_yaw_el(ori)
-                q_des_world = quat_mul(
-                    gimbal_yaw_quat(yaw_b + yaw_deg + yaw_m),
-                    gimbal_pitch_quat(el_m + pitch_deg))
-                q_cmd = quat_mul(quat_conj(q_b), q_des_world)
-                try:
-                    client.simSetCameraPose(cam, airsim.Pose(pos, q_cmd), VEHICLE)
-                    applied[cam] = q_cmd
-                except Exception as e:
-                    self.log(f'云台: {cam} 下发失败: {e}')
-            if applied:
-                # 下发记录仅在成功后更新 (供切相机后的补发判定);
-                # 指纹同步更新 (悬停抖动容差内据此跳过下发)
-                with self.lock:
-                    self._gimbal_last = applied
-                    self._gimbal_apply_key = (q_b, yaw_deg, pitch_deg, cam_cur)
-        except Exception as e:
-            # 连接级失败上抛给云台线程: 复位连接退避 1s 重连 (不在
-            # 节流频率下反复失败刷屏)
-            self.log(f'云台控制失败: {e}')
-            raise
-        finally:
-            self._gimbal_dirty = False
-
-    def _apply_fov(self, client, cam):
-        """把全局视场角经 simSetCameraFov 写入当前相机 (走云台专用 RPC)。
-        只在 dirty 时对齐一次, 不逐帧重发; 从未调过 (None) 则查询相机
-        真实 FOV 采纳为当前值 (见 _adopt_camera_fov), 不改动相机。"""
-        with self.lock:
-            fov = self._fov
-            adopt = fov is None
-        if adopt:
-            # 采纳失败自动重试 (5s 退避): 此前查询前就清 dirty, 一次失败
-            # 整个会话不再采纳/发布 FOV 话题, 算法节点只能用 yaml 默认值,
-            # 距离解算全程偏差 (表现为"拖一次视场滑杆才准")
-            if time.monotonic() - self._fov_adopt_t < 5.0:
-                return
-            self._fov_adopt_t = time.monotonic()
-            self._adopt_camera_fov(client, cam)
-            return
-        try:
-            client.simSetCameraFov(cam, fov, VEHICLE)
-            self._fov_dirty = False
-        except Exception as e:
-            self.log(f'视场角下发失败: {e}')
-            raise   # _fov_dirty 保持 True, 云台线程重连后自动重试
-
-    def _adopt_camera_fov(self, client, cam):
-        """从未调整过 FOV 时查询当前相机真实 FOV (settings.json 配置值)
-        采纳为当前值: 只读不改相机, 不落盘 (下次连接按当时真实值重取,
-        不拿旧值覆盖 settings.json 的改动)。采纳后 get_fov_applied 有值,
-        视场角话题即发布, ArUco 等算法节点启动即同步, 无需先拖一次滑杆;
-        界面滑杆也直接显示真实 FOV。"""
-        try:
-            info = client.simGetCameraInfo(cam, VEHICLE)
-            fov = float(info['fov'] if isinstance(info, dict) else info.fov)
-        except Exception as e:
-            self.log(f'视场角查询失败 ({cam}): {e}')
-            return
-        if not 0.0 < fov <= 180.0:
-            return
-        with self.lock:
-            if self._fov is None:
-                self._fov = fov
-        self.log(f'视场角: 采纳相机 {cam} 当前 FOV {fov:.0f}° (同步算法节点)')
+    # ---------- 帧提交与抓取线程 ----------
 
     def _commit(self, arr, is_depth, gen):
         """写入最新帧并统计 fps。切源代数不符 (读取阻塞期间切了源) 时
@@ -743,8 +323,7 @@ class Grabber(threading.Thread):
         # 云台/FOV/航向跟随 RPC 走独立线程 (独立连接): 若与拉图串行,
         # 机体运动时姿态跟随每拍多 2 次串行 RPC (kinematics + setCameraPose,
         # 后者还触发 UE 重渲染), 图传帧率会被拉低一半以上
-        threading.Thread(target=self._gimbal_loop, daemon=True,
-                         name='gimbal-rpc').start()
+        self.gimbal.start()
         # AirSim 拉图流水线: N 个 worker 各持独立 RPC 连接并发拉图 (见
         # AIRSIM_FETCH_THREADS 注释); 本机/文件源仍由本线程处理
         for i in range(AIRSIM_FETCH_THREADS):
@@ -788,6 +367,7 @@ class Grabber(threading.Thread):
                 self._conn_last_log = time.monotonic()
             with self.lock:
                 self._airsim_ok = False
+            self.gimbal.set_connected(False)
             time.sleep(1.0)
             return None
         # 正式连接带 3s 超时: 默认 3600s 下 UE 卡顿会把拉图线程
@@ -799,15 +379,12 @@ class Grabber(threading.Thread):
             self._conn_count += 1
         with self.lock:
             self._airsim_ok = True
+        self.gimbal.set_connected(True)
         self.log(f'已连接 AirSim {self.host}:{self.port}')
         if first:
-            # 云台状态复核: 保留基准/角度, 复位跟随 + 限位标红,
-            # 重下发恢复视角 (重采会污染安装基准, 见 _reset_gimbal)
-            self._reset_gimbal()
-            # 视场角: 置 dirty 触发 _apply_fov —— _fov 恒为 None
-            # (无记忆), 走查询相机真实 FOV 采纳路径, 算法节点启动即同步
-            with self.lock:
-                self._fov_dirty = True
+            # 云台状态复核 + FOV 重采 (云台侧保留基准/角度, 见
+            # GimbalController.on_connected)
+            self.gimbal.on_connected()
         return client
 
     def _airsim_fetch_loop(self, worker_id):
@@ -820,7 +397,7 @@ class Grabber(threading.Thread):
                 with self.lock:
                     cam = self.camera
                     gen = self._gen   # 本轮帧的切源代数, 提交时校验
-                if cam.startswith((LOCAL_PREFIX, FILE_PREFIX)):
+                if not _is_airsim_src(cam):
                     time.sleep(0.1)   # 本机/文件源由 run() 线程处理
                     continue
                 if client is None:
@@ -829,9 +406,10 @@ class Grabber(threading.Thread):
                         continue
                 t_start = time.monotonic()
                 is_depth = 'depth' in cam.lower()
-                # 云台/FOV/跟随 RPC 全部在 _gimbal_loop 线程处理 (独立连接),
-                # 拉图循环只剩 simGetImages —— 机体运动时的姿态跟随重下发
-                # 不再与拉图串行, 否则每拍多 2 次串行 RPC 会把帧率拉低一半
+                # 云台/FOV/跟随 RPC 全部在 GimbalController 线程处理 (独立
+                # 连接), 拉图循环只剩 simGetImages —— 机体运动时的姿态跟随
+                # 重下发不再与拉图串行, 否则每拍多 2 次串行 RPC 会把帧率
+                # 拉低一半
                 if is_depth:
                     # 深度必须用 DepthPlanar: Scene+float 读回会触发 D3D12
                     # 断言并返回 NaN/Inf
@@ -880,66 +458,3 @@ class Grabber(threading.Thread):
             arr = np.ascontiguousarray(
                 data.reshape(r.height, r.width, 3)[..., ::-1])
         return arr
-
-    def _gimbal_loop(self):
-        """云台/FOV/航向跟随后台线程 (独立 RPC 连接): 与拉图线程分离,
-        姿态跟随的周期重下发 (kinematics + setCameraPose, 后者触发 UE
-        重渲染) 不再占抓取往返 —— 机体运动时图传帧率不被拉低。
-
-        每 GIMBAL_LOOP_HZ 一拍: 心跳超时检查 → 摇杆步进/回中动画 →
-        航向跟随反卷 → 周期重下发云台 → FOV 对齐。下发频率仍由
-        GIMBAL_HOLD_HZ 节流, 悬停抖动由 _apply_gimbal 指纹容差拦截。"""
-        client = None
-        while self.running:
-            try:
-                if not self.airsim_connected():
-                    # 抓取线程的探针确认连通后才建连接, 避免与探针重复
-                    time.sleep(0.2)
-                    continue
-                with self.lock:
-                    cam = self.camera
-                if cam.startswith((LOCAL_PREFIX, FILE_PREFIX)):
-                    time.sleep(0.05)
-                    continue
-                if client is None:
-                    client = airsim.VehicleClient(
-                        ip=self.host, port=self.port, timeout_value=3.0)
-                t_start = time.monotonic()
-                self._follow_timeout_check()
-                now = time.monotonic()
-                with self.lock:
-                    self._rate_tick()    # 摇杆连续转动: 每拍按角速度推进
-                    self._anim_tick()    # 回中动画: 每拍推进并置 dirty
-                    gim_dirty, gim = self._gimbal_dirty, self._gimbal
-                    stab = self._gimbal_stab
-                    follow = self._follow
-                # 云台角只在下发瞬间按当时机体姿态换算, 机体姿态一变记忆
-                # 角就与实际视角脱钩, 故除 dirty 立即下发外还周期重下发;
-                # 稳定模式下居中角 (0,0) 也持续重下发 (视角保持水平),
-                # 非稳定模式居中=刚性挂载 (省 RPC)
-                apply_due = gim_dirty or (
-                    config.GIMBAL_HOLD_HZ > 0
-                    and (stab or gim != (0.0, 0.0))
-                    and now - self._gimbal_apply_t
-                    >= 1.0 / config.GIMBAL_HOLD_HZ)
-                qb = None
-                if follow and (apply_due
-                               or now - (self._veh_yaw_t or 0.0) >= 0.2):
-                    # 航向跟随: 测航向 + 反卷云台偏航 (RPC 在锁外);
-                    # 反卷改写 gim 后重读, 本拍下发即用最新角
-                    qb = self._follow_tick(client)
-                    with self.lock:
-                        gim_dirty, gim = self._gimbal_dirty, self._gimbal
-                    apply_due = apply_due or gim_dirty
-                if apply_due:
-                    self._apply_gimbal(client, *gim, cam, q_b=qb)
-                    self._gimbal_apply_t = now
-                # 视场角: dirty 时按当前相机记忆值对齐一次
-                if self._fov_dirty:
-                    self._apply_fov(client, cam)
-                time.sleep(max(0.0, 1.0 / GIMBAL_LOOP_HZ
-                               - (time.monotonic() - t_start)))
-            except Exception as e:
-                self.log(f'云台线程: 连接中断: {e}，1 秒后重连...')
-                client = None
-                time.sleep(1.0)

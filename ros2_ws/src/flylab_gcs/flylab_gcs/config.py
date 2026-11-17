@@ -117,7 +117,7 @@ LANDING_STOP_CMD = 'landing_stop'
 # 降落节点状态回传话题 (tracking/landing/landed/idle)，地面站据此复位按钮
 LANDING_STATUS_TOPIC = '/flylab/landing_status'
 # 算法信息面板数据话题 (std_msgs/String JSON): 各算法节点按 src 分组发布
-# 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 algo_output_panel.py)
+# 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 panel_sections.py)
 ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 
 # ---------- 视觉反控降落模式 (算法注册表 landing_modes 声明) ----------
@@ -263,7 +263,7 @@ VEHICLE_CMDS = [
 #   start/stop      启停指令 (std_msgs/String)
 #   enables_landing True = ArUco 降落 (视觉反控) 的前置条件
 #   landing_modes   反控模式子菜单 [(mode, 显示名)...]
-#   panel           右栏算法信息面板分组 (algo_output_panel.SECTIONS)
+#   panel           右栏算法信息面板分组 (panel_sections.SECTIONS)
 # 加模型变体: yolo_*_node 支持 -p model:=<权重路径> (默认取 share 下的
 # yolo26s* 系列), 复制一个条目改 name/model 即可, 例如:
 #   {'name': '自训检测模型',
@@ -284,7 +284,7 @@ ALGORITHMS = [
          # 下展开模式子项 (ArUco: 图像空间/3D 姿态); 未声明或单项的反控算法
          # 只显示普通"视觉反控"单项, 无下级选项
          'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
-         'panel': 'aruco'},   # 右栏算法信息面板分组 (algo_output_panel.SECTIONS)
+         'panel': 'aruco'},   # 右栏算法信息面板分组 (panel_sections.SECTIONS)
     ]},
     {'name': '目标检测', 'items': [
         {'name': 'yolo26s',

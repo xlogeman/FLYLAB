@@ -96,7 +96,8 @@ usbipd attach --busid 1-8 --wsl U-22.04-fuck
 | `config.py` | 全局配置：话题、端口、机型/链路/飞控命令/算法注册表，改这里 |
 | `main_window.py` | 主窗口：顶部工具栏 + 右栏面板组装 + 33ms 轮询与按钮门控 |
 | `ros_node.py` | ROS 节点 + `TeeLogger`（终端日志照常，同时分流到界面日志框） |
-| `camera_grabber.py` | 视频源抓取线程（AirSim RPC / 本机摄像头 / 视频文件）+ 软件云台（世界系稳定） |
+| `camera_grabber.py` | 视频源抓取线程（AirSim RPC / 本机摄像头 / 视频文件）+ 数字变焦裁切 |
+| `gimbal_controller.py` | 软件云台控制器（世界系稳定）+ FOV + 航向跟随，独立 RPC 线程 |
 | `vehicle_control.py` | 飞行控制线程：独立 AirSim RPC 会话（解锁/起飞/降落/悬停/返航/上锁） |
 | `processes.py` | 托管子进程生命周期：独立进程组、SIGTERM→SIGKILL 整组回收、输出接管 |
 | `log_panel.py` | 日志框：日志分流上屏，缓冲批量渲染抗日志风暴 |
@@ -126,7 +127,7 @@ usbipd attach --busid 1-8 --wsl U-22.04-fuck
   {"type": "image",    "pos": [x,y], "w": 640, "alpha": 0.45, "data": "<base64 JPEG>"}]}
 ```
 
-**算法信息面板**（右栏底部）：算法发 `{"src": "<key>", ...}` JSON 到 `/flylab/aruco_info`（`info_topic` 可覆盖），`algo_output_panel.SECTIONS` 注册字段表 + `config.ALGORITHMS` 加 `'panel'` 键即随算法显隐；稠密输出（深度/分割）可带 `"img"`（base64 JPEG）进分组顶部固定高度图片区（等比留边，任意分辨率自适应）。
+**算法信息面板**（右栏底部）：算法发 `{"src": "<key>", ...}` JSON 到 `/flylab/aruco_info`（`info_topic` 可覆盖），`panel_sections.SECTIONS` 注册字段表 + `config.ALGORITHMS` 加 `'panel'` 键即随算法显隐；稠密输出（深度/分割）可带 `"img"`（base64 JPEG）进分组顶部固定高度图片区（等比留边，任意分辨率自适应）。
 
 **其他**：名字含 `depth` 的源自动伪彩（0.2~20m）；UE 断线自动重连，只保留最新帧；相机需在 UE 端 `settings.json` 配置过（`configs/settings.json` 已含全部）。依赖 `msgpack-rpc-python`、PyQt5、OpenCV（GTK 后端，勿装 pip 版 opencv-python——Qt 与 PyQt5 冲突）。
 
