@@ -85,6 +85,8 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 #    三路互证 ≈0.28 (此前 0.368 是姿态大幅振荡污染估计的假值)。
 #    前馈 0.38 虚高 36% -> 积分器常年背 -0.10 反向偏差 -> 0.14Hz 呼吸式浮动
 #    (z 峰峰 5.2m, 推力指令在 0.21~0.40 间摆动)。定版 0.28, 实测值勿再用理论
+#    BEIMING 调参 2026-11-17(四): 直通方案已回退, 保持原版 0.8u+0.2 映射,
+#    MPC_THR_HOVER 恢复实测换算值 0.28 ((0.416-0.2)/0.8 ≈ 0.27, 与实测互证)
 # ==================================
 param set MPC_USE_HTE 0
 param set MPC_THR_HOVER 0.28
@@ -130,13 +132,21 @@ param set MPC_XY_TRAJ_P 0.3
 #    双积分(低频相位 -180°) + 滞后越界 -> 极限环。
 #    修复: I 0.5->0.1 消除双积分, P 0.6->0.5 压带宽(0.5 rad/s << 滞后角),
 #    D 0.3->0.4 补相位裕度 (预计 PM≈42°, 不再极限环)
+#    BEIMING 调参 2026-11-17(五) ulog 定论 (11_49_35.ulg): 悬停前馈已准
+#    (thrust_sp 均值 0.276 ≈ 0.28, HTE 收敛 0.276), 但 0.11Hz 呼吸仍在
+#    (z 峰峰 0.71m, vz 跟随误差 std 0.23) —— 根因与 X100 相同: 0.8u+0.2 映射使
+#    推力增量增益只有 PX4 假设的 r = 0.8/(0.8+0.2/0.28) ≈ 0.53。
+#    修复: 对标 X100 验证配方的有效带宽 (P_eff = 2.7×0.375 ≈ 1.01) 按 1/r 换算:
+#    P = 1.01/0.53 ≈ 1.9, I = 0.075/0.53 ≈ 0.14, D = 0.11/0.53 ≈ 0.21
+#    (XY 环走倾转通道, 与映射无关, 不动)
+#    调参方向: vz 高频抖动 -> P 降 30%; 仍缓慢呼吸 -> P 升至 2.5
 # ==================================
 param set MPC_XY_VEL_P_ACC 1.2
 param set MPC_XY_VEL_I_ACC 0.1
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 0.5
-param set MPC_Z_VEL_I_ACC 0.1
-param set MPC_Z_VEL_D_ACC 0.4
+param set MPC_Z_VEL_P_ACC 1.9
+param set MPC_Z_VEL_I_ACC 0.14
+param set MPC_Z_VEL_D_ACC 0.21
 
 
 # ==================================
@@ -158,7 +168,12 @@ param set MC_YAWRATE_MAX 60.0
 
 param set MC_ROLLRATE_FF 0.0
 param set MC_ROLLRATE_K 1.0
-param set MC_ROLLRATE_P 0.015
+# BEIMING 调参 2026-11-17(六) ulog (11_52_12.ulg): Z 环修好后暴露滚转通道
+# 0.22Hz 极限环 (roll 峰峰 36.7°, rollrate 跟随误差 std 7°/s vs sp 8.5°/s,
+# 舵机指令与 roll 相关≈0/滞后 900ms —— 速率环带宽不足, 按本节原定调参方向
+# "迟钝 -> P 0.02" 上调; pitch 实测安静 (std 0.13°) 保持 0.015
+# 调参方向: roll ±1 乒乓 -> P 回 0.015; 仍迟钝(误差>10°/s) -> P 0.025
+param set MC_ROLLRATE_P 0.02
 param set MC_ROLLRATE_I 0.025
 param set MC_ROLLRATE_D 0.0
 param set MC_PITCHRATE_FF 0.0

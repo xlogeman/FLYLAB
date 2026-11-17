@@ -78,13 +78,21 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 
 
 # ==================================
-# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 油门【线性】, 源码 RotorActuator.hpp:
+# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 桨油门【线性】, 源码 RotorActuator.hpp:
 #    thrust = control_signal * max_thrust, 与 PhysicsParams 联动:
 #    单桨最大推力 = CT×1.225×(MaxRPM/60)²×D⁴ = 0.109919×1.225×106.61²×0.35⁴ ≈ 22.96N
-#    悬停油门 = 1.5×9.81/2 / 22.96 ≈ 0.32, 即 1/推重比, 推重比 = 2×22.96/(1.5×9.81) ≈ 3.12)
+#    物理悬停桨油门 = 1.5×9.81/2 / 22.96 ≈ 0.3205 (即 1/推重比, 推重比 = 2×22.96/(1.5×9.81) ≈ 3.12)
+#    ★ PX4 actuator 输出 u ≠ 仿真桨油门: AirSim normalizeRotorControls
+#      (MavLinkMultirotorApi.hpp) 对 PX4 多旋翼电机通道做 sim_ctrl = 0.8·u + 0.2 (怠速偏置),
+#      故 MPC_THR_HOVER = (物理悬停桨油门 − 0.2) / 0.8 = (0.3205 − 0.2) / 0.8 ≈ 0.15
+#    BEIMING 调参 2026-11-17: 0.32 经映射实际输出桨油门 0.456 (42% 超推) -> 呼吸式浮动;
+#    修正为 0.15, HTE 实测 0.154 互证。试飞验证: ulog actuator_outputs 通道 0/1
+#    悬停段均值应 ≈ 0.15 且 |vz| 收敛
+#    BEIMING 调参 2026-11-17(四): 曾尝试 normalizeRotorControls 直通 (MPC_THR_HOVER=0.32),
+#    已回退保持原版映射 —— 以后配置机型务必记得 0.2 偏置/0.8 系数换算
 # ==================================
 param set MPC_USE_HTE 0
-param set MPC_THR_HOVER 0.32
+param set MPC_THR_HOVER 0.15
 param set MPC_THR_MIN 0.05
 param set MPC_THR_MAX 0.95
 
@@ -118,17 +126,25 @@ param set MPC_XY_TRAJ_P 0.4
 
 
 # ==================================
-# 4. 速度控制器 (同 X050 调参结论: 位置保持绕圈 => 积分器下调; 油门滞后 => 垂直环降 P/I 加 D)
-#    BEIMING 调参 2026-11-05: 悬停上下浮动, 套用 X300 定案配方
-#    (I 0.5 会与推力滞后构成双积分极限环 -> 呼吸式浮动; 降 I 消除双积分,
-#     降 P 压带宽, 加 D 补相位裕度。悬停油门 0.32 仍是理论值, 实测后须回填, 见 §1)
+# 4. 速度控制器
+#    BEIMING 调参 2026-11-17(二) ulog 定论 (09_58_22.ulg): 悬停油门 0.15 修正后
+#    HTE 独立收敛 0.154 (前馈已准), 但 0.10Hz 呼吸仍在: vz_sp std 0.44 与
+#    vz 相关系数仅 0.01 (内环完全跟不上外环), thrust_sp.z 摆幅仅 ±0.0035,
+#    姿态/倾转/XY 均稳定 —— 根因: AirSim normalizeRotorControls 的
+#    sim_ctrl = 0.8u+0.2 使推力【增量】增益只有 PX4 假设的
+#    r = 0.8/(0.8 + 0.2/hover) = 0.8/(0.8+0.2/0.15) ≈ 0.375
+#    (PX4 按 F_max = mg/0.15 = 98N 计算响应, 实际 F_max = 45.9N),
+#    Z 环有效带宽被压到调参值的 37.5%, 内外环带宽倒挂 -> 呼吸极限环。
+#    修复: Z 速度环增益按 1/r ≈ 2.67 全额补偿 (r 为常数比例, 补偿全域完备):
+#    P 0.5→2.7, I 0.1→0.2, D 0.4→0.3。试飞验证悬停稳定。
+#    BEIMING 调参 2026-11-17(四): 直通方案已回退, 保持本补偿增益 (现役定案配方)
 # ==================================
 param set MPC_XY_VEL_P_ACC 1.4
 param set MPC_XY_VEL_I_ACC 0.15
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 0.5
-param set MPC_Z_VEL_I_ACC 0.1
-param set MPC_Z_VEL_D_ACC 0.4
+param set MPC_Z_VEL_P_ACC 2.7
+param set MPC_Z_VEL_I_ACC 0.2
+param set MPC_Z_VEL_D_ACC 0.3
 
 
 # ==================================

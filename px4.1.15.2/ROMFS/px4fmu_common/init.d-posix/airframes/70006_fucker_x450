@@ -43,10 +43,15 @@ param set-default PWM_MAIN_FUNC4 104            # 映射输出通道4为电机4�
 # 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 油门【线性】, 源码 RotorActuator.hpp:
 #    thrust = control_signal * max_thrust, 与 PhysicsParams 联动:
 #    单桨最大推力 = CT×1.225×(MaxRPM/60)²×D⁴ ≈ 17.6N
-#    悬停油门 = 3.12×9.81/4 / 17.6 ≈ 0.43, 即 1/推重比)
+#    物理悬停桨油门 = 3.12×9.81/4 / 17.6 ≈ 0.43, 即 1/推重比
+#    BEIMING 调参 2026-11-17(七) ulog (11_59_26.ulg): 0.8u+0.2 映射下
+#    MPC_THR_HOVER = (物理悬停桨油门 − 0.2)/0.8 = (0.4349−0.2)/0.8 ≈ 0.294;
+#    HTE 实测 0.2986 (与 X100/X300 同规律: 实测比公式约高 2%), 取 0.30。
+#    旧值 0.43 经映射实际输出桨油门 0.544 (25% 超推), 由 I=2.0 积分器硬扛
+#    -> 0.36Hz 呼吸 (z 峰峰 0.48m)
 # ==================================
 param set MPC_USE_HTE 0
-param set MPC_THR_HOVER 0.43
+param set MPC_THR_HOVER 0.30
 param set MPC_THR_MIN 0.05
 
 # 最大倾斜角 (3.12kg 重载机, 35° 时水平可用加速度 ≈ 7 m/s²)
@@ -79,13 +84,19 @@ param set MPC_XY_TRAJ_P 0.5
 
 # ==================================
 # 4. 速度控制器 (重载机适当加阻尼)
+#    BEIMING 调参 2026-11-17(七): 对标 X100/X300 验证有效带宽 (P_eff≈1.0/I_eff≈0.075/
+#    D_eff≈0.11) 按本机 r = 0.8/(0.8+0.2/0.30) ≈ 0.545 换算:
+#    P = 1.01/0.545 ≈ 1.9, I = 0.075/0.545 ≈ 0.14, D = 0.11/0.545 ≈ 0.20。
+#    原 I=2.0 是为硬扛 0.43 前馈的 25% 超推, 悬停油门修准后不再需要
+#    (11_59_26.ulg: I=2.0 硬扛下仍 0.36Hz 呼吸, z 峰峰 0.48m)
+#    调参方向: vz 高频抖动 -> P 降 30%; 仍缓慢呼吸 -> P 升至 2.5
 # ==================================
 param set MPC_XY_VEL_P_ACC 1.8
 param set MPC_XY_VEL_I_ACC 0.4
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 1.0
-param set MPC_Z_VEL_I_ACC 2.0
-param set MPC_Z_VEL_D_ACC 0.0
+param set MPC_Z_VEL_P_ACC 1.9
+param set MPC_Z_VEL_I_ACC 0.14
+param set MPC_Z_VEL_D_ACC 0.2
 
 
 # ==================================

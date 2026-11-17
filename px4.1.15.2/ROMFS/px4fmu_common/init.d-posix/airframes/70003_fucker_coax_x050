@@ -1,16 +1,18 @@
 #!/bin/sh
 #
-# @name Fucker Coax X050 (共轴双旋翼试验机, 起飞重量1.5kg, 14寸桨, 推重比约3.1)
+# @name Fucker Coax X100 (共轴双旋翼试验机, 起飞重量1.5kg, 14寸桨, 推重比约3.1)
 #
 # @type Custom (Coaxial Twin-Rotor with Tilting Mounts)
+#
+# 与 70003_fucker_coax_x050 完全同参数, 仅独立机型编号便于地面站选择。
 #
 # 布局: 上下两桨共轴叠放, 无机臂
 #   - 油门: 两桨同油门 (各承载一半升力)
 #   - 偏航: 上下桨转速差动 (上桨 CCW, 下桨 CW)
-#   - 俯仰/滚转: 倾转电机架 (roll/pitch 指令差动倾转上下桨, 最大 0.25rad ≈ 14.3°)
+#   - 俯仰/滚转: 倾转电机架 (roll/pitch 指令差动倾转上下桨, 最大 0.44rad ≈ 25.2°)
 #
 # 仿真端对应: BeimingSim/Plugins/AirSim (PhysicsParams RotorCount=2)
-#   settings_X050.json + MavLinkMultirotorApi (HIL_ACTUATOR_CONTROLS 通道 2/3 = 倾转指令)
+#   settings_X100.json + MavLinkMultirotorApi (HIL_ACTUATOR_CONTROLS 通道 2/3 = 倾转指令)
 # 需配合 BEIMING coax patch: control_allocator/ActuatorEffectiveness/ActuatorEffectivenessCustom.cpp
 #   (恢复 KM 反扭矩, 否则 Custom 机型无偏航)
 #
@@ -24,7 +26,7 @@
 
 # ==================================================================================================================
 # 0. 控制分配 - Custom 机型: 2 电机 (KM 差动出偏航) + 2 舵机 (倾转出俯仰/滚转)
-#    物理参数与 settings_X050.json PhysicsParams 联动:
+#    物理参数与 settings_X100.json PhysicsParams 联动:
 #    KM = CP/CT * D/(2π) = 0.040164/0.109919 * 0.35/(2π) ≈ 0.0204 (反扭矩系数)
 # ==================================================================================================================
 param set-default CA_AIRFRAME 9                 # Custom 布局; 9 = Custom (电机 + 自定义力矩舵机)
@@ -50,7 +52,7 @@ param set-default CA_ROTOR1_KM -0.02            # 下桨反扭矩系数 (CW -> -
 # 倾转舵机 x2 (Type 12 = Custom, 三轴力矩系数可配):
 #   CS0 -> roll 倾转, CS1 -> pitch 倾转; 效力 = 满舵力矩/单桨最大推力
 #   = mg·sin(MaxTiltAngle)·h / max_thrust = 14.72×sin(25.2°)×0.08/22.96 ≈ 0.022
-#   (BEIMING 调参 2026-11-04: MaxTiltAngle 0.25→0.44rad 提速, TRQ 随 sin 同比放大)
+#   (h = 上下桨间距 0.12-0.04 = 0.08)
 #   (必须与 KM=0.02 同量级且比例符合物理 roll:yaw 关系; 20+倍失配会导致
 #    CA 各轴权限失配 -> 偏航分配饱和自旋/姿态振荡)
 #   符号若与 sim 实测相反, 直接翻转对应 TRQ 参数即可, 无需改代码
@@ -76,26 +78,32 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 
 
 # ==================================
-# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 油门【线性】, 源码 RotorActuator.hpp:
+# 1. 悬停与油门 (Cosys-AirSim 推力 ∝ 桨油门【线性】, 源码 RotorActuator.hpp:
 #    thrust = control_signal * max_thrust, 与 PhysicsParams 联动:
 #    单桨最大推力 = CT×1.225×(MaxRPM/60)²×D⁴ = 0.109919×1.225×106.61²×0.35⁴ ≈ 22.96N
-#    悬停油门 = 1.5×9.81/2 / 22.96 ≈ 0.32, 即 1/推重比, 推重比 = 2×22.96/(1.5×9.81) ≈ 3.12)
+#    物理悬停桨油门 = 1.5×9.81/2 / 22.96 ≈ 0.3205 (即 1/推重比, 推重比 = 2×22.96/(1.5×9.81) ≈ 3.12)
+#    ★ PX4 actuator 输出 u ≠ 仿真桨油门: AirSim normalizeRotorControls
+#      (MavLinkMultirotorApi.hpp) 对 PX4 多旋翼电机通道做 sim_ctrl = 0.8·u + 0.2 (怠速偏置),
+#      故 MPC_THR_HOVER = (物理悬停桨油门 − 0.2) / 0.8 = (0.3205 − 0.2) / 0.8 ≈ 0.15
+#    BEIMING 调参 2026-11-17: 0.32 经映射实际输出桨油门 0.456 (42% 超推) -> 呼吸式浮动;
+#    修正为 0.15, HTE 实测 0.154 互证。试飞验证: ulog actuator_outputs 通道 0/1
+#    悬停段均值应 ≈ 0.15 且 |vz| 收敛
+#    BEIMING 调参 2026-11-17(四): 曾尝试 normalizeRotorControls 直通 (MPC_THR_HOVER=0.32),
+#    已回退保持原版映射 —— 以后配置机型务必记得 0.2 偏置/0.8 系数换算
 # ==================================
 param set MPC_USE_HTE 0
-param set MPC_THR_HOVER 0.32
+param set MPC_THR_HOVER 0.15
 param set MPC_THR_MIN 0.05
 param set MPC_THR_MAX 0.95
 
 # 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.44rad≈25.2°), 留 ~1° 裕量
 # 最大水平加速度 ≈ g·tan(24°) ≈ 4.4 m/s²
-# (BEIMING 调参 2026-11-04: 倾角 14°→24° 提速; 终端速度 = m·g·tanθ/DragCoef,
-#  24° 时 ≈ 1.5×9.81×tan24°/0.325 ≈ 20 m/s, 取 VEL_MAX=10 留大裕量)
+# 理论平飞极速 = m·g·tanθ/DragCoef ≈ 1.5×9.81×tan(25.2°)/0.325 ≈ 21 m/s, 取 VEL_MAX=10 留大裕量
 param set MPC_TILTMAX_AIR 24.0
 
 
 # ==================================
 # 2. 速度与加速度限制 (按倾转能力 4.4 m/s² 折算)
-#    (BEIMING 调参 2026-11-04: 目标平飞 10 m/s, VEL_MAX 4→10, ACC_HOR 2→3.5)
 #    注意: POSCTL 手动满杆限速是 MPC_VEL_MANUAL (默认4!), MPC_XY_VEL_MAX
 #    只管自动航线任务, 两者都要改; 侧向/后退另有 MPC_VEL_MAN_SIDE/BACK
 # ==================================
@@ -110,7 +118,6 @@ param set MPC_ACC_DOWN_MAX 1.2
 
 # ==================================
 # 3. 位置控制器 (共轴机机动性弱, 增益温和防振荡)
-#    BEIMING 调参 2026-11-04: MPC_XY_P 0.8->0.5, 抑制位置保持绕圈(圆锥摆)
 # ==================================
 param set MPC_XY_P 0.5
 param set MPC_Z_P 1.0
@@ -120,28 +127,31 @@ param set MPC_XY_TRAJ_P 0.4
 
 # ==================================
 # 4. 速度控制器
-#    BEIMING 调参 2026-11-04: 速度积分器是位置保持"绕圈"的主要推手,
-#    0.4->0.15; 垂直积分器 2.0->1.0 抑制倾斜-推力耦合引起的上下浮动
+#    BEIMING 调参 2026-11-17(二) ulog 定论 (09_58_22.ulg): 悬停油门 0.15 修正后
+#    HTE 独立收敛 0.154 (前馈已准), 但 0.10Hz 呼吸仍在: vz_sp std 0.44 与
+#    vz 相关系数仅 0.01 (内环完全跟不上外环), thrust_sp.z 摆幅仅 ±0.0035,
+#    姿态/倾转/XY 均稳定 —— 根因: AirSim normalizeRotorControls 的
+#    sim_ctrl = 0.8u+0.2 使推力【增量】增益只有 PX4 假设的
+#    r = 0.8/(0.8 + 0.2/hover) = 0.8/(0.8+0.2/0.15) ≈ 0.375
+#    (PX4 按 F_max = mg/0.15 = 98N 计算响应, 实际 F_max = 45.9N),
+#    Z 环有效带宽被压到调参值的 37.5%, 内外环带宽倒挂 -> 呼吸极限环。
+#    修复: Z 速度环增益按 1/r ≈ 2.67 全额补偿 (r 为常数比例, 补偿全域完备):
+#    P 0.5→2.7, I 0.1→0.2, D 0.4→0.3。试飞验证悬停稳定。
+#    BEIMING 调参 2026-11-17(四): 直通方案已回退, 保持本补偿增益 (现役定案配方)
 # ==================================
 param set MPC_XY_VEL_P_ACC 1.4
 param set MPC_XY_VEL_I_ACC 0.15
 param set MPC_XY_VEL_D_ACC 0.2
-# BEIMING 调参 2026-11-04: 旋翼油门->推力存在 ~0.2s 一阶滞后(AirSim 控制滤波),
-# 垂直环 P=1.0/I=1.0 偏热 => 悬停 ~0.5Hz 呼吸式浮动; 降 P/I 并引入 D 阻尼
-param set MPC_Z_VEL_P_ACC 0.8
-param set MPC_Z_VEL_I_ACC 0.5
-param set MPC_Z_VEL_D_ACC 0.2
+param set MPC_Z_VEL_P_ACC 2.7
+param set MPC_Z_VEL_I_ACC 0.2
+param set MPC_Z_VEL_D_ACC 0.3
 
 
 # ==================================
-# 5. 姿态与角速度控制器 (BEIMING 调参 2026-11-04)
-#    关键认知: 满舵力矩 0.15 N·m 看似弱, 但转动惯量仅 ~0.013 kg·m²,
-#    满舵角加速度 ≈ 11 rad/s² —— 权限不弱反而很猛。
-#    舵机指令 = 归一化力矩 / 0.013 (TRQ 效力), 放大 77 倍;
-#    原增益 (P=0.08) 开环增益 ~70 s⁻¹ + 倾转滤波 0.05s 滞后 => bang-bang 极限环。
-#    增益整体降一个量级, 目标开环穿越 ~10 rad/s (< 滞后稳定上界):
-#      P=0.012, I=0.02, FF=0 (FF=0.1 会直接把舵机打进饱和)
-#    调参方向: 持续 ±1 乒乓再减半; 迟钝则 +50%; 方向反翻 TRQ 符号 (见 §0)
+# 5. 姿态与角速度控制器 (同 X050 调参结论:
+#    满舵角加速度 ≈ 11 rad/s², 增益降一个量级, 目标开环穿越 ~10 rad/s:
+#    P=0.012, I=0.02, FF=0 (FF=0.1 会直接把舵机打进饱和)
+#    调参方向: 持续 ±1 乒乓再减半; 迟钝则 +50%; 方向反翻 TRQ 符号 (见 §0))
 # ==================================
 param set MC_ROLL_P 4.0
 param set MC_PITCH_P 4.0
