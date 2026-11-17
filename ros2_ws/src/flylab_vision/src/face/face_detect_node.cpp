@@ -85,6 +85,31 @@ int vis_count(const FaceXResult & fx)
   return n;
 }
 
+/// CelebA 40 属性中文名 (顺序与模型输出一致; 面板同名表在
+/// flylab_gcs/panel_sections.py _CELEBA_ATTRS_ZH, 两边须同步)
+constexpr const char * kCelebaAttrsZh[40] = {
+  "胡渣", "弓形眉", "有魅力", "眼袋", "秃头", "刘海", "厚唇", "大鼻",
+  "黑发", "金发", "画面模糊", "棕发", "浓眉", "圆脸", "双下巴", "眼镜",
+  "山羊胡", "灰白头发", "浓妆", "高颧骨", "男性", "微张嘴", "八字胡",
+  "细长眼", "无须", "瓜子脸", "苍白肤色", "尖鼻", "发际线后移",
+  "红润脸颊", "鬓角", "微笑", "直发", "卷发", "戴耳环", "戴帽",
+  "涂口红", "戴项链", "戴领带", "年轻",
+};
+
+/// 开启属性 -> 画面文字 (顿号连接; 全无时给占位避免空图元)
+std::string attrs_text(const FaceXResult & fx)
+{
+  std::ostringstream os;
+  bool first = true;
+  for (int i = 0; i < 40; ++i) {
+    if (fx.attribute[i]) {
+      os << (first ? "" : "、") << kCelebaAttrsZh[i];
+      first = false;
+    }
+  }
+  return first ? std::string("无开启属性") : os.str();
+}
+
 }  // namespace
 
 class FaceDetectNode final : public DisplayVisionNode
@@ -206,7 +231,7 @@ protected:
       if (crop.width >= 10 && crop.height >= 10) {
         facex_->run(bgr(crop), task, fx);
         has_fx = true;
-        append_task_items(items, fx, task, crop);
+        append_task_items(items, fx, task, best->box, crop);
       }
     }
 
@@ -233,9 +258,10 @@ protected:
 
 private:
   /// 任务输出 -> 画面叠加图元 (追加进 items 流; schema 见 flylab_gcs/overlay.py)
+  /// box = 任务脸的 SCRFD 框 (文字钉框顶用, 比 crop 顶贴近脸)
   void append_task_items(
     std::ostringstream & os, const FaceXResult & fx, int task,
-    const cv::Rect & crop)
+    const cv::Rect2f & box, const cv::Rect & crop)
   {
     const float cw = static_cast<float>(crop.width);
     const float ch = static_cast<float>(crop.height);
@@ -303,16 +329,18 @@ private:
           os << ",{\"type\":\"image\",\"pos\":["
              << num(static_cast<float>(crop.x)) << ","
              << num(static_cast<float>(crop.y)) << "],"
-             << "\"w\":" << num(cw) << ",\"data\":\""
+             << "\"w\":" << num(cw) << ",\"h\":" << num(ch) << ",\"data\":\""
              << base64_encode(png.data(), png.size()) << "\"}";
           break;
         }
-      case FACE_TASK_AGE_GENDER_RACE: {
-          // 结果文字钉在框顶 (与面板同源文案)
+      case FACE_TASK_AGE_GENDER_RACE:
+      case FACE_TASK_ATTRIBUTES: {
+          // 结果文字钉在 SCRFD 框顶 (贴脸; 用 crop 顶会高出 25% 框高外扩)
           os << ",{\"type\":\"text\",\"pos\":["
-             << num(static_cast<float>(crop.x)) << ","
-             << num(std::max(0.f, static_cast<float>(crop.y) - 8.f)) << "],"
-             << "\"text\":\"" << agr_text(fx)
+             << num(static_cast<float>(box.x)) << ","
+             << num(std::max(0.f, static_cast<float>(box.y) - 8.f)) << "],"
+             << "\"text\":\"" << (task == FACE_TASK_AGE_GENDER_RACE ?
+              agr_text(fx) : attrs_text(fx))
              << "\",\"color\":[255,255,255]}";
           break;
         }

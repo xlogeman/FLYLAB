@@ -344,9 +344,10 @@ class VideoLabel(QLabel):
                 if img is None:
                     continue
                 iw, ih = img.width(), img.height()
-                # 绘制宽度: w 为原图像素, 省略按图像原生尺寸
+                # 绘制宽度: w 为原图像素, 省略按图像原生尺寸;
+                # 高度: 显式 h 优先 (目标区域与图像纵横比不一致时), 否则按纵横比
                 dw = a.get('w') or iw
-                dh = ih * dw / iw
+                dh = a.get('h') or ih * dw / iw
                 x, y = a['pos']
                 painter.save()
                 alpha = a.get('alpha', 1.0)
