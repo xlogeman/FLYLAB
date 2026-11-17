@@ -12,10 +12,11 @@
 toggle、逻辑项 changed -> 显示项图标/门控联动; 门控状态由 33ms 轮询落在
 逻辑 QAction 的 enabled 上, 菜单展开即见最新。
 
-视觉反控按运行中的算法展开模式子菜单 (反控行为因算法而异): 目前只有
-ArUco检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态 两个模式项,
-模式经 -p landing_mode 传给降落节点; 其他算法将来在 config.ALGORITHMS
-注册各自的反控形态。LandingActions 句柄对外保持旧 landing_act 单项语义,
+视觉反控按运行中的算法展开模式子菜单 (反控行为因算法而异): 目前有
+ArUco检测 / fractal检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态
+两个模式项, 模式经 -p landing_mode 传给降落节点, 检测器类型经 -p detector
+随算法传给同一降落节点; 其他算法将来在 config.ALGORITHMS 注册各自的反控
+形态。LandingActions 句柄对外保持旧 landing_act 单项语义,
 其余引用方 (main_window / vehicle_panel / algo_panel) 无需感知子菜单。
 样式常量 _TOOL_BTN_STYLE 定义在 ui_style.py。
 """
@@ -167,11 +168,16 @@ class LandingPanelMixin:
         # 偏航保持用户当前设置不动
         self.camera_tab.grabber.gimbal_pitch_bottom()
         # 链路参数跟随工具栏所选链路 (mavros / uxrce); 模式经 landing_mode
-        # 传给降落节点 (节点未声明前被忽略, 接口预留)
+        # 传给降落节点; 检测器类型随运行中算法 (fractal检测传 detector:=fractal,
+        # aruco 默认不传), 同一降落节点三态状态机共用
         link = self._selected_link() or 'mavros'
         cmd = (list(config.LANDING_CMD)
                + ['--ros-args', '-p', f'link:={link}',
                   '-p', f'landing_mode:={mode}'])
+        algo = self.running_algo
+        detector = algo.get('landing_detector') if algo is not None else None
+        if detector:
+            cmd += ['-p', f'detector:={detector}']
         self.land_proc.start(cmd)
         # 新进程需完成 DDS 发现 + 收首帧飞控状态 (1~3s), 重发多次防吞;
         # 节点对重复 start 幂等
@@ -254,7 +260,7 @@ class LandingPanelMixin:
         self.takeover_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.takeover_btn.setToolTip(
             '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落 '
-            '(ArUco检测运行时展开 图像空间 / 3D 姿态 模式子菜单); '
+            '(反控算法运行时展开 图像空间 / 3D 姿态 模式子菜单); '
             '手动遥控 = 摇杆控速度。均需先开启通信链路')
         menu = QMenu(self.takeover_btn)
         self.takeover_btn.setMenu(menu)
@@ -263,14 +269,15 @@ class LandingPanelMixin:
         self.landing_menu = menu.addMenu('视觉反控')
         self.landing_img_act, self.landing_img_disp = make_action_pair(
             self.landing_menu, '图像空间',
-            '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开。'
-            '按图像空间量 (对中/面积) 对准码下降并自动降落; 再点取消')
+            '需先: 反控算法运行中 (ArUco检测/fractal检测) + 已解锁升空 '
+            '+ 通信链路已开。按图像空间量 (对中/面积) 对准码下降并自动降落; '
+            '再点取消')
         self.landing_img_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_IMAGE))
         self.landing_pose_act, self.landing_pose_disp = make_action_pair(
             self.landing_menu, '3D 姿态',
-            '需先: ArUco检测运行中 + 已解锁升空 + 通信链路已开 + 码边长准确 '
+            '需先: 反控算法运行中 + 已解锁升空 + 通信链路已开 + 码边长准确 '
             '(位姿尺度可信)。按码的 3D 位姿换算机体系米级误差: 水平 P 对中, '
             '下降速度随离码高度调度, 近地自动切 AUTO.LAND; 再点取消')
         self.landing_pose_act.toggled.connect(

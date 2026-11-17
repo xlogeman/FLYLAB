@@ -237,16 +237,20 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.camera_tab.video.set_algo_hud(
             f'解算 {fps:.1f}' if fps > 0 else None)
         # 算法信息面板: 可见性随运行中算法变化 + 数据刷新 (内部去重);
-        # ArUco 降落分组在运行 enables_landing 算法 (ArUco检测) 期间常驻,
-        # 未点视觉反控只是无数据显示 '—', 不随降落按钮出现/消失
+        # 降落分组在运行 enables_landing 算法 (ArUco检测/fractal检测) 期间
+        # 常驻, 未点视觉反控只是无数据显示 '—', 不随降落按钮出现/消失
         active = []
+        landing_kind = None   # 反控降落跟随的检测器类型 (面板字典/分形配置互斥显隐)
         if self.running_algo is not None and self.running_algo.get('panel'):
             active.append(self.running_algo['panel'])
             if self.running_algo.get('enables_landing'):
                 active.append('landing')
+                landing_kind = self.running_algo.get('landing_detector', 'aruco')
         if self.landing_act.isChecked():
             active.append('landing')
-        self.algo_panel.set_active(active)
+            if landing_kind is None:
+                landing_kind = 'aruco'   # 检测节点已停的反控收尾: 按 aruco 兜底
+        self.algo_panel.set_active(active, landing_kind)
         # 目标追踪: track 分组激活期间画面框选常开 (拖出矩形松开即自动
         # 开始追踪); 分组随算法停止/切换移除后关闭框选并复位追踪状态,
         # track 分组标注立即清掉 (不等节点异步响应), latched ROI 同步

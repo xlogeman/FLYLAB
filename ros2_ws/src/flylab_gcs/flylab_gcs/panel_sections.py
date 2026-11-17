@@ -264,6 +264,8 @@ SECTIONS = {
         # 状态不占行位, 动态显示在分组标题里 (对齐下降/目标丢失/…)
         'title_fn': lambda d: (
             'ArUco 降落 · ' + _landing_state_text(d)) if d else 'ArUco 降落',
+        # 标题随反控降落的检测器类型变化: 需要 fractal 版时用 landing_spec() 工厂
+        # (见下方 landing_spec, AlgoOutputPanel 按运行中算法选用)
         'fields': [
             ('码号', lambda d: _landing_fields(d)['码号']),
             ('尺寸', lambda d: _landing_fields(d)['尺寸']),
@@ -431,3 +433,15 @@ SECTIONS = {
         ],
     },
 }
+
+
+def landing_spec(kind='aruco'):
+    """landing 分组 spec 工厂: 标题随反控降落的检测器类型 (ArUco/fractal),
+    字段提取共用。SECTIONS['landing'] 即 aruco 默认版, fractal 降落由
+    AlgoOutputPanel 按运行中算法经本工厂取 spec。"""
+    base = 'fractal 降落' if kind == 'fractal' else 'ArUco 降落'
+    spec = dict(SECTIONS['landing'])
+    spec['title'] = base
+    spec['title_fn'] = (
+        lambda d: (base + ' · ' + _landing_state_text(d)) if d else base)
+    return spec

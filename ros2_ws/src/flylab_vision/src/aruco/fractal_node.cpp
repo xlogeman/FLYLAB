@@ -12,8 +12,7 @@
 /// 地面站运行中同步 (全部 latched, 与 aruco_node 同一约定):
 ///   视场角 /flylab/camera_fov、码边长 /flylab/aruco_marker_length (共用
 ///   同一滑杆, 与 ArUco 是同一个降落坪)、分形配置 /flylab/fractal_config
-///   (FRACTAL_2L_6~5L_6 或 yml 路径)、降落朝向 /flylab/landing_yaw_offset
-///   (暂存, 降落链路接入后生效)
+///   (FRACTAL_2L_6~5L_6 或 yml 路径)
 ///
 /// 运行:
 ///   ros2 run flylab_vision fractal_node --ros-args --params-file
@@ -28,6 +27,7 @@
 #include <vector>
 
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
@@ -56,10 +56,21 @@ public:
       "marker_length_topic", "/flylab/aruco_marker_length");
     const auto config_topic =
       declare_parameter<std::string>("fractal_config_topic", "/flylab/fractal_config");
-    const auto yaw_offset_topic = declare_parameter<std::string>(
-      "yaw_offset_topic", "/flylab/landing_yaw_offset");
     const auto info_topic =
       declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+
+    // ---------- 降落节点跟踪层同步 (MAX 让位) ----------
+    // 降落中每帧广播正在跟踪的层 ID: 若恰为画面最大层, 本节点不画洋红
+    // MAX, 该层由降落节点橙色 TRACK 独占, 避免两组标注叠在同一层上;
+    // 广播停发 (降落结束/节点退出) 超时后自动恢复 MAX (与 aruco_node 同款)
+    const auto tracked_id_topic = declare_parameter<std::string>(
+      "tracked_id_topic", "/flylab/landing_tracked_id");
+    tracked_id_sub_ = create_subscription<std_msgs::msg::Int32>(
+      tracked_id_topic, 10,
+      [this](const std_msgs::msg::Int32::SharedPtr msg) {
+        tracked_id_rx_ = msg->data;
+        tracked_id_rx_time_ = now();
+      });
 
     FractalDetectorConfig cfg;
     cfg.config_name = fractal_config;
@@ -108,19 +119,6 @@ public:
       config_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::String::SharedPtr msg) {on_config(*msg);});
 
-    // ---------- 降落朝向偏置暂存 (降落链路接入后生效) ----------
-    yaw_offset_sub_ = create_subscription<std_msgs::msg::Float64>(
-      yaw_offset_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::Float64::SharedPtr msg) {
-        if (msg->data == yaw_offset_deg_) {
-          return;
-        }
-        yaw_offset_deg_ = msg->data;
-        RCLCPP_INFO(
-          get_logger(), "降落朝向偏置同步: %.0f° (暂存, 降落接入后生效)",
-          msg->data);
-      });
-
     // ---------- 右栏"算法信息"面板数据 (10Hz 限频) ----------
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
@@ -152,7 +150,15 @@ protected:
     // 右栏"算法信息"面板数据: 检测摘要 (10Hz 限频)
     publishInfo(bgr.cols, bgr.rows, results.size(),
       detector_->last_kp_tracked(), largest);
-    return to_annotations_json(results, algo_group(), largest, "MAX");
+    // 让位: 最大层恰为降落节点正在跟踪的层 (广播 1s 内有效) 时,
+    // 不画 MAX —— 该层由降落节点橙色 TRACK 独占, 防止两组标注叠画
+    const Detection * vis = largest;
+    const bool landing_tracking = tracked_id_rx_ >= 0 &&
+      (now() - tracked_id_rx_time_).seconds() < kTrackedIdTimeoutSec;
+    if (landing_tracking && vis != nullptr && vis->id == tracked_id_rx_) {
+      vis = nullptr;
+    }
+    return to_annotations_json(results, algo_group(), vis, "MAX");
   }
 
   std::string clear_json() const override
@@ -161,6 +167,7 @@ protected:
   }
 
 private:
+  static constexpr double kTrackedIdTimeoutSec = 1.0;  // 跟踪层广播有效期
   /// 地面站分形配置同步: 换配置下一帧生效 (重建检测器);
   /// 未知配置拒绝并保持原配置
   void on_config(const std_msgs::msg::String & msg)
@@ -243,8 +250,9 @@ private:
   double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config_sub_;
   std::string config_name_;     // 当前生效的分形配置 (同步去重用)
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr yaw_offset_sub_;
-  double yaw_offset_deg_ = 0.0;  // 降落朝向偏置暂存 (降落链路接入后生效)
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr tracked_id_sub_;
+  int tracked_id_rx_ = -1;  // 降落节点正在跟踪的层 ID (最新广播值)
+  rclcpp::Time tracked_id_rx_time_{0, 0, RCL_ROS_TIME};  // 广播到达时刻 (有效期判定)
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;  // 面板数据
   rclcpp::Time last_info_pub_{0, 0, RCL_ROS_TIME};                // 10Hz 限频
 };

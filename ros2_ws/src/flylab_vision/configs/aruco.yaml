@@ -29,6 +29,7 @@
     cmd_topic: /flylab/vision_cmd            # 启停指令话题
     status_topic: /flylab/landing_status     # 状态回传话题 (tracking/landing/landed/idle)
     link: mavros                             # PX4 执行链路: mavros | uxrce
+    detector: aruco                          # 检测器: aruco | fractal (地面站反控按运行中算法经 -p 覆盖)
     gimbal_topic: /flylab/gimbal_state       # 云台姿态话题 (必需, 断流则悬停等待)
     gimbal_timeout_sec: 0.5                  # 云台数据超时 (s)
 

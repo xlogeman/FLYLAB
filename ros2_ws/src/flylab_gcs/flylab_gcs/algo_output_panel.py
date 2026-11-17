@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
     QGroupBox, QLabel, QSlider, QSpinBox, QSizePolicy, QWidget
 
 from . import config
-from .panel_sections import HIDE_ROW, SECTIONS
+from .panel_sections import HIDE_ROW, SECTIONS, landing_spec
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
 IMG_ROW_HEIGHT = 195  # px: 分组图片行固定高度 (letterbox 留边自适应显示)
@@ -251,6 +251,7 @@ class AlgoOutputPanel(QGroupBox):
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
         self._order = []            # 当前显示顺序 (key 列表)
+        self._landing_kind = None   # 反控降落跟随的检测器类型 (aruco|fractal|None)
         # 激活的分组横向并排一行; 网格列等宽拉伸 —— 列宽固定平分,
         # 不随内容变化 (没数据时列也不会缩窄)
         self._lay = QGridLayout(self)
@@ -350,7 +351,7 @@ class AlgoOutputPanel(QGroupBox):
         落点朝向偏置 (度, 右正), 修改即发布 (latched); 未动过不发布,
         节点用 aruco.yaml 的 yaw_offset_deg (与码边长同步同一约定)。
         keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
-        box = QGroupBox('降落朝向偏置 (°)')
+        box = QGroupBox('朝向偏置 (°)')
         box.setToolTip(
             '视觉反控降落时机头相对码 0° 方向 (码角点 0→1, 即码图案 x 轴)\n'
             '的落点朝向, 右转为正; 0 = 机头对齐码 0° 方向。\n'
@@ -362,11 +363,13 @@ class AlgoOutputPanel(QGroupBox):
         spin.setSingleStep(config.LANDING_YAW_OFFSET_STEP)
         spin.setSuffix('°')
         spin.setKeyboardTracking(False)
+        spin.setFixedWidth(78)   # 收窄: 三位数 + ° 足够, 省出底部行宽度给滑杆
         # 初始显示默认值不发 (未动过不发布, 节点用 aruco.yaml 的值;
         # setValue 放在 connect 之前, 不触发 valueChanged)
         spin.setValue(config.LANDING_YAW_OFFSET_DEFAULT)
         spin.valueChanged.connect(publish)
-        lay.addWidget(spin, 1)   # 必须加入布局, 否则游离控件不显示 (此前缺失)
+        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
+        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
         self._yaw_box = box
 
     def _build_dict_combo(self, publish):
@@ -438,26 +441,39 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(combo, 1)
         self._fractal_box = box
 
-    def set_active(self, keys):
+    def set_active(self, keys, landing_kind=None):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
-        底部调节行的可见性同步跟随 (无 ArUco 分组时整行隐藏)。"""
+        底部调节行的可见性同步跟随 (无相关分组时整行隐藏)。
+        landing_kind = 反控降落跟随的检测器类型 ('aruco'|'fractal'|None,
+        随运行中的算法; None = 无反控或检测节点已停, 按 aruco 兜底) ——
+        landing 分组标题与字典/分形配置二选一靠它区分, 类型变化时重建
+        landing 分组 (标题 ArUco 降落 / fractal 降落)。"""
+        prev_kind = self._landing_kind or 'aruco'
+        self._landing_kind = landing_kind
         for key in list(self._sections):
             if key not in keys:
                 self._remove(key)
+        # landing 标题随检测器类型: 类型变化时移除重建 (下次循环重加)
+        if 'landing' in self._sections and \
+                prev_kind != (self._landing_kind or 'aruco'):
+            self._remove('landing')
         for key in keys:
             if key not in self._sections and key in SECTIONS:
                 self._add(key)
         self._update_bottom_visibility(keys)
 
     def _update_bottom_visibility(self, keys):
-        """底部调节行随激活分组显隐: 码边长滑杆对检测/降落/分形都有意义
-        (同一降落坪, ArUco 与 fractal 共用); 字典切换属于 ArUco 检测与
-        降落; 降落朝向偏置属于降落 (fractal 降落暂未接入, 仅暂存);
-        分形配置切换只属于 fractal; 人脸任务切换只属于 face; 全无则整行隐藏。"""
-        aruco_on = 'aruco' in keys or 'landing' in keys
+        """底部调节行随激活分组显隐: 字典切换属于 ArUco 检测 / aruco 降落;
+        分形配置属于 fractal 检测 / fractal 降落 —— 两者互斥, 靠
+        _landing_kind (反控降落的检测器类型, 见 set_active) 区分 landing
+        分组归属, 不同时出现。码边长滑杆对两条链路都有意义 (同一降落坪);
+        降落朝向偏置属于任何反控降落与 fractal 检测; 人脸任务只属于 face;
+        全无则整行隐藏。"""
         landing_on = 'landing' in keys
+        landing_kind = self._landing_kind or 'aruco'
         face_on = 'face' in keys
-        fractal_on = 'fractal' in keys
+        aruco_on = 'aruco' in keys or (landing_on and landing_kind == 'aruco')
+        fractal_on = 'fractal' in keys or (landing_on and landing_kind == 'fractal')
         if self._marker_box is not None:
             self._marker_box.setVisible(aruco_on or fractal_on)
         if self._yaw_box is not None:
@@ -479,7 +495,12 @@ class AlgoOutputPanel(QGroupBox):
             section.update_entry(info.get(key), now_m)
 
     def _add(self, key):
-        self._sections[key] = _Section(SECTIONS[key])
+        # landing 分组标题随反控降落的检测器类型 (ArUco 降落 / fractal 降落)
+        if key == 'landing' and (self._landing_kind or 'aruco') == 'fractal':
+            spec = landing_spec('fractal')
+        else:
+            spec = SECTIONS[key]
+        self._sections[key] = _Section(spec)
         self._order.append(key)
         self._relayout()
 

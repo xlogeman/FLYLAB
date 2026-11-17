@@ -112,7 +112,7 @@ flylab_node(face_detect_node src/face/face_detect_node.cpp scrfd_detector facexf
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
 add_executable(aruco_landing_node src/aruco/aruco_landing_node.cpp)
-target_link_libraries(aruco_landing_node aruco_detector vision_common)
+target_link_libraries(aruco_landing_node aruco_detector fractal_detector vision_common)
 ament_target_dependencies(
   aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 

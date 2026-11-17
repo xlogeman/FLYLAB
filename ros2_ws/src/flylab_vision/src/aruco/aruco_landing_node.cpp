@@ -28,6 +28,8 @@
 /// 云台对准且机头跟上 (双对齐连续 N 帧) 后锁定航向。
 /// 多尺度嵌套码支持: target_id 指定精准落点码 (小码), 不可见时回退跟踪画面
 /// 最大码 (高空大码), 指定码出现后自动切换对齐目标 (target_fallback:=false 关闭回退)。
+/// 检测器 detector 参数选 aruco (默认) | fractal: 分形码各层同心同姿, 每帧取
+/// 面积最大层即可, 无需目标锁定; 遮挡时关键点跟踪接管位姿。
 /// 执行层经 px4_offboard_client (link:=mavros|uxrce 选链路)。
 ///
 /// 话题: 图像 /flylab/display/image_raw (地面站转发帧, 需俯视看到码);
@@ -63,6 +65,7 @@
 #include <opencv2/core.hpp>
 
 #include "aruco/aruco_detector.hpp"
+#include "aruco/fractal_detector.hpp"
 #include "aruco/landing_math.hpp"
 #include "aruco/target_selector.hpp"
 #include "aruco/yaw_aligner.hpp"
@@ -126,6 +129,21 @@ public:
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
     const auto calib_path = declare_parameter<std::string>("calib", "");
     link_ = declare_parameter<std::string>("link", "mavros");    // PX4 执行链路: mavros|uxrce
+
+    // 检测器类型: aruco = OpenCV 字典码 (默认, 多码 target_id 选择);
+    // fractal = UCO 分形码 (大码嵌套小码, 同一降落坪远近全程, 层级自适应)。
+    // 地面站按运行中算法传 -p detector:=fractal
+    const std::string detector_type =
+      declare_parameter<std::string>("detector", "aruco");
+    fractal_mode_ = detector_type == "fractal";
+    if (!fractal_mode_ && detector_type != "aruco") {
+      RCLCPP_FATAL(
+        get_logger(), "未知 detector 参数 '%s' (可选 aruco|fractal)",
+        detector_type.c_str());
+      throw std::invalid_argument("detector must be aruco or fractal");
+    }
+    const auto fractal_config =
+      declare_parameter<std::string>("fractal_config", "FRACTAL_5L_6");
 
     // 云台姿态话题 (相机 NED 体约定: x 视轴 y 图右 z 图下, 相对机体 FRD)。
     // 水平控制用它把图像误差旋到机体系; 无数据/断流则悬停等待。
@@ -242,7 +260,20 @@ public:
     if (!calib_path.empty()) {
       load_calib(calib_path, cfg.K, cfg.D);
     }
-    detector_ = std::make_unique<ArucoDetector>(cfg);
+    if (fractal_mode_) {
+      // 分形检测器: 输出复用 Detection, 各层同心同姿, 位姿为全码一份
+      FractalDetectorConfig fcfg;
+      fcfg.config_name = fractal_config;
+      fcfg.marker_length = marker_length;
+      fcfg.fov_deg = fov_deg;
+      if (!cfg.K.empty()) {
+        fcfg.K = cfg.K;
+        fcfg.D = cfg.D;
+      }
+      fractal_det_ = std::make_unique<FractalDetector>(fcfg);
+    } else {
+      detector_ = std::make_unique<ArucoDetector>(cfg);
+    }
 
     // ---------- PX4 执行层 (复用组件: 通信/诊断/接管时序全在里面, 链路按 link 参数选择) ----------
     if (link_ == "mavros") {
@@ -296,6 +327,16 @@ public:
     dict_sub_ = create_subscription<std_msgs::msg::String>(
       dict_topic, rclcpp::QoS(1).reliable().transient_local(),
       [this](const std_msgs::msg::String::SharedPtr msg) {on_dict(*msg);});
+
+    // ---------- 地面站分形配置同步 (仅 fractal 模式消费) ----------
+    // 同字典同步同一约定 (latched); 运行中换配置重建检测器, 码图案集合变了
+    // 朝向基准失效, 复位按新码重新对齐。aruco 模式下消息被忽略。
+    const auto fractal_cfg_topic = declare_parameter<std::string>(
+      "fractal_config_topic", "/flylab/fractal_config");
+    fractal_cfg_name_ = fractal_config;
+    fractal_cfg_sub_ = create_subscription<std_msgs::msg::String>(
+      fractal_cfg_topic, rclcpp::QoS(1).reliable().transient_local(),
+      [this](const std_msgs::msg::String::SharedPtr msg) {on_fractal_config(*msg);});
 
     // ---------- 地面站视场角同步 ----------
     // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
@@ -352,7 +393,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "ArUco 降落节点就绪 (三态状态机, 模式=%s): 等待 %s 指令; 图像 %s; PX4 链路=%s (需已解锁升空的飞机)",
+      "ArUco 降落节点就绪 (三态状态机, 检测器=%s, 模式=%s): 等待 %s 指令; 图像 %s; PX4 链路=%s (需已解锁升空的飞机)",
+      fractal_mode_ ? "fractal" : "aruco",
       pose3d_mode_ ? "pose3d" : "image",
       kCmdStart, image_topic.c_str(), link_.c_str());
   }
@@ -485,9 +527,58 @@ private:
     if (!d.has_pose || img_w_ <= 0.0) {
       return -1.0;
     }
-    const double fx = detector_->calibrated() ? detector_->fx() :
+    const double fx = detCalibrated() ? detFx() :
       img_w_ / (2.0 * std::tan(fov_deg_ * CV_PI / 360.0));
     return d.bbox_wh.x * d.tvec[2] / fx;
+  }
+
+  // ---------------- 检测器分支 (detector 参数: aruco / fractal 双模) ----------------
+  bool detCalibrated() const
+  {
+    return fractal_mode_ ? fractal_det_->calibrated() : detector_->calibrated();
+  }
+  double detFx() const
+  {
+    return fractal_mode_ ? fractal_det_->fx() : detector_->fx();
+  }
+  void detSetMarkerLength(double length_m)
+  {
+    if (fractal_mode_) {
+      fractal_det_->set_marker_length(length_m);
+    } else {
+      detector_->set_marker_length(length_m);
+    }
+  }
+  void detSetFov(double fov_deg)
+  {
+    if (fractal_mode_) {
+      fractal_det_->set_fov(fov_deg);
+    } else {
+      detector_->set_fov(fov_deg);
+    }
+  }
+
+  /// fractal 目标选取 (纯函数, 每帧/每拍调用): 各层同心同姿, 每帧取画面
+  /// 面积最大层 —— 层级随距离切换 (近了外层出画换内层) 无水平/朝向跳变;
+  /// Case2 关键点跟踪的虚拟框 (kp_tracked, 唯一) 优先 —— 无层轮廓时它带着
+  /// 连续位姿。返回 nullptr = 本帧无码
+  const Detection * pickTargetFractal() const
+  {
+    const Detection * kp = nullptr;
+    const Detection * best = nullptr;
+    double best_area = -1.0;
+    for (const auto & d : detections_) {
+      if (d.kp_tracked) {
+        kp = &d;
+        continue;
+      }
+      const double a = d.bbox_wh.x * d.bbox_wh.y;
+      if (a > best_area) {
+        best_area = a;
+        best = &d;
+      }
+    }
+    return kp != nullptr ? kp : best;
   }
 
   /// 码 0° 方向 (OpenCV 角点 c0→c1, 即码图案 x 轴) 在机体系的方位角
@@ -561,7 +652,7 @@ private:
       return;
     }
     marker_length_ = msg.data;
-    detector_->set_marker_length(msg.data);
+    detSetMarkerLength(msg.data);
     RCLCPP_INFO(
       get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
       msg.data);
@@ -570,6 +661,10 @@ private:
   // ---------------- 地面站字典同步 ----------------
   void on_dict(const std_msgs::msg::String & msg)
   {
+    // fractal 模式不吃 ArUco 字典 (分形配置走 on_fractal_config)
+    if (fractal_mode_) {
+      return;
+    }
     // 非法值/值未变化跳过 (下拉重复选择降噪)
     if (msg.data.empty() || msg.data == dict_name_) {
       return;
@@ -588,6 +683,31 @@ private:
     // 锁定目标码在新字典下可能不存在: 丢弃锁定重新选目标, 并复位
     // 朝向滤波/计数/锁定 (码 ID 集合变了, 朝向基准失效)
     selector_->reset();
+    yaw_aligner_->reset();
+  }
+
+  // ---------------- 地面站分形配置同步 (fractal 模式) ----------------
+  void on_fractal_config(const std_msgs::msg::String & msg)
+  {
+    // 非法值/值未变化跳过; 非 fractal 模式忽略 (配置下拉只对 fractal 显示)
+    if (!fractal_mode_ || msg.data.empty() || msg.data == fractal_cfg_name_) {
+      return;
+    }
+    FractalDetectorConfig cfg = fractal_det_->config();
+    cfg.config_name = msg.data;
+    try {
+      auto det = std::make_unique<FractalDetector>(cfg);
+      fractal_det_ = std::move(det);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(
+        get_logger(), "忽略无效分形配置 '%s': %s", msg.data.c_str(), e.what());
+      return;
+    }
+    fractal_cfg_name_ = msg.data;
+    RCLCPP_INFO(
+      get_logger(), "分形配置同步: %s (下一帧检测生效, 来自地面站)",
+      fractal_cfg_name_.c_str());
+    // 码图案集合变了: 朝向基准失效, 复位按新码重新对齐
     yaw_aligner_->reset();
   }
 
@@ -610,11 +730,11 @@ private:
   void on_fov(const std_msgs::msg::Float64 & msg)
   {
     // 已标定 (真实内参) 或非法值不跟随; 值未变化跳过 (滑杆拖动/重发布降噪)
-    if (detector_->calibrated() || msg.data <= 0.0 || msg.data == fov_deg_) {
+    if (detCalibrated() || msg.data <= 0.0 || msg.data == fov_deg_) {
       return;
     }
     fov_deg_ = msg.data;
-    detector_->set_fov(msg.data);
+    detSetFov(msg.data);
   }
 
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------
@@ -629,12 +749,19 @@ private:
     }
     image_area_ = static_cast<double>(bgr.cols) * bgr.rows;
     img_w_ = bgr.cols;
-    detections_ = detector_->detect(bgr);
-    // 跟踪码选取与检测节点同规则 (锁定 ID 内取面积最大者); 每帧广播 ID
-    // (无跟踪目标发 -1), 供检测节点判断是否让位
-    const int tracked_id = selector_->trackedId();
-    const Detection * tracked =
-      tracked_id >= 0 ? selector_->largestOfId(tracked_id, detections_) : nullptr;
+    detections_ = fractal_mode_ ? fractal_det_->detect(bgr) : detector_->detect(bgr);
+    // 跟踪码选取 (aruco = 锁定 ID 内取面积最大者; fractal = 每帧面积最大层);
+    // 每帧广播 ID (无跟踪目标发 -1), 供检测节点判断是否让位
+    const Detection * tracked = nullptr;
+    int tracked_id = -1;
+    if (fractal_mode_) {
+      tracked = pickTargetFractal();
+      tracked_id = tracked != nullptr ? tracked->id : -1;
+    } else {
+      tracked_id = selector_->trackedId();
+      tracked =
+        tracked_id >= 0 ? selector_->largestOfId(tracked_id, detections_) : nullptr;
+    }
     std_msgs::msg::Int32 tid;
     tid.data = tracked ? tracked_id : -1;
     tracked_id_pub_->publish(tid);
@@ -726,12 +853,14 @@ private:
     ever_offboard_ = true;
 
     // 阶段 2: 视觉跟踪 (已确认 offboard, 心跳随每拍 sendVelocityFRD 持续发送)
-    const Detection * tgt = selector_->pick(dt, detections_);
+    const Detection * tgt =
+      fractal_mode_ ? pickTargetFractal() : selector_->pick(dt, detections_);
     if (tgt == nullptr) {
       handleTargetLost(dt);
       return;
     }
     lost_time_ = 0.0;
+    last_tgt_id_ = tgt->id;
     if (!had_target_) {
       had_target_ = true;
       RCLCPP_INFO(
@@ -808,8 +937,9 @@ private:
           !att.valid ? "姿态" : "位置");
         return;
       }
-      // 目标码切换即复位滤波 (不同码落点不同)
-      if (tgt->id != marker_ned_id_) {
+      // 目标码切换即复位滤波 (不同码落点不同); fractal 各层是同一个码,
+      // 层级切换不复位 (落点固定于世界, 滤波跨层级连续)
+      if (!fractal_mode_ && tgt->id != marker_ned_id_) {
         marker_ned_id_ = tgt->id;
         marker_ned_valid_ = false;
       }
@@ -880,8 +1010,10 @@ private:
     // markerYawDeg()。跟随请求的收发 (requestGimbalFollow) 属 ROS 管道留在本节点
     const cv::Point3d up_b = quat_rot(cam_ori_, 0.0, 0.0, -1.0);
     const double gimbal_az = std::atan2(up_b.y, up_b.x) * 180.0 / M_PI;
+    // fractal 各层同图案同朝向, 用固定伪 ID —— 层级切换不触发朝向基准复位
     const auto yaw = yaw_aligner_->update(
-      dt, tgt->id, markerYawDeg(*tgt), gimbal_az, followErrUsable(), follow_err_);
+      dt, fractal_mode_ ? 0 : tgt->id,
+      markerYawDeg(*tgt), gimbal_az, followErrUsable(), follow_err_);
     // 跟随接入: 未锁定期间持续请求相机侧反卷 (0.5s 保活自愈失步), 锁定
     // (含超时放行) 边沿切回跟随机头 (视角连续不跳变); 关闭对齐不请求
     requestGimbalFollow(yaw_align_ && !yaw.locked);
@@ -958,7 +1090,8 @@ private:
       js << std::fixed << std::setprecision(3)
          << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"mode\":\"" <<
         (pose3d_mode_ ? "pose3d" : "image") << "\",\"tracked_id\":"
-         << selector_->trackedId() << ",\"count\":" << detections_.size()
+         << (fractal_mode_ ? last_tgt_id_ : selector_->trackedId())
+         << ",\"count\":" << detections_.size()
          << ",\"area\":" << area
          << ",\"w\":" << static_cast<int>(tgt->bbox_wh.x + 0.5)
          << ",\"h\":" << static_cast<int>(tgt->bbox_wh.y + 0.5)
@@ -1051,7 +1184,8 @@ private:
       std::ostringstream js;
       js << std::fixed << std::setprecision(3)
          << "{\"src\":\"landing\",\"state\":\"TRACKING\",\"tracked_id\":"
-         << selector_->trackedId() << ",\"count\":" << detections_.size()
+         << (fractal_mode_ ? last_tgt_id_ : selector_->trackedId())
+         << ",\"count\":" << detections_.size()
          << ",\"lost\":true"
          << std::setprecision(2)
          << ",\"lost_t\":" << lost_time_
@@ -1130,7 +1264,11 @@ private:
   std::string link_;
 
   // 视觉与地面站
-  std::unique_ptr<ArucoDetector> detector_;
+  std::unique_ptr<ArucoDetector> detector_;        // aruco 模式检测器
+  std::unique_ptr<FractalDetector> fractal_det_;   // fractal 模式检测器
+  bool fractal_mode_ = false;                      // detector 参数选择的模式
+  std::string fractal_cfg_name_;   // 当前生效分形配置 (同步去重用)
+  int last_tgt_id_ = -1;           // 最近一拍对齐目标 ID (面板 tracked_id 显示)
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr tracked_id_pub_;  // 跟踪码 ID 广播 (检测节点让位依据)
@@ -1157,6 +1295,7 @@ private:
   double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr dict_sub_;
   std::string dict_name_;       // 当前生效的字典 (同步去重用)
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fractal_cfg_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻

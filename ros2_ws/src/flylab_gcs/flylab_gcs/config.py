@@ -285,7 +285,7 @@ VEHICLE_CMDS = [
 # 新算法遵循 start/stop 指令约定后加一个条目即可; 无 'items' 键的旧式
 # 平铺条目也兼容, 直接显示为一级菜单项。
 ALGORITHMS = [
-    {'name': 'ArUco', 'items': [
+    {'name': '基础码检测', 'items': [
         {'name': 'ArUco检测',
          'cmd': ['ros2', 'run', 'flylab_vision', 'aruco_node',
                  '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
@@ -300,7 +300,12 @@ ALGORITHMS = [
          'cmd': ['ros2', 'run', 'flylab_vision', 'fractal_node',
                  '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
          'start': 'fractal_start', 'stop': 'fractal_stop',
-         'panel': 'fractal'},   # 右栏算法信息面板分组 (panel_sections.SECTIONS)
+         'panel': 'fractal',
+         'enables_landing': True,
+         'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
+         # 降落节点检测器类型: 启动反控时经 -p detector:= 传给
+         # aruco_landing_node (aruco 条目不声明, 默认 aruco)
+         'landing_detector': 'fractal'},
     ]},
     {'name': '目标检测', 'items': [
         {'name': 'yolo26s',
