@@ -157,7 +157,7 @@ public:
       task_topic, 10,
       [this](const std_msgs::msg::String::SharedPtr msg) {
         const int id = facex_task_id(msg->data.c_str());
-        if (id < 0) {
+        if (id < FACE_TASK_NONE) {   // none = -1 合法, 只有真未知名 (< -1) 才拒收
           RCLCPP_WARN(
             get_logger(), "未知人脸任务 '%s', 保持当前任务", msg->data.c_str());
           return;
@@ -316,33 +316,7 @@ private:
              << "\",\"color\":[255,255,255]}";
           break;
         }
-      case FACE_TASK_VISIBILITY: {
-          // 29 点可见性 -> 左上角固定位置绿/红方块网格 (绿=可见 红=遮挡,
-          // 对齐 facexformer realtime_app 的呈现) + 计数文字
-          constexpr int kCols = 6, kCell = 18, kGap = 5;
-          const int rows = (29 + kCols - 1) / kCols;
-          const int gw = kCols * (kCell + kGap) - kGap;
-          const int gh = rows * (kCell + kGap) - kGap;
-          cv::Mat bgra(gh, gw, CV_8UC4, cv::Scalar(0, 0, 0, 0));
-          for (int i = 0; i < 29; ++i) {
-            const int r = i / kCols, c = i % kCols;
-            const cv::Point tl(c * (kCell + kGap), r * (kCell + kGap));
-            cv::rectangle(bgra, cv::Rect(tl.x, tl.y, kCell, kCell),
-              fx.visibility[i] ? cv::Scalar(0, 200, 0, 255) :
-              cv::Scalar(0, 0, 220, 255), -1);
-          }
-          std::vector<uchar> png;
-          if (!cv::imencode(".png", bgra, png)) {
-            break;
-          }
-          os << ",{\"type\":\"text\",\"pos\":[20,16],"
-             << "\"text\":\"关键点可见 " << vis_count(fx) << "/29\","
-             << "\"color\":[255,255,255]},"
-             << "{\"type\":\"image\",\"pos\":[20,34],\"data\":\""
-             << base64_encode(png.data(), png.size()) << "\"}";
-          break;
-        }
-      default:   // attributes 只进面板, 无画面叠加
+      default:   // attributes/visibility 只进面板, 无画面叠加
         break;
     }
   }
