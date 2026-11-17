@@ -162,6 +162,23 @@ ARUCO_DICTS = [
 ]
 ARUCO_DICT_DEFAULT = 'DICT_4X4_1000'   # 与 aruco.yaml 默认一致
 
+# ---------- 人脸下游任务切换 (右栏"算法信息"面板下拉框) ----------
+# SCRFD 检出人脸后, FaceXFormer 对置信度最高的一张脸跑选定任务; 下拉切换
+# 经该话题同步 face_detect_node (下一帧生效), 未知任务名节点拒绝并保持
+# 原任务。键 = 发给节点的任务名 (节点 facex_task_id 表), 值 = 界面显示名。
+# 'none' = 只做人脸检测不跑 FaceXFormer (节点的默认状态)。
+FACE_TASK_TOPIC = '/flylab/face_task'
+FACE_TASKS = {
+    'none': '无任务 (仅检测)',
+    'parsing': '人像分割',
+    'landmarks': '68 关键点',
+    'headpose': '头部姿态',
+    'attributes': '人脸属性',
+    'age_gender_race': '年龄性别',
+    'visibility': '点可见性',
+}
+FACE_TASK_DEFAULT = 'none'   # 与 face_detect_node 的 facex_task 默认一致
+
 # ---------- 降落航向偏置同步 ----------
 # aruco_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的
 # 落点朝向偏置 (度, 右正)。latched 话题: 后启动的节点一接入即拿到当前值;

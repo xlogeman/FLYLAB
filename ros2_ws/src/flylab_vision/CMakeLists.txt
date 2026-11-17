@@ -80,6 +80,9 @@ flylab_algo(wilor src/wilor/wilor.cpp ${ORT_LIB})
 # 人脸检测任务 (src/face/, 对应 models/face/): insightface SCRFD-10G
 # (9 输出 = 3 尺度 score/框距离/5 关键点距离, distance 解码 + NMS)
 flylab_algo(scrfd_detector src/face/scrfd_detector.cpp ${ORT_LIB})
+# 人脸下游任务: FaceXFormer (ICCV 2025) 统一模型 6 任务 —— 分割/68 点/
+# 头部姿态/CelebA 属性/年龄性别种族/29 点可见性 (单模型 8 输出按任务解码)
+flylab_algo(facexformer src/face/facexformer.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
@@ -93,7 +96,7 @@ flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic
 flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack yolo_classifier)
 flylab_node(wilor_node src/wilor/wilor_node.cpp wilor)
-flylab_node(face_detect_node src/face/face_detect_node.cpp scrfd_detector)
+flylab_node(face_detect_node src/face/face_detect_node.cpp scrfd_detector facexformer)
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
@@ -128,7 +131,7 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   FILES_MATCHING PATTERN "libonnxruntime*")
 
 install(TARGETS vision_common
-  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector
+  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector facexformer
   aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

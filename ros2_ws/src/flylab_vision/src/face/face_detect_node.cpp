@@ -1,41 +1,98 @@
 // Copyright 2026 flylab
-/// SCRFD 人脸检测 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
-///
-/// 链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
-///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
-///   2. 工具按钮: /flylab/vision_cmd 收 face_start / face_stop 启停
-///   3. 画面叠加: 人脸框 + 5 关键点转 JSON 标注发 /flylab/annotations
-///      (组名 "face")
-///   4. 面板数据: {"src":"face", ...} 发 /flylab/aruco_info (~30Hz 限频,
-///      摘要 = 人脸数 + 前 3 张脸 [按置信度降序] 的置信度/位置/尺寸/框占比)
-///
-/// 模型默认取 share/flylab_vision/models/face/scrfd_10g_bnkps.onnx
-/// (CMakeLists 安装), 可用 model 参数覆盖。
-///
-/// 运行:
-///   ros2 run flylab_vision face_detect_node
-///   ros2 run flylab_vision face_detect_node --ros-args
-///       -p model:=/path/to/xx.onnx -p conf:=0.5 -p device:=cuda
+/// SCRFD 人脸检测 + FaceXFormer 下游任务节点 (接入地面站视觉工具体系,
+/// 启停/收帧/标注通信见 common/display_vision_node.hpp)。
+/// 每帧对置信度最高的人脸裁剪 (外扩 facex_margin%) 送 FaceXFormer 跑当前
+/// 任务 (none = 仅检测不推理); 任务经 /flylab/face_task 热切换, 下一帧生效。
+/// 模型默认 models/face/ 下 scrfd_10g_bnkps.onnx + facexformer.onnx
+/// (model / facex_model 参数可覆盖)。
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
 #include "common/display_vision_node.hpp"
+#include "face/facexformer.hpp"
 #include "face/scrfd_detector.hpp"
 
 namespace flylab_vision
 {
+
+namespace
+{
+
+/// base64 编码 (无外部依赖, 手写查表; parsing/visibility 标注的 PNG 用)
+std::string base64_encode(const uint8_t * data, size_t len)
+{
+  static const char * table =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve((len + 2) / 3 * 4);
+  for (size_t i = 0; i < len; i += 3) {
+    const uint32_t b0 = data[i];
+    const uint32_t b1 = i + 1 < len ? data[i + 1] : 0;
+    const uint32_t b2 = i + 2 < len ? data[i + 2] : 0;
+    const uint32_t tri = (b0 << 16) | (b1 << 8) | b2;
+    out += table[(tri >> 18) & 0x3f];
+    out += table[(tri >> 12) & 0x3f];
+    out += i + 1 < len ? table[(tri >> 6) & 0x3f] : '=';
+    out += i + 2 < len ? table[tri & 0x3f] : '=';
+  }
+  return out;
+}
+
+/// 人像分割 11 类配色 (RGB, 对齐 facexformer/realtime_app.py;
+/// 填 BGRA 掩码时反序成 BGR)
+constexpr uint8_t kParsingColorsRGB[11][3] = {
+  {0, 0, 0}, {0, 153, 255}, {102, 255, 153}, {0, 204, 153},
+  {255, 255, 102}, {255, 255, 204}, {255, 153, 0}, {255, 102, 255},
+  {102, 0, 51}, {255, 204, 255}, {255, 0, 102},
+};
+
+constexpr int kFaceXInput = 224;   // FaceXFormer 网络输入边长 (掩码/坐标基准)
+
+/// 种族 argmax -> 中文 (模型输出序: White/Black/Asian/Indian/Others)
+const char * race_zh(int r)
+{
+  static const char * names[] = {"白人", "黑人", "亚裔", "印度裔", "其他"};
+  return r >= 0 && r < 5 ? names[r] : "未知";
+}
+
+/// 年龄/性别/种族 -> 面板与画面文字共用的文案
+std::string agr_text(const FaceXResult & fx)
+{
+  std::ostringstream os;
+  os << (fx.gender == 1 ? "男" : "女") << " · "
+     << fx.age_bin * 10 << "-" << fx.age_bin * 10 + 9 << " 岁 · "
+     << race_zh(fx.race);
+  return os.str();
+}
+
+/// 可见关键点计数 (面板与画面文字共用)
+int vis_count(const FaceXResult & fx)
+{
+  int n = 0;
+  for (const bool v : fx.visibility) {
+    n += v ? 1 : 0;
+  }
+  return n;
+}
+
+}  // namespace
 
 class FaceDetectNode final : public DisplayVisionNode
 {
 public:
   FaceDetectNode()
   : DisplayVisionNode("face_detect_node",
-      {"face_start", "face_stop", "face", "人脸检测"})
+      {"face_start", "face_stop", "face", "人脸检测", true})
   {
     // ---------- 参数 ----------
     const auto model = declare_parameter<std::string>(
@@ -46,8 +103,15 @@ public:
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
       declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+    const auto facex_model = declare_parameter<std::string>(
+      "facex_model", default_model_path("face", "facexformer.onnx"));
+    const auto task_name =
+      declare_parameter<std::string>("facex_task", "none");
+    margin_ = declare_parameter<double>("facex_margin", 50.0);
+    const auto task_topic =
+      declare_parameter<std::string>("face_task_topic", "/flylab/face_task");
 
-    // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
+    // ---------- SCRFD 检测 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     ScrfdConfig cfg;
     cfg.model_path = model;
     cfg.input_size = input_size;
@@ -57,18 +121,50 @@ public:
     detector_ = std::make_unique<ScrfdDetector>(cfg);
     RCLCPP_INFO(
       get_logger(),
-      "模型加载完成: %s [%s, input %d, conf %.2f, iou %.2f]",
+      "检测模型加载完成: %s [%s, input %d, conf %.2f, iou %.2f]",
       model.c_str(), detector_->cuda_active() ? "cuda" : "cpu",
       cfg.input_size, cfg.conf_thres, cfg.iou_thres);
     if (cfg.use_cuda && !detector_->cuda_active()) {
       RCLCPP_WARN(
-        get_logger(), "CUDA EP 注册失败, 已回退 CPU: %s",
+        get_logger(), "SCRFD CUDA EP 注册失败, 已回退 CPU: %s",
         detector_->cuda_error().c_str());
     }
 
-    log_ready("SCRFD 人脸检测");
+    // ---------- FaceXFormer 下游任务模型 ----------
+    FaceXConfig xcfg;
+    xcfg.model_path = facex_model;
+    xcfg.use_cuda = device == "cuda";
+    facex_ = std::make_unique<FaceXFormer>(xcfg);
+    RCLCPP_INFO(
+      get_logger(), "任务模型加载完成: %s [%s]",
+      facex_model.c_str(), facex_->cuda_active() ? "cuda" : "cpu");
+    if (xcfg.use_cuda && !facex_->cuda_active()) {
+      RCLCPP_WARN(
+        get_logger(), "FaceXFormer CUDA EP 注册失败, 已回退 CPU: %s",
+        facex_->cuda_error().c_str());
+    }
+    task_id_ = facex_task_id(task_name.c_str());
+    if (task_id_ < FACE_TASK_NONE) {
+      task_id_ = FACE_TASK_NONE;
+      RCLCPP_WARN(
+        get_logger(), "未知任务名 '%s', 已回退 none (仅检测)", task_name.c_str());
+    }
 
-    // ---------- 通信 (基类之外: 右栏算法信息面板数据) ----------
+    log_ready("SCRFD 人脸检测 + FaceXFormer 任务");
+
+    // ---------- 通信 (基类之外: 任务切换指令 + 右栏算法信息面板数据) ----------
+    task_sub_ = create_subscription<std_msgs::msg::String>(
+      task_topic, 10,
+      [this](const std_msgs::msg::String::SharedPtr msg) {
+        const int id = facex_task_id(msg->data.c_str());
+        if (id < 0) {
+          RCLCPP_WARN(
+            get_logger(), "未知人脸任务 '%s', 保持当前任务", msg->data.c_str());
+          return;
+        }
+        task_id_ = id;
+        RCLCPP_INFO(get_logger(), "人脸任务切换: %s", facex_task_name(id));
+      });
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
   }
 
@@ -77,28 +173,186 @@ protected:
   {
     const auto faces = detector_->detect(bgr);
     last_count_ = faces.size();
-    publish_info(faces, static_cast<double>(bgr.cols) * bgr.rows);
-    return to_annotations_json(faces, algo_group());
+
+    // ---------- 图元流: 人脸框/关键点 + 单脸任务输出 ----------
+    std::ostringstream items;
+    face_items_json(items, faces);
+
+    const int task = task_id_;          // 帧内取一次, 切换下一帧生效
+    FaceXResult fx;
+    bool has_fx = false;
+    if (task != FACE_TASK_NONE && !faces.empty()) {
+      // 置信度最高的一张脸
+      const ScrfdFace * best = &faces[0];
+      for (const auto & f : faces) {
+        if (f.conf > best->conf) {
+          best = &f;
+        }
+      }
+      // 外扩 margin% 边距裁剪 (对齐 facexformer realtime_app 的 adjust_bbox),
+      // 夹回画幅; 裁剪过小 (远脸/角脸) 则跳过任务推理
+      const cv::Rect2f & b = best->box;
+      const float dw = static_cast<float>(b.width * margin_ / 200.0);
+      const float dh = static_cast<float>(b.height * margin_ / 200.0);
+      const float x0 = std::max(0.f, b.x - dw);
+      const float y0 = std::max(0.f, b.y - dh);
+      const float x1 =
+        std::min(static_cast<float>(bgr.cols), b.x + b.width + dw);
+      const float y1 =
+        std::min(static_cast<float>(bgr.rows), b.y + b.height + dh);
+      const cv::Rect crop(
+        static_cast<int>(x0), static_cast<int>(y0),
+        static_cast<int>(x1 - x0), static_cast<int>(y1 - y0));
+      if (crop.width >= 10 && crop.height >= 10) {
+        facex_->run(bgr(crop), task, fx);
+        has_fx = true;
+        append_task_items(items, fx, task, crop);
+      }
+    }
+
+    publish_info(faces, static_cast<double>(bgr.cols) * bgr.rows,
+      task, fx, has_fx);
+
+    std::ostringstream os;
+    os << "{\"algo\":\"" << algo_group() << "\",\"items\":["
+       << items.str() << "]}";
+    return os.str();
   }
 
   std::string clear_json() const override
   {
-    return to_annotations_json(std::vector<ScrfdFace>{}, algo_group());
+    return std::string("{\"algo\":\"") + algo_group() + "\",\"items\":[]}";
   }
 
   void log_first_infer(long ms) override
   {
     RCLCPP_INFO(
-      get_logger(), "首帧推理耗时 %ldms, 检出 %zu 张人脸", ms, last_count_);
+      get_logger(), "首帧推理耗时 %ldms, 检出 %zu 张人脸, 任务 %s",
+      ms, last_count_, facex_task_name(task_id_));
   }
 
 private:
-  /// 面板数据 {"src":"face", "items":[...]}: ~30Hz 限频 (对齐地面站 33ms
-  /// 轮询, 值不变时面板端自动去重)。items = 按置信度降序的前 3 张脸
-  /// (右栏表格 3 列), 每项: 置信度/框中心/框尺寸/框占比
-  /// (占比 = 框面积 / 画幅像素, 体现目标在画面中的大小)
+  /// 任务输出 -> 画面叠加图元 (追加进 items 流; schema 见 flylab_gcs/overlay.py)
+  void append_task_items(
+    std::ostringstream & os, const FaceXResult & fx, int task,
+    const cv::Rect & crop)
+  {
+    const float cw = static_cast<float>(crop.width);
+    const float ch = static_cast<float>(crop.height);
+    // 68 点归一化 [-1,1] -> 裁剪空间 -> 原帧坐标 (224 归一化与裁剪缩放
+    // 两次换算可合并成 (p+1)*cw/2)
+    auto to_frame = [&](float px, float py) {
+        return cv::Point2f(
+          crop.x + (px + 1.f) * cw / 2.f, crop.y + (py + 1.f) * ch / 2.f);
+      };
+
+    switch (task) {
+      case FACE_TASK_LANDMARKS: {
+          for (const auto & p : fx.landmark) {
+            const cv::Point2f q = to_frame(p[0], p[1]);
+            os << ",{\"type\":\"point\",\"point\":["
+               << num(q.x) << "," << num(q.y) << "],"
+               << "\"color\":[255,255,0]}";
+          }
+          break;
+        }
+      case FACE_TASK_HEADPOSE: {
+          // 三姿态轴 (对齐 facexformer realtime_app: 轴心 = 裁剪中心,
+          // 轴长 = 裁剪宽 1/4; 标注颜色约定为 RGB, X 红 / Y 绿 / Z 蓝)
+          const float pitch = fx.headpose[0], yaw = fx.headpose[1],
+            roll = fx.headpose[2];
+          const float cx = crop.x + cw / 2.f, cy = crop.y + ch / 2.f;
+          const float size = cw / 4.f;
+          const float dx[3] = {
+            size * (std::cos(yaw) * std::cos(roll)),
+            size * (-std::cos(yaw) * std::sin(roll)),
+            size * std::sin(yaw)};
+          const float dy[3] = {
+            size * (std::cos(pitch) * std::sin(roll) +
+            std::cos(roll) * std::sin(pitch) * std::sin(yaw)),
+            size * (std::cos(pitch) * std::cos(roll) -
+            std::sin(pitch) * std::sin(yaw) * std::sin(roll)),
+            size * (-std::cos(yaw) * std::sin(pitch))};
+          const char * colors[3] = {"[255,0,0]", "[0,255,0]", "[0,0,255]"};
+          for (int i = 0; i < 3; ++i) {
+            os << ",{\"type\":\"polyline\",\"points\":[["
+               << num(cx) << "," << num(cy) << "],["
+               << num(cx + dx[i]) << "," << num(cy - dy[i]) << "]],"
+               << "\"color\":" << colors[i] << "}";
+          }
+          break;
+        }
+      case FACE_TASK_PARSING: {
+          // 类别掩码 -> BGRA (非背景类半透明, 背景全透明) PNG base64,
+          // image 图元铺回裁剪区域 (alpha 逐像素, 不用整图 alpha)
+          cv::Mat bgra(kFaceXInput, kFaceXInput, CV_8UC4);
+          for (int y = 0; y < kFaceXInput; ++y) {
+            for (int x = 0; x < kFaceXInput; ++x) {
+              const int cls = fx.seg_mask.at<uchar>(y, x);
+              auto & px = bgra.at<cv::Vec4b>(y, x);
+              px = {
+                kParsingColorsRGB[cls][2], kParsingColorsRGB[cls][1],
+                kParsingColorsRGB[cls][0],
+                static_cast<uint8_t>(cls == 0 ? 0 : 128)};
+            }
+          }
+          std::vector<uchar> png;
+          if (!cv::imencode(".png", bgra, png)) {
+            break;
+          }
+          os << ",{\"type\":\"image\",\"pos\":["
+             << num(static_cast<float>(crop.x)) << ","
+             << num(static_cast<float>(crop.y)) << "],"
+             << "\"w\":" << num(cw) << ",\"data\":\""
+             << base64_encode(png.data(), png.size()) << "\"}";
+          break;
+        }
+      case FACE_TASK_AGE_GENDER_RACE: {
+          // 结果文字钉在框顶 (与面板同源文案)
+          os << ",{\"type\":\"text\",\"pos\":["
+             << num(static_cast<float>(crop.x)) << ","
+             << num(std::max(0.f, static_cast<float>(crop.y) - 8.f)) << "],"
+             << "\"text\":\"" << agr_text(fx)
+             << "\",\"color\":[255,255,255]}";
+          break;
+        }
+      case FACE_TASK_VISIBILITY: {
+          // 29 点可见性 -> 左上角固定位置绿/红方块网格 (绿=可见 红=遮挡,
+          // 对齐 facexformer realtime_app 的呈现) + 计数文字
+          constexpr int kCols = 6, kCell = 18, kGap = 5;
+          const int rows = (29 + kCols - 1) / kCols;
+          const int gw = kCols * (kCell + kGap) - kGap;
+          const int gh = rows * (kCell + kGap) - kGap;
+          cv::Mat bgra(gh, gw, CV_8UC4, cv::Scalar(0, 0, 0, 0));
+          for (int i = 0; i < 29; ++i) {
+            const int r = i / kCols, c = i % kCols;
+            const cv::Point tl(c * (kCell + kGap), r * (kCell + kGap));
+            cv::rectangle(bgra, cv::Rect(tl.x, tl.y, kCell, kCell),
+              fx.visibility[i] ? cv::Scalar(0, 200, 0, 255) :
+              cv::Scalar(0, 0, 220, 255), -1);
+          }
+          std::vector<uchar> png;
+          if (!cv::imencode(".png", bgra, png)) {
+            break;
+          }
+          os << ",{\"type\":\"text\",\"pos\":[20,16],"
+             << "\"text\":\"关键点可见 " << vis_count(fx) << "/29\","
+             << "\"color\":[255,255,255]},"
+             << "{\"type\":\"image\",\"pos\":[20,34],\"data\":\""
+             << base64_encode(png.data(), png.size()) << "\"}";
+          break;
+        }
+      default:   // attributes 只进面板, 无画面叠加
+        break;
+    }
+  }
+
+  /// 面板数据 {"src":"face", "task":.., "count":N, "items":[...]}: ~30Hz
+  /// 限频; items = 按置信度降序的前 3 张脸, items[0] 额外携带任务结果
+  /// ("result" 文本, attributes 传 "attrs" 开启索引表由面板映射中文)
   void publish_info(
-    const std::vector<ScrfdFace> & faces, double frame_area)
+    const std::vector<ScrfdFace> & faces, double frame_area, int task,
+    const FaceXResult & fx, bool has_fx)
   {
     const auto now = std::chrono::steady_clock::now();
     if (now - info_last_ < std::chrono::milliseconds(33)) {
@@ -117,7 +371,8 @@ private:
     const size_t n = std::min<size_t>(sorted.size(), 3);
     std::ostringstream os;
     // count = 全部检出数 (可能 > 3, 不能用 len(items) 代替, 面板汇总行用)
-    os << "{\"src\":\"face\",\"count\":" << faces.size() << ",\"items\":[";
+    os << "{\"src\":\"face\",\"count\":" << faces.size()
+       << ",\"task\":\"" << facex_task_name(task) << "\",\"items\":[";
     for (size_t i = 0; i < n; ++i) {
       const auto & f = *sorted[i];
       float area_pct = 0.f;
@@ -132,12 +387,72 @@ private:
          << "\"y\":" << num(f.box.y + f.box.height / 2.f, 0) << ","
          << "\"w\":" << num(f.box.width, 0) << ","
          << "\"h\":" << num(f.box.height, 0) << ","
-         << "\"area\":" << num(area_pct, 1) << "}";
+         << "\"area\":" << num(area_pct, 1);
+      if (i == 0 && has_fx) {
+        os << "," << task_result_json(fx, task);
+      }
+      os << "}";
     }
     os << "]}";
     std_msgs::msg::String out;
     out.data = os.str();
     info_pub_->publish(out);
+  }
+
+  /// 最高置信度脸的任务结果 -> 面板 JSON 片段 (不加大括号)
+  std::string task_result_json(const FaceXResult & fx, int task)
+  {
+    std::ostringstream os;
+    switch (task) {
+      case FACE_TASK_PARSING: {
+          int present[11] = {0};   // 出现的非背景类数
+          for (int y = 0; y < kFaceXInput; ++y) {
+            for (int x = 0; x < kFaceXInput; ++x) {
+              present[fx.seg_mask.at<uchar>(y, x)] = 1;
+            }
+          }
+          int cnt = 0;
+          for (const int p : present) {
+            cnt += p;
+          }
+          os << "\"result\":\"分割 " << cnt << " 类\"";
+          break;
+        }
+      case FACE_TASK_LANDMARKS:
+        os << "\"result\":\"68 关键点\"";
+        break;
+      case FACE_TASK_HEADPOSE:
+        os << "\"result\":\"P" << num(deg(fx.headpose[0])) << "° Y"
+           << num(deg(fx.headpose[1])) << "° R" << num(deg(fx.headpose[2]))
+           << "°\"";
+        break;
+      case FACE_TASK_ATTRIBUTES: {
+          os << "\"attrs\":[";
+          bool first = true;
+          for (int i = 0; i < 40; ++i) {
+            if (fx.attribute[i]) {
+              os << (first ? "" : ",") << i;
+              first = false;
+            }
+          }
+          os << "]";
+          break;
+        }
+      case FACE_TASK_AGE_GENDER_RACE:
+        os << "\"result\":\"" << agr_text(fx) << "\"";
+        break;
+      case FACE_TASK_VISIBILITY:
+        os << "\"result\":\"" << vis_count(fx) << "/29 可见\"";
+        break;
+      default:
+        break;
+    }
+    return os.str();
+  }
+
+  static double deg(double rad)
+  {
+    return rad * 180.0 / 3.14159265358979323846;
   }
 
   static std::string num(double v, int prec = 1)
@@ -148,6 +463,10 @@ private:
   }
 
   std::unique_ptr<ScrfdDetector> detector_;
+  std::unique_ptr<FaceXFormer> facex_;
+  double margin_ = 50.0;                 // 裁剪外扩边距 (%)
+  std::atomic<int> task_id_{FACE_TASK_NONE};
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr task_sub_;
   size_t last_count_ = 0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;
   std::chrono::steady_clock::time_point info_last_;

@@ -27,7 +27,8 @@
   seg      —— yolo_segment_node 实例分割 (前 3 实例并列表格, 按置信度降序)
   pose     —— yolo_pose_node 姿态估计 (前 3 人体并列表格, 按置信度降序)
   detect   —— yolo_detector_node 目标检测 (前 3 目标并列表格, 按置信度降序)
-  face     —— face_detect_node 人脸检测 (前 3 张脸并列表格, 按置信度降序)
+  face     —— face_detect_node 人脸检测 (前 3 张脸并列表格, 按置信度降序;
+              标题显示 FaceXFormer 下游任务, "结果"行仅最高置信度脸有值)
   obb      —— yolo_obb_node 旋转框检测 (前 3 旋转框并列表格, 按置信度降序)
   cls      —— yolo_cls_node 图像分类 (top-3 类别并列表格, 按置信度降序)
   track    —— yolo_track_node/ortrack_node 目标追踪 (状态字段卡片, 框选在画面完成)
@@ -211,6 +212,32 @@ def _track_fields(data):
     return out
 
 
+# CelebA 40 属性中文名 (顺序与 face_detect_node 模型输出一致)
+_CELEBA_ATTRS_ZH = [
+    '胡渣', '弓形眉', '有魅力', '眼袋', '秃头', '刘海', '厚唇', '大鼻',
+    '黑发', '金发', '画面模糊', '棕发', '浓眉', '圆脸', '双下巴', '眼镜',
+    '山羊胡', '灰白头发', '浓妆', '高颧骨', '男性', '微张嘴', '八字胡',
+    '细长眼', '无须', '瓜子脸', '苍白肤色', '尖鼻', '发际线后移',
+    '红润脸颊', '鬓角', '微笑', '直发', '卷发', '戴耳环', '戴帽',
+    '涂口红', '戴项链', '戴领带', '年轻',
+]
+
+
+def _face_result_text(item):
+    """face_detect_node 最高置信度脸的任务结果 -> 显示文本。
+    attributes 传开启属性索引表 (attrs), 其余任务传现成文本 (result)。"""
+    attrs = item.get('attrs')
+    if attrs is not None:
+        names = [_CELEBA_ATTRS_ZH[i] for i in attrs
+                 if isinstance(i, int) and 0 <= i < len(_CELEBA_ATTRS_ZH)]
+        if not names:
+            return '无开启属性'
+        head = '、'.join(names[:4])
+        more = len(names) - 4
+        return f'{head} 等 {len(names)} 项' if more > 0 else head
+    return item.get('result')
+
+
 # 分组注册表: key (= 消息 src) -> {title, title_fn, fields} 或表格模式
 # {table: 列数, rows: [(属性, extract(item, col))]}
 # fields: [(label, extract)] —— extract(data) -> 文本 | None (显示 '—')
@@ -304,7 +331,13 @@ SECTIONS = {
     'face': {
         'title': '人脸检测',
         # 表格模式: 前 3 张脸并列成列 (节点端按置信度降序), 不足整列隐藏;
-        # 人脸数为汇总行置于表格上方跨全部列 (单类 face 无类别行)
+        # 人脸数为汇总行置于表格上方跨全部列 (单类 face 无类别行);
+        # 标题动态显示当前 FaceXFormer 任务 (人脸检测 · 头部姿态 …);
+        # 'none' = 无任务 (仅检测), 标题保持"人脸检测"
+        'title_fn': lambda d: (
+            '人脸检测 · ' + config.FACE_TASKS.get(
+                d.get('task'), d.get('task', '')))
+            if d and d.get('task') not in (None, '', 'none') else '人脸检测',
         'table': 3,
         'summary': ('检出', lambda d: f"{d.get('count', 0)} 张"),
         'rows': [
@@ -316,6 +349,8 @@ SECTIONS = {
             ('尺寸', lambda item, i:
                 f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
             ('占比', lambda item, i: f"{item.get('area', 0):.1f}%"),
+            # FaceXFormer 任务结果 (仅最高置信度脸有, 其余列显示 '—')
+            ('结果', lambda item, i: _face_result_text(item)),
         ],
     },
     'detect': {
@@ -608,7 +643,7 @@ class AlgoOutputPanel(QGroupBox):
 
     def __init__(self, get_info, set_marker_length=None,
                  set_landing_yaw=None, set_aruco_dict=None,
-                 parent=None):
+                 set_face_task=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -633,6 +668,11 @@ class AlgoOutputPanel(QGroupBox):
         self._dict_box = None
         if set_aruco_dict is not None:
             self._build_dict_combo(set_aruco_dict)
+        # 人脸任务切换 (跟随 face 分组显隐): 运行中同步 face_detect_node 的
+        # FaceXFormer 任务 (下一帧生效)
+        self._face_task_box = None
+        if set_face_task is not None:
+            self._build_face_task_combo(set_face_task)
         # 目标追踪无面板控件: track 分组激活期间画面框选常开 (主窗口
         # 控制), 拖出矩形松开即自动开始追踪, 停止靠工具栏"停止算法"
         # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
@@ -640,7 +680,7 @@ class AlgoOutputPanel(QGroupBox):
         # 分组 (见 _update_bottom_visibility), 无 ArUco 算法运行时整行隐藏
         bottom = None
         if self._marker_box is not None or self._yaw_box is not None or \
-                self._dict_box is not None:
+                self._dict_box is not None or self._face_task_box is not None:
             bottom = QWidget()
             row = QHBoxLayout(bottom)
             row.setContentsMargins(0, 0, 0, 0)
@@ -651,6 +691,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._yaw_box, 1)
             if self._dict_box is not None:
                 row.addWidget(self._dict_box, 1)
+            if self._face_task_box is not None:
+                row.addWidget(self._face_task_box, 1)
         self._bottom_row = bottom
         self._update_bottom_visibility([])   # 初始无分组, 整行隐藏
 
@@ -735,6 +777,35 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(combo, 1)
         self._dict_box = box
 
+    def _build_face_task_combo(self, publish):
+        """人脸下游任务切换 (QComboBox): 候选取 config.FACE_TASKS (键=发
+        给节点的任务名, 值=显示名), 选择即发布 (latched); 未动过不发布,
+        节点用 facex_task 参数的值 (与 ArUco 字典同步同一约定)。激活信号
+        过滤: 程序设初值不触发发布。"""
+        box = QGroupBox('人脸任务')
+        box.setToolTip(
+            'FaceXFormer 对检出人脸 (置信度最高) 跑的下游分析任务,\n'
+            '下拉运行中切换, 下一帧生效:\n'
+            '人像分割/68 关键点/头部姿态/人脸属性/年龄性别/点可见性')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        combo = QComboBox()
+        combo.addItems(list(config.FACE_TASKS.values()))
+        # 初始显示默认值不发 (未选择不发布, 节点用 facex_task 参数的值;
+        # setCurrentText 放在 connect 之前, 不触发 activated)
+        default_name = config.FACE_TASKS.get(
+            config.FACE_TASK_DEFAULT, config.FACE_TASK_DEFAULT)
+        combo.setCurrentText(default_name)
+        # 用户选择才发布 (含重复选择, 传任务名 -> 显示名反查任务 id)
+        name_to_id = {v: k for k, v in config.FACE_TASKS.items()}
+
+        def on_activated(name):
+            publish(name_to_id.get(name, config.FACE_TASK_DEFAULT))
+
+        combo.activated[str].connect(on_activated)
+        lay.addWidget(combo, 1)
+        self._face_task_box = box
+
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
         底部调节行的可见性同步跟随 (无 ArUco 分组时整行隐藏)。"""
@@ -749,17 +820,22 @@ class AlgoOutputPanel(QGroupBox):
     def _update_bottom_visibility(self, keys):
         """底部调节行随激活分组显隐: 码边长滑杆/字典切换对检测与降落都
         有意义 (降落节点同样检测码), 有 detect 或 landing 即显示;
-        降落朝向偏置只属于降落, 仅 landing 时显示; 全无则整行隐藏。"""
+        降落朝向偏置只属于降落, 仅 landing 时显示; 人脸任务切换只属于
+        face; 全无则整行隐藏。"""
         aruco_on = 'aruco' in keys or 'landing' in keys
         landing_on = 'landing' in keys
+        face_on = 'face' in keys
         if self._marker_box is not None:
             self._marker_box.setVisible(aruco_on)
         if self._yaw_box is not None:
             self._yaw_box.setVisible(landing_on)
         if self._dict_box is not None:
             self._dict_box.setVisible(aruco_on)
+        if self._face_task_box is not None:
+            self._face_task_box.setVisible(face_on)
         if self._bottom_row is not None:
-            self._bottom_row.setVisible(aruco_on)
+            self._bottom_row.setVisible(
+                aruco_on or face_on)
 
     def refresh(self):
         info = self._get_info() or {}

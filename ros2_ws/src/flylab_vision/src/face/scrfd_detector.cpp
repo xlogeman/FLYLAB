@@ -296,11 +296,8 @@ std::vector<ScrfdFace> ScrfdDetector::detect(const cv::Mat & bgr)
   return results;
 }
 
-std::string to_annotations_json(
-  const std::vector<ScrfdFace> & faces, const std::string & algo)
+void face_items_json(std::ostream & os, const std::vector<ScrfdFace> & faces)
 {
-  std::ostringstream os;
-  os << "{\"algo\":\"" << algo << "\",\"items\":[";
   for (size_t i = 0; i < faces.size(); ++i) {
     const auto & f = faces[i];
     if (i > 0) {
@@ -318,6 +315,14 @@ std::string to_annotations_json(
          << "\"color\":[0,255,255]}";
     }
   }
+}
+
+std::string to_annotations_json(
+  const std::vector<ScrfdFace> & faces, const std::string & algo)
+{
+  std::ostringstream os;
+  os << "{\"algo\":\"" << algo << "\",\"items\":[";
+  face_items_json(os, faces);
   os << "]}";
   return os.str();
 }

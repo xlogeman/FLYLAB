@@ -157,7 +157,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.algo_panel = AlgoOutputPanel(
             self.node.get_aruco_info, self.node.publish_marker_length,
             self.node.publish_landing_yaw_offset,
-            set_aruco_dict=self.node.publish_aruco_dict)
+            set_aruco_dict=self.node.publish_aruco_dict,
+            set_face_task=self.node.publish_face_task)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         # 显示画面转发挂到帧提交点: 抓取线程提交场景帧后直接把引用交给

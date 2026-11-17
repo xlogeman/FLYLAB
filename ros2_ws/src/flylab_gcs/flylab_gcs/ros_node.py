@@ -220,6 +220,15 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 人脸下游任务同步发布器 (latched 约定见 config.FACE_TASK_TOPIC):
+        # 后启动的 face_detect_node 一接入即拿到当前任务
+        self.face_task_pub = self.create_publisher(
+            String, config.FACE_TASK_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 目标追踪 ROI 发布器 (latched 约定见 config.TRACK_ROI_TOPIC):
         # 界面框选目标后把矩形发给追踪节点 (yolo_track/ortrack), 后启动
         # 的节点一接入即拿到当前框选区域
@@ -469,6 +478,13 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = str(name)
         self.aruco_dict_pub.publish(msg)
+
+    def publish_face_task(self, task_id):
+        """发布人脸下游任务名 (config.FACE_TASKS 键), 供 face_detect_node
+        运行中切换 FaceXFormer 任务 (下一帧生效)。"""
+        msg = String()
+        msg.data = str(task_id)
+        self.face_task_pub.publish(msg)
 
     def publish_track_roi(self, x, y, w, h):
         """发布追踪目标框选区域 (显示帧像素, 与转发帧同一坐标系),

@@ -2,6 +2,7 @@
 #ifndef FLYLAB_VISION__FACE__SCRFD_DETECTOR_HPP_
 #define FLYLAB_VISION__FACE__SCRFD_DETECTOR_HPP_
 
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +64,11 @@ private:
 /// 坐标为原图像素, 图像源须与地面站显示的相机/分辨率一致。
 std::string to_annotations_json(
   const std::vector<ScrfdFace> & faces, const std::string & algo = "face");
+
+/// 单张脸的标注图元序列化进流 (bbox + 5 关键点, 不带 {"algo":...} 包装
+/// 与前后逗号), 供节点把 FaceXFormer 任务标注拼进同一条消息
+void face_items_json(
+  std::ostream & os, const std::vector<ScrfdFace> & faces);
 
 }  // namespace flylab_vision
 
