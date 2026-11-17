@@ -20,6 +20,11 @@
     marker_length_topic: /flylab/aruco_marker_length  # 地面站"码边长"滑杆运行中同步 (latched, 后启动节点也收到)
     annotation_topic: /flylab/annotations    # 标注输出话题
 
+    # ---------- 分形码检测参数 (仅 fractal_node, 其他节点忽略) ----------
+    # 分形码 = 大码内嵌套逐层缩小的小码, 远距/遮挡鲁棒; marker_length/fov_deg/calib
+    # 复用上方检测参数 (marker_length = 外层码物理边长)
+    fractal_config: FRACTAL_5L_6             # 内置配置 FRACTAL_2L_6~5L_6, 或 fractal_create 生成的 yml 路径
+
     # ---------- 降落参数 (仅 aruco_landing_node, 检测节点忽略) ----------
     cmd_topic: /flylab/vision_cmd            # 启停指令话题
     status_topic: /flylab/landing_status     # 状态回传话题 (tracking/landing/landed/idle)

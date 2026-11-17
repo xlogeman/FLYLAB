@@ -25,6 +25,12 @@ find_package(ament_index_cpp REQUIRED)
 set(ORT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime)
 set(ORT_LIB ${ORT_ROOT}/lib/libonnxruntime.so)
 
+# ---------- aruco 3.1.12 (第三方库, 分形码检测后端; UCO aruco, GPLv3) ----------
+# 分形码 = 大码内嵌套逐层缩小的小码, 远距/遮挡鲁棒 (Case2 关键点跟踪接管位姿);
+# 源码 + 预编译库在 thirdparty/aruco-3.1.12 (裁剪自 /root/FractalMarkers)
+set(ARUCO3_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/aruco-3.1.12)
+set(ARUCO3_LIB ${ARUCO3_ROOT}/build/libaruco.so)
+
 # ---------- 节点层公共工具 (to_bgr / 默认模型路径解析) ----------
 # 仅供 ROS 节点链接; 算法库保持无 ROS 依赖, 不链接本目标
 add_library(vision_common src/common/image_utils.cpp)
@@ -58,6 +64,10 @@ endfunction()
 
 # ---------- 核心算法库 (无 ROS 依赖) ----------
 flylab_algo(aruco_detector src/aruco/aruco_detector.cpp)
+# 分形码检测: 包装上游 aruco::FractalDetector, 输出复用 Detection;
+# SYSTEM PUBLIC 让上游头文件的告警静默, 下游节点经传递拿到 include 路径
+flylab_algo(fractal_detector src/aruco/fractal_detector.cpp ${ARUCO3_LIB})
+target_include_directories(fractal_detector SYSTEM PUBLIC ${ARUCO3_ROOT}/src)
 
 # 任务一个子目录: src/<task>/ (命名与 models/<task>/ 对齐, 同一任务可挂
 # 多种算法/模型变体), 算法库 + 展示节点成对放置
@@ -86,6 +96,7 @@ flylab_algo(facexformer src/face/facexformer.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
 flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
+flylab_node(fractal_node src/aruco/fractal_node.cpp fractal_detector aruco_detector)
 flylab_node(yolo_detector_node src/detect/yolo_detector_node.cpp yolo_detector)
 flylab_node(yolo_cls_node src/classify/yolo_cls_node.cpp yolo_classifier)
 flylab_node(yolo_depth_node src/depth/yolo_depth_node.cpp yolo_depth)
@@ -130,9 +141,14 @@ install(DIRECTORY ${ORT_ROOT}/lib/
   DESTINATION lib
   FILES_MATCHING PATTERN "libonnxruntime*")
 
+# aruco 3.1.12 动态库 (含版本符号链接) 装到 lib/, 供 rpath 解析
+install(DIRECTORY ${ARUCO3_ROOT}/build/
+  DESTINATION lib
+  FILES_MATCHING PATTERN "libaruco*")
+
 install(TARGETS vision_common
-  aruco_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector facexformer
-  aruco_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node aruco_landing_node teleop_node
+  aruco_detector fractal_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector facexformer
+  aruco_node fractal_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node aruco_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

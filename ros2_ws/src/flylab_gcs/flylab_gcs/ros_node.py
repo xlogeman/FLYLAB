@@ -220,6 +220,14 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # fractal 分形配置同步发布器 (latched 约定见 config.FRACTAL_CONFIG_TOPIC)
+        self.fractal_config_pub = self.create_publisher(
+            String, config.FRACTAL_CONFIG_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 人脸下游任务同步发布器 (latched 约定见 config.FACE_TASK_TOPIC):
         # 后启动的 face_detect_node 一接入即拿到当前任务
         self.face_task_pub = self.create_publisher(
@@ -478,6 +486,13 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = str(name)
         self.aruco_dict_pub.publish(msg)
+
+    def publish_fractal_config(self, name):
+        """发布分形配置名, 供 fractal_node 运行中同步 fractal_config
+        (重建检测器, 下一帧检测生效)。"""
+        msg = String()
+        msg.data = str(name)
+        self.fractal_config_pub.publish(msg)
 
     def publish_face_task(self, task_id):
         """发布人脸下游任务名 (config.FACE_TASKS 键), 供 face_detect_node

@@ -21,6 +21,9 @@ struct Detection
   cv::Point2f bbox_wh{0.f, 0.f};     // 外接框宽高
   cv::Vec3d tvec{0.0, 0.0, 0.0};     // 相机系位姿 (x右 y下 z前, 米)
   bool has_pose = false;             // solvePnP 是否成功
+  // Case2 关键点跟踪标记 (分形码专用): detect 失败由上一帧位姿 + 关键点
+  // 匹配接管位姿, 角点为外框投影 (虚拟框, id=-1); 普通 ArUco 恒为 false
+  bool kp_tracked = false;
   // 位姿轴端点投影: [原点, x端, y端, z端] (像素); has_pose 时有效,
   // 供可视化画 RGB 轴
   std::vector<cv::Point2f> axis_pts;

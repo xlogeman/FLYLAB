@@ -244,6 +244,21 @@ SECTIONS = {
             ('检出', lambda d: _detect_fields(d)['检出']),
         ],
     },
+    'fractal': {
+        'title': 'fractal 检测',
+        # largest 与 aruco 同构 (字段提取复用 _detect_fields);
+        # 模式行表达 Case1/Case2: kp=True 时无层轮廓, 位姿由关键点跟踪接管
+        'fields': [
+            ('模式', lambda d: 'KP 跟踪' if d.get('kp') else '检测'),
+            ('码号', lambda d: _detect_fields(d)['码号']),
+            ('尺寸', lambda d: _detect_fields(d)['尺寸']),
+            ('实宽', lambda d: _detect_fields(d)['实宽']),
+            ('位置', lambda d: _detect_fields(d)['位置']),
+            ('占比', lambda d: _detect_fields(d)['占比']),
+            ('偏移', lambda d: _detect_fields(d)['偏移']),
+            ('检出', lambda d: _detect_fields(d)['检出']),
+        ],
+    },
     'landing': {
         'title': 'ArUco 降落',
         # 状态不占行位, 动态显示在分组标题里 (对齐下降/目标丢失/…)

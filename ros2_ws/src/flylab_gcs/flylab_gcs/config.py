@@ -162,6 +162,17 @@ ARUCO_DICTS = [
 ]
 ARUCO_DICT_DEFAULT = 'DICT_4X4_1000'   # 与 aruco.yaml 默认一致
 
+# ---------- fractal 分形配置运行时切换 (右栏"算法信息"面板下拉框) ----------
+# 分形码 = 大码内嵌套逐层缩小的小码 (UCO aruco 3.1.12), 下拉运行中同步
+# fractal_node 的 fractal_config (重建检测器, 下一帧检测生效)。latched 话题:
+# 后启动的节点一接入即拿到当前值; 未选择过不发布 (与 ArUco 字典同步同一
+# 约定), 节点用 aruco.yaml 的 fractal_config。默认值应与该 yaml 保持一致。
+FRACTAL_CONFIG_TOPIC = '/flylab/fractal_config'
+FRACTAL_CONFIGS = [
+    'FRACTAL_2L_6', 'FRACTAL_3L_6', 'FRACTAL_4L_6', 'FRACTAL_5L_6',
+]
+FRACTAL_CONFIG_DEFAULT = 'FRACTAL_5L_6'   # 与 aruco.yaml 默认一致
+
 # ---------- 人脸下游任务切换 (右栏"算法信息"面板下拉框) ----------
 # SCRFD 检出人脸后, FaceXFormer 对置信度最高的一张脸跑选定任务; 下拉切换
 # 经该话题同步 face_detect_node (下一帧生效), 未知任务名节点拒绝并保持
@@ -285,6 +296,11 @@ ALGORITHMS = [
          # 只显示普通"视觉反控"单项, 无下级选项
          'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
          'panel': 'aruco'},   # 右栏算法信息面板分组 (panel_sections.SECTIONS)
+        {'name': 'fractal检测',
+         'cmd': ['ros2', 'run', 'flylab_vision', 'fractal_node',
+                 '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
+         'start': 'fractal_start', 'stop': 'fractal_stop',
+         'panel': 'fractal'},   # 右栏算法信息面板分组 (panel_sections.SECTIONS)
     ]},
     {'name': '目标检测', 'items': [
         {'name': 'yolo26s',

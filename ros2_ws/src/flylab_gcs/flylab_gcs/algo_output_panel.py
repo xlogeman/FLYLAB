@@ -246,7 +246,7 @@ class AlgoOutputPanel(QGroupBox):
 
     def __init__(self, get_info, set_marker_length=None,
                  set_landing_yaw=None, set_aruco_dict=None,
-                 set_face_task=None, parent=None):
+                 set_face_task=None, set_fractal_config=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -276,14 +276,20 @@ class AlgoOutputPanel(QGroupBox):
         self._face_task_box = None
         if set_face_task is not None:
             self._build_face_task_combo(set_face_task)
+        # 分形配置切换 (跟随 fractal 分组显隐): 运行中同步 fractal_node 的
+        # fractal_config (重建检测器, 下一帧检测生效)
+        self._fractal_box = None
+        if set_fractal_config is not None:
+            self._build_fractal_combo(set_fractal_config)
         # 目标追踪无面板控件: track 分组激活期间画面框选常开 (主窗口
         # 控制), 拖出矩形松开即自动开始追踪, 停止靠工具栏"停止算法"
-        # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换并排): 装进一个
-        # 横向容器, 整行横跨全部分组列 (见 _relayout); 可见性跟随激活
-        # 分组 (见 _update_bottom_visibility), 无 ArUco 算法运行时整行隐藏
+        # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
+        # 装进一个横向容器, 整行横跨全部分组列 (见 _relayout); 可见性跟随
+        # 激活分组 (见 _update_bottom_visibility), 无相关算法运行时整行隐藏
         bottom = None
         if self._marker_box is not None or self._yaw_box is not None or \
-                self._dict_box is not None or self._face_task_box is not None:
+                self._dict_box is not None or self._face_task_box is not None or \
+                self._fractal_box is not None:
             bottom = QWidget()
             row = QHBoxLayout(bottom)
             row.setContentsMargins(0, 0, 0, 0)
@@ -296,6 +302,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._dict_box, 1)
             if self._face_task_box is not None:
                 row.addWidget(self._face_task_box, 1)
+            if self._fractal_box is not None:
+                row.addWidget(self._fractal_box, 1)
         self._bottom_row = bottom
         self._update_bottom_visibility([])   # 初始无分组, 整行隐藏
 
@@ -409,6 +417,27 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(combo, 1)
         self._face_task_box = box
 
+    def _build_fractal_combo(self, publish):
+        """fractal 分形配置切换 (QComboBox): 候选取 config.FRACTAL_CONFIGS
+        (内置 2L~5L 四档), 选择即发布 (latched), 节点重建检测器下一帧生效;
+        未动过不发布, 节点用 aruco.yaml 的 fractal_config (与 ArUco 字典
+        同步同一约定)。激活信号过滤: 程序设初值不触发发布。"""
+        box = QGroupBox('fractal 配置')
+        box.setToolTip(
+            '分形码嵌套层数 (2L~5L, 数字越大层数越多, 远距/遮挡越鲁棒,\n'
+            '内层码越小), 场景换了码时下拉切换, 运行中同步 fractal_node,\n'
+            '下一帧检测生效')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        combo = QComboBox()
+        combo.addItems(config.FRACTAL_CONFIGS)
+        # 初始显示默认值不发 (未选择不发布, 节点用 aruco.yaml 的值;
+        # setCurrentText 放在 connect 之前, 不触发 activated)
+        combo.setCurrentText(config.FRACTAL_CONFIG_DEFAULT)
+        combo.activated[str].connect(publish)   # 用户选择才发布 (含重复选择)
+        lay.addWidget(combo, 1)
+        self._fractal_box = box
+
     def set_active(self, keys):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
         底部调节行的可见性同步跟随 (无 ArUco 分组时整行隐藏)。"""
@@ -421,24 +450,27 @@ class AlgoOutputPanel(QGroupBox):
         self._update_bottom_visibility(keys)
 
     def _update_bottom_visibility(self, keys):
-        """底部调节行随激活分组显隐: 码边长滑杆/字典切换对检测与降落都
-        有意义 (降落节点同样检测码), 有 detect 或 landing 即显示;
-        降落朝向偏置只属于降落, 仅 landing 时显示; 人脸任务切换只属于
-        face; 全无则整行隐藏。"""
+        """底部调节行随激活分组显隐: 码边长滑杆对检测/降落/分形都有意义
+        (同一降落坪, ArUco 与 fractal 共用); 字典切换属于 ArUco 检测与
+        降落; 降落朝向偏置属于降落 (fractal 降落暂未接入, 仅暂存);
+        分形配置切换只属于 fractal; 人脸任务切换只属于 face; 全无则整行隐藏。"""
         aruco_on = 'aruco' in keys or 'landing' in keys
         landing_on = 'landing' in keys
         face_on = 'face' in keys
+        fractal_on = 'fractal' in keys
         if self._marker_box is not None:
-            self._marker_box.setVisible(aruco_on)
+            self._marker_box.setVisible(aruco_on or fractal_on)
         if self._yaw_box is not None:
-            self._yaw_box.setVisible(landing_on)
+            self._yaw_box.setVisible(landing_on or fractal_on)
         if self._dict_box is not None:
             self._dict_box.setVisible(aruco_on)
         if self._face_task_box is not None:
             self._face_task_box.setVisible(face_on)
+        if self._fractal_box is not None:
+            self._fractal_box.setVisible(fractal_on)
         if self._bottom_row is not None:
             self._bottom_row.setVisible(
-                aruco_on or face_on)
+                aruco_on or face_on or fractal_on)
 
     def refresh(self):
         info = self._get_info() or {}

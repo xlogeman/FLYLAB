@@ -228,6 +228,9 @@ std::string to_annotations_json(
     if (d.has_pose) {
       label += " z=" + num(d.tvec[2], 2) + "m";
     }
+    if (d.kp_tracked) {
+      label += " KP";  // Case2 关键点跟踪 (分形码遮挡/远距时)
+    }
     if (emph && emphasis_label[0] != '\0') {
       label += " ";
       label += emphasis_label;
