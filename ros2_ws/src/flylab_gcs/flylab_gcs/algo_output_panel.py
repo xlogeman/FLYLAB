@@ -7,7 +7,7 @@
 
 职责分工: "算法 JSON -> 显示文本" 的提取逻辑与分组注册表 (SECTIONS) 在
 panel_sections.py —— 新算法接入只改注册表, 不碰框架; 本文件只做 Qt 渲染
-(字段行 / 表格模式 / 图片行 / 超时置灰 / 底部调节行显隐)。
+(字段行 / 表格模式 / 图片行 / 超时置灰 / 顶部调节行显隐)。
 
 分组 spec 契约 (注册表项, 本框架按其渲染):
   title     分组标题 (必填)
@@ -258,7 +258,7 @@ class AlgoOutputPanel(QGroupBox):
         self._lay = QGridLayout(self)
         self._lay.setContentsMargins(0, 2, 0, 0)
         self._lay.setSpacing(4)
-        # ArUco 码边长滑杆 (跟随 ArUco 分组显隐, 网格下方一整行): 场景含
+        # ArUco 码边长滑杆 (跟随 ArUco 分组显隐, 分组网格上方一整行): 场景含
         # 多种尺寸码时运行中同步节点 marker_length (位姿解算尺度)
         self._marker_box = None
         if set_marker_length is not None:
@@ -289,16 +289,16 @@ class AlgoOutputPanel(QGroupBox):
             self._build_fractal_combo(set_fractal_config)
         # 目标追踪无面板控件: track 分组激活期间画面框选常开 (主窗口
         # 控制), 拖出矩形松开即自动开始追踪, 停止靠工具栏"停止算法"
-        # 底部行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
-        # 装进一个横向容器, 整行横跨全部分组列 (见 _relayout); 可见性跟随
-        # 激活分组 (见 _update_bottom_visibility), 无相关算法运行时整行隐藏
-        bottom = None
+        # 顶部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
+        # 装进一个横向容器, 整行横跨全部分组列, 置于算法分组上方 (见 _relayout);
+        # 可见性跟随激活分组 (见 _update_top_visibility), 无相关算法运行时整行隐藏
+        top = None
         if self._marker_box is not None or self._yaw_box is not None or \
                 self._dict_box is not None or self._face_task_box is not None or \
                 self._face_topk_box is not None or \
                 self._fractal_box is not None:
-            bottom = QWidget()
-            row = QHBoxLayout(bottom)
+            top = QWidget()
+            row = QHBoxLayout(top)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(4)
             if self._marker_box is not None:
@@ -313,8 +313,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._face_topk_box, 1)
             if self._fractal_box is not None:
                 row.addWidget(self._fractal_box, 1)
-        self._bottom_row = bottom
-        self._update_bottom_visibility([])   # 初始无分组, 整行隐藏
+        self._top_row = top
+        self._update_top_visibility([])   # 初始无分组, 整行隐藏
 
     def _build_marker_slider(self, publish):
         """码边长滑杆: 值域/步进取 config; 拖动才发布 (未动过节点用
@@ -479,7 +479,7 @@ class AlgoOutputPanel(QGroupBox):
 
     def set_active(self, keys, landing_kind=None):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
-        底部调节行的可见性同步跟随 (无相关分组时整行隐藏)。
+        顶部调节行的可见性同步跟随 (无相关分组时整行隐藏)。
         landing_kind = 反控降落跟随的检测器类型 ('aruco'|'fractal'|None,
         随运行中的算法; None = 无反控或检测节点已停, 按 aruco 兜底) ——
         landing 分组标题与字典/分形配置二选一靠它区分, 类型变化时重建
@@ -496,10 +496,10 @@ class AlgoOutputPanel(QGroupBox):
         for key in keys:
             if key not in self._sections and key in SECTIONS:
                 self._add(key)
-        self._update_bottom_visibility(keys)
+        self._update_top_visibility(keys)
 
-    def _update_bottom_visibility(self, keys):
-        """底部调节行随激活分组显隐: 字典切换属于 ArUco 检测 / aruco 降落;
+    def _update_top_visibility(self, keys):
+        """顶部调节行随激活分组显隐: 字典切换属于 ArUco 检测 / aruco 降落;
         分形配置属于 fractal 检测 / fractal 降落 —— 两者互斥, 靠
         _landing_kind (反控降落的检测器类型, 见 set_active) 区分 landing
         分组归属, 不同时出现。码边长滑杆对两条链路都有意义 (同一降落坪);
@@ -522,8 +522,8 @@ class AlgoOutputPanel(QGroupBox):
             self._face_topk_box.setVisible(face_on)
         if self._fractal_box is not None:
             self._fractal_box.setVisible(fractal_on)
-        if self._bottom_row is not None:
-            self._bottom_row.setVisible(
+        if self._top_row is not None:
+            self._top_row.setVisible(
                 aruco_on or face_on or fractal_on)
 
     def refresh(self):
@@ -550,13 +550,17 @@ class AlgoOutputPanel(QGroupBox):
         self._relayout()
 
     def _relayout(self):
-        """按当前顺序重排网格: 每列等宽拉伸, 多余列拉伸清零;
-        底部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换并排) 横跨全部分组列,
-        可见性由 _update_bottom_visibility 决定 (隐藏的组件不占布局空间)。"""
+        """按当前顺序重排网格: 顶部调节行 (码边长滑杆 + 降落朝向选择 +
+        字典切换 + 分形配置并排) 在第 0 行横跨全部分组列, 算法分组在其下
+        (第 1 行) —— 可选项在上、算法输出在下; 每列等宽拉伸, 多余列拉伸
+        清零; 可见性由 _update_top_visibility 决定 (隐藏的组件不占布局空间)。
+        跨列数用 len(_order) 而非 _lay.columnCount(): 后者是布局当前状态,
+        首次激活时还没加入分组会取到旧值, 控件行被压进单列把第 0 列
+        (先加入的分组) 撑宽、其余分组变窄。"""
+        span = max(1, len(self._order))
+        if self._top_row is not None:
+            self._lay.addWidget(self._top_row, 0, 0, 1, span)
         for col, key in enumerate(self._order):
-            self._lay.addWidget(self._sections[key], 0, col)
+            self._lay.addWidget(self._sections[key], 1, col)
         for col in range(self._lay.columnCount()):
             self._lay.setColumnStretch(col, 1 if col < len(self._order) else 0)
-        if self._bottom_row is not None:
-            self._lay.addWidget(
-                self._bottom_row, 1, 0, 1, max(1, self._lay.columnCount()))
