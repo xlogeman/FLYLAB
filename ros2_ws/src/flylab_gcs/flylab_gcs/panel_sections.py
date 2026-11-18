@@ -354,7 +354,7 @@ SECTIONS = {
             ('尺寸', lambda item, i:
                 f"{item.get('w', 0):.0f}x{item.get('h', 0):.0f}"),
             ('占比', lambda item, i: f"{item.get('area', 0):.1f}%"),
-            # FaceXFormer 任务结果 (仅最高置信度脸有, 其余列显示 '—')
+            # FaceXFormer 任务结果 (跑过任务的脸各挂自己的, 其余列 '—')
             ('结果', lambda item, i: _face_result_text(item)),
         ],
     },

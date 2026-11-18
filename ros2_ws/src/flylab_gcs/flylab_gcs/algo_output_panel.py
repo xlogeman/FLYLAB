@@ -246,7 +246,8 @@ class AlgoOutputPanel(QGroupBox):
 
     def __init__(self, get_info, set_marker_length=None,
                  set_landing_yaw=None, set_aruco_dict=None,
-                 set_face_task=None, set_fractal_config=None, parent=None):
+                 set_face_task=None, set_face_topk=None,
+                 set_fractal_config=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -277,6 +278,10 @@ class AlgoOutputPanel(QGroupBox):
         self._face_task_box = None
         if set_face_task is not None:
             self._build_face_task_combo(set_face_task)
+        # 人脸任务张数 (跟随 face 分组显隐): 置信度前 N 张 / 全部批量跑任务
+        self._face_topk_box = None
+        if set_face_topk is not None:
+            self._build_face_topk_combo(set_face_topk)
         # 分形配置切换 (跟随 fractal 分组显隐): 运行中同步 fractal_node 的
         # fractal_config (重建检测器, 下一帧检测生效)
         self._fractal_box = None
@@ -290,6 +295,7 @@ class AlgoOutputPanel(QGroupBox):
         bottom = None
         if self._marker_box is not None or self._yaw_box is not None or \
                 self._dict_box is not None or self._face_task_box is not None or \
+                self._face_topk_box is not None or \
                 self._fractal_box is not None:
             bottom = QWidget()
             row = QHBoxLayout(bottom)
@@ -303,6 +309,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._dict_box, 1)
             if self._face_task_box is not None:
                 row.addWidget(self._face_task_box, 1)
+            if self._face_topk_box is not None:
+                row.addWidget(self._face_topk_box, 1)
             if self._fractal_box is not None:
                 row.addWidget(self._fractal_box, 1)
         self._bottom_row = bottom
@@ -398,7 +406,7 @@ class AlgoOutputPanel(QGroupBox):
         过滤: 程序设初值不触发发布。"""
         box = QGroupBox('人脸任务')
         box.setToolTip(
-            'FaceXFormer 对检出人脸 (置信度最高) 跑的下游分析任务,\n'
+            'FaceXFormer 对检出人脸跑的下游分析任务 (张数见"人脸数量"),\n'
             '下拉运行中切换, 下一帧生效:\n'
             '人像分割/68 关键点/头部姿态/人脸属性/年龄性别/点可见性')
         lay = QHBoxLayout(box)
@@ -419,6 +427,34 @@ class AlgoOutputPanel(QGroupBox):
         combo.activated[str].connect(on_activated)
         lay.addWidget(combo, 1)
         self._face_task_box = box
+
+    def _build_face_topk_combo(self, publish):
+        """人脸任务张数切换 (QComboBox): 候选取 config.FACE_TOPKS (键=发给
+        节点的数值字符串 '0'=全部, 值=显示名), 选择即发布 (latched); 未动
+        过不发布, 节点用 facex_topk 参数的值。激活信号过滤: 程序设初值不
+        触发发布。"""
+        box = QGroupBox('人脸数量')
+        box.setToolTip(
+            'FaceXFormer 批量跑任务的人脸张数 (按置信度排序):\n'
+            '前 1/2/3/5 张或全部检出脸; 脸多时拼批一次推理,\n'
+            '下拉运行中切换, 下一帧生效')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        combo = QComboBox()
+        combo.addItems(list(config.FACE_TOPKS.values()))
+        # 初始显示默认值不发 (未选择不发布, 节点用 facex_topk 参数的值)
+        combo.setCurrentText(config.FACE_TOPKS.get(
+            config.FACE_TOPK_DEFAULT,
+            next(iter(config.FACE_TOPKS.values()))))
+        # 用户选择才发布 (含重复选择, 显示名反查数值字符串)
+        name_to_key = {v: k for k, v in config.FACE_TOPKS.items()}
+
+        def on_activated(name):
+            publish(int(name_to_key.get(name, config.FACE_TOPK_DEFAULT)))
+
+        combo.activated[str].connect(on_activated)
+        lay.addWidget(combo, 1)
+        self._face_topk_box = box
 
     def _build_fractal_combo(self, publish):
         """fractal 分形配置切换 (QComboBox): 候选取 config.FRACTAL_CONFIGS
@@ -482,6 +518,8 @@ class AlgoOutputPanel(QGroupBox):
             self._dict_box.setVisible(aruco_on)
         if self._face_task_box is not None:
             self._face_task_box.setVisible(face_on)
+        if self._face_topk_box is not None:
+            self._face_topk_box.setVisible(face_on)
         if self._fractal_box is not None:
             self._fractal_box.setVisible(fractal_on)
         if self._bottom_row is not None:

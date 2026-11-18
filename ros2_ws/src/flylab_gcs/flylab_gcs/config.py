@@ -174,9 +174,10 @@ FRACTAL_CONFIGS = [
 FRACTAL_CONFIG_DEFAULT = 'FRACTAL_5L_6'   # 与 aruco.yaml 默认一致
 
 # ---------- 人脸下游任务切换 (右栏"算法信息"面板下拉框) ----------
-# SCRFD 检出人脸后, FaceXFormer 对置信度最高的一张脸跑选定任务; 下拉切换
-# 经该话题同步 face_detect_node (下一帧生效), 未知任务名节点拒绝并保持
-# 原任务。键 = 发给节点的任务名 (节点 facex_task_id 表), 值 = 界面显示名。
+# SCRFD 检出人脸后, FaceXFormer 对置信度前 N 张脸 (张数经 FACE_TOPK_TOPIC
+# 同步, 0 = 全部) 拼批跑选定任务; 下拉切换经该话题同步 face_detect_node
+# (下一帧生效), 未知任务名节点拒绝并保持原任务。键 = 发给节点的任务名
+# (节点 facex_task_id 表), 值 = 界面显示名。
 # 'none' = 只做人脸检测不跑 FaceXFormer (节点的默认状态)。
 FACE_TASK_TOPIC = '/flylab/face_task'
 FACE_TASKS = {
@@ -189,6 +190,19 @@ FACE_TASKS = {
     'visibility': '点可见性',
 }
 FACE_TASK_DEFAULT = 'none'   # 与 face_detect_node 的 facex_task 默认一致
+
+# 人脸任务张数: FaceXFormer 批量跑置信度前 N 张脸, 0 = 全部检出脸
+# (模型动态 batch, 脸多时拼批摊薄推理开销); 键 = 发给节点的数值字符串,
+# 值 = 显示名。默认 1 与 face_detect_node 的 facex_topk 一致。
+FACE_TOPK_TOPIC = '/flylab/face_topk'
+FACE_TOPKS = {
+    '1': '前 1 张',
+    '2': '前 2 张',
+    '3': '前 3 张',
+    '5': '前 5 张',
+    '0': '全部',
+}
+FACE_TOPK_DEFAULT = '1'
 
 # ---------- 降落航向偏置同步 ----------
 # aruco_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的

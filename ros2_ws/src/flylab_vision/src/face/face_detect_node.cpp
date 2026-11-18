@@ -1,8 +1,9 @@
 // Copyright 2026 flylab
 /// SCRFD 人脸检测 + FaceXFormer 下游任务节点 (接入地面站视觉工具体系,
 /// 启停/收帧/标注通信见 common/display_vision_node.hpp)。
-/// 每帧对置信度最高的人脸裁剪 (外扩 facex_margin%) 送 FaceXFormer 跑当前
-/// 任务 (none = 仅检测不推理); 任务经 /flylab/face_task 热切换, 下一帧生效。
+/// 每帧对置信度前 facex_topk 张脸 (0 = 全部检出脸) 裁剪 (外扩
+/// facex_margin%) 拼批送 FaceXFormer 跑当前任务 (none = 仅检测不推理);
+/// 任务经 /flylab/face_task、张数经 /flylab/face_topk 热切换, 下一帧生效。
 /// 模型默认 models/face/ 下 scrfd_10g_bnkps.onnx + facexformer.onnx
 /// (model / facex_model 参数可覆盖)。
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -133,8 +135,12 @@ public:
     const auto task_name =
       declare_parameter<std::string>("facex_task", "none");
     margin_ = declare_parameter<double>("facex_margin", 50.0);
+    const auto topk = declare_parameter<int>("facex_topk", 1);
+    const auto topk_topic =
+      declare_parameter<std::string>("face_topk_topic", "/flylab/face_topk");
     const auto task_topic =
       declare_parameter<std::string>("face_task_topic", "/flylab/face_task");
+    topk_ = std::max<int64_t>(0, topk);   // 0 = 全部检出脸
 
     // ---------- SCRFD 检测 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     ScrfdConfig cfg;
@@ -190,6 +196,23 @@ public:
         task_id_ = id;
         RCLCPP_INFO(get_logger(), "人脸任务切换: %s", facex_task_name(id));
       });
+    // 张数同步: "1"/"2"/.. = 置信度前 N 张, "0" = 全部; 非法值拒收保持
+    topk_sub_ = create_subscription<std_msgs::msg::String>(
+      topk_topic, 10,
+      [this](const std_msgs::msg::String::SharedPtr msg) {
+        try {
+          const int v = std::stoi(msg->data);
+          if (v < 0) {
+            throw std::invalid_argument("");
+          }
+          topk_ = v;
+          RCLCPP_INFO(get_logger(), "人脸任务张数切换: %s",
+            v == 0 ? "全部" : std::to_string(v).c_str());
+        } catch (const std::exception &) {
+          RCLCPP_WARN(get_logger(), "非法人脸张数 '%s', 保持当前值",
+            msg->data.c_str());
+        }
+      });
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
   }
 
@@ -199,44 +222,61 @@ protected:
     const auto faces = detector_->detect(bgr);
     last_count_ = faces.size();
 
-    // ---------- 图元流: 人脸框/关键点 + 单脸任务输出 ----------
-    std::ostringstream items;
-    face_items_json(items, faces);
+    // ---------- 按置信度降序选取前 topk_ 张脸 (0 = 全部) ----------
+    std::vector<const ScrfdFace *> sorted;
+    sorted.reserve(faces.size());
+    for (const auto & f : faces) {
+      sorted.push_back(&f);
+    }
+    std::sort(sorted.begin(), sorted.end(),
+      [](const ScrfdFace * a, const ScrfdFace * b) {
+        return a->conf > b->conf;
+      });
+    const size_t k = topk_ == 0 ?
+      sorted.size() : std::min<size_t>(topk_, sorted.size());
 
+    // ---------- 批量任务推理: 逐脸外扩 margin% 裁剪 (对齐 facexformer
+    // realtime_app 的 adjust_bbox), 夹回画幅; 裁剪过小 (远脸/角脸) 的脸
+    // 跳过, 其余拼批一次前向 (模型动态 batch, ≤8 自动分块) ----------
     const int task = task_id_;          // 帧内取一次, 切换下一帧生效
-    FaceXResult fx;
-    bool has_fx = false;
-    if (task != FACE_TASK_NONE && !faces.empty()) {
-      // 置信度最高的一张脸
-      const ScrfdFace * best = &faces[0];
-      for (const auto & f : faces) {
-        if (f.conf > best->conf) {
-          best = &f;
+    std::vector<const ScrfdFace *> sel;
+    std::vector<cv::Rect> crop_rects;
+    std::vector<cv::Mat> crops;
+    if (task != FACE_TASK_NONE) {
+      for (size_t i = 0; i < k; ++i) {
+        const cv::Rect2f & b = sorted[i]->box;
+        const float dw = static_cast<float>(b.width * margin_ / 200.0);
+        const float dh = static_cast<float>(b.height * margin_ / 200.0);
+        const float x0 = std::max(0.f, b.x - dw);
+        const float y0 = std::max(0.f, b.y - dh);
+        const float x1 =
+          std::min(static_cast<float>(bgr.cols), b.x + b.width + dw);
+        const float y1 =
+          std::min(static_cast<float>(bgr.rows), b.y + b.height + dh);
+        const cv::Rect crop(
+          static_cast<int>(x0), static_cast<int>(y0),
+          static_cast<int>(x1 - x0), static_cast<int>(y1 - y0));
+        if (crop.width >= 10 && crop.height >= 10) {
+          sel.push_back(sorted[i]);
+          crop_rects.push_back(crop);
+          crops.push_back(bgr(crop));
         }
       }
-      // 外扩 margin% 边距裁剪 (对齐 facexformer realtime_app 的 adjust_bbox),
-      // 夹回画幅; 裁剪过小 (远脸/角脸) 则跳过任务推理
-      const cv::Rect2f & b = best->box;
-      const float dw = static_cast<float>(b.width * margin_ / 200.0);
-      const float dh = static_cast<float>(b.height * margin_ / 200.0);
-      const float x0 = std::max(0.f, b.x - dw);
-      const float y0 = std::max(0.f, b.y - dh);
-      const float x1 =
-        std::min(static_cast<float>(bgr.cols), b.x + b.width + dw);
-      const float y1 =
-        std::min(static_cast<float>(bgr.rows), b.y + b.height + dh);
-      const cv::Rect crop(
-        static_cast<int>(x0), static_cast<int>(y0),
-        static_cast<int>(x1 - x0), static_cast<int>(y1 - y0));
-      if (crop.width >= 10 && crop.height >= 10) {
-        facex_->run(bgr(crop), task, fx);
-        has_fx = true;
-        append_task_items(items, fx, task, best->box, crop);
-      }
+    }
+    std::vector<FaceXResult> results;
+    if (!crops.empty()) {
+      facex_->run_batch(crops, task, results);
     }
 
-    publish_info(faces, static_cast<double>(bgr.cols) * bgr.rows,
-      task, fx, has_fx);
+    // ---------- 图元流: 人脸框/关键点 + 逐脸任务输出 ----------
+    std::ostringstream items;
+    face_items_json(items, faces);
+    for (size_t i = 0; i < sel.size(); ++i) {
+      append_task_items(items, results[i], task, sel[i]->box, crop_rects[i]);
+    }
+
+    publish_info(sorted, static_cast<double>(bgr.cols) * bgr.rows,
+      task, sel, results);
 
     std::ostringstream os;
     os << "{\"algo\":\"" << algo_group() << "\",\"items\":["
@@ -350,48 +390,44 @@ private:
   }
 
   /// 面板数据 {"src":"face", "task":.., "count":N, "items":[...]}: ~30Hz
-  /// 限频; items = 按置信度降序的前 3 张脸, items[0] 额外携带任务结果
-  /// ("result" 文本, attributes 传 "attrs" 开启索引表由面板映射中文)
+  /// 限频; items = 按置信度降序的前 3 张脸, 跑过任务的脸各携带自己的
+  /// "result" 文本 (attributes 传 "attrs" 开启索引表由面板映射中文)
   void publish_info(
-    const std::vector<ScrfdFace> & faces, double frame_area, int task,
-    const FaceXResult & fx, bool has_fx)
+    const std::vector<const ScrfdFace *> & sorted, double frame_area,
+    int task, const std::vector<const ScrfdFace *> & sel,
+    const std::vector<FaceXResult> & results)
   {
     const auto now = std::chrono::steady_clock::now();
     if (now - info_last_ < std::chrono::milliseconds(33)) {
       return;
     }
     info_last_ = now;
-    std::vector<const ScrfdFace *> sorted;
-    sorted.reserve(faces.size());
-    for (const auto & f : faces) {
-      sorted.push_back(&f);
-    }
-    std::sort(sorted.begin(), sorted.end(),
-      [](const ScrfdFace * a, const ScrfdFace * b) {
-        return a->conf > b->conf;
-      });
     const size_t n = std::min<size_t>(sorted.size(), 3);
     std::ostringstream os;
     // count = 全部检出数 (可能 > 3, 不能用 len(items) 代替, 面板汇总行用)
-    os << "{\"src\":\"face\",\"count\":" << faces.size()
+    os << "{\"src\":\"face\",\"count\":" << sorted.size()
        << ",\"task\":\"" << facex_task_name(task) << "\",\"items\":[";
     for (size_t i = 0; i < n; ++i) {
-      const auto & f = *sorted[i];
+      const auto * f = sorted[i];
       float area_pct = 0.f;
       if (frame_area > 0) {
-        area_pct = static_cast<float>(100.0 * f.box.area() / frame_area);
+        area_pct = static_cast<float>(100.0 * f->box.area() / frame_area);
       }
       if (i > 0) {
         os << ',';
       }
-      os << "{\"conf\":" << num(f.conf, 2) << ","
-         << "\"x\":" << num(f.box.x + f.box.width / 2.f, 0) << ","
-         << "\"y\":" << num(f.box.y + f.box.height / 2.f, 0) << ","
-         << "\"w\":" << num(f.box.width, 0) << ","
-         << "\"h\":" << num(f.box.height, 0) << ","
+      os << "{\"conf\":" << num(f->conf, 2) << ","
+         << "\"x\":" << num(f->box.x + f->box.width / 2.f, 0) << ","
+         << "\"y\":" << num(f->box.y + f->box.height / 2.f, 0) << ","
+         << "\"w\":" << num(f->box.width, 0) << ","
+         << "\"h\":" << num(f->box.height, 0) << ","
          << "\"area\":" << num(area_pct, 1);
-      if (i == 0 && has_fx) {
-        os << "," << task_result_json(fx, task);
+      // 该脸跑过任务则挂自己的结果 (topk>1 时多列可各有结果)
+      for (size_t s = 0; s < sel.size(); ++s) {
+        if (sel[s] == f) {
+          os << "," << task_result_json(results[s], task);
+          break;
+        }
       }
       os << "}";
     }
@@ -468,7 +504,9 @@ private:
   std::unique_ptr<FaceXFormer> facex_;
   double margin_ = 50.0;                 // 裁剪外扩边距 (%)
   std::atomic<int> task_id_{FACE_TASK_NONE};
+  std::atomic<int> topk_{1};             // 任务张数 (置信度前 N, 0 = 全部)
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr task_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr topk_sub_;
   size_t last_count_ = 0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;
   std::chrono::steady_clock::time_point info_last_;

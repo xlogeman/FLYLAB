@@ -237,6 +237,15 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 人脸任务张数发布器 (latched 约定见 config.FACE_TOPK_TOPIC):
+        # 后启动的 face_detect_node 一接入即拿到当前张数
+        self.face_topk_pub = self.create_publisher(
+            String, config.FACE_TOPK_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 目标追踪 ROI 发布器 (latched 约定见 config.TRACK_ROI_TOPIC):
         # 界面框选目标后把矩形发给追踪节点 (yolo_track/ortrack), 后启动
         # 的节点一接入即拿到当前框选区域
@@ -500,6 +509,13 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = str(task_id)
         self.face_task_pub.publish(msg)
+
+    def publish_face_topk(self, topk):
+        """发布人脸任务张数 (config.FACE_TOPKS 键: '1'/'2'/.../'0'=全部),
+        供 face_detect_node 运行中切换 FaceXFormer 批量张数 (下一帧生效)。"""
+        msg = String()
+        msg.data = str(topk)
+        self.face_topk_pub.publish(msg)
 
     def publish_track_roi(self, x, y, w, h):
         """发布追踪目标框选区域 (显示帧像素, 与转发帧同一坐标系),

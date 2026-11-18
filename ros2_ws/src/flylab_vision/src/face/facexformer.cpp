@@ -99,7 +99,8 @@ struct FaceXFormer::Impl
   std::string input_name;
   std::vector<std::string> output_names;
   std::vector<const char *> output_name_ptrs;   // Run 用, 构造时与上面同步填好
-  cv::Mat blob;         // NCHW float 输入 (3*224*224 float ~600KB, 帧间复用)
+  cv::Mat blob;         // NCHW float 输入 (批量拼接, 帧间复用)
+  int reg_batch = 1;    // 输入 batch 维: 1 = 静态 (逐张回退), -1 = 动态 (≤8 拼批)
   bool cuda_ok = false;
   std::string cuda_err; // CUDA EP 注册失败原因 (成功则为空)
 };
@@ -139,6 +140,12 @@ FaceXFormer::FaceXFormer(const FaceXConfig & config)
         impl_->session->GetOutputNameAllocated(i, alloc).get());
       impl_->output_name_ptrs.push_back(impl_->output_names.back().c_str());
     }
+    // 输入 batch 维: symbolic (≤0) = 动态拼批, 固定 1 = 静态逐张
+    const auto in_shape = impl_->session->GetInputTypeInfo(0)
+      .GetTensorTypeAndShapeInfo().GetShape();
+    if (in_shape.size() == 4 && in_shape[0] <= 0) {
+      impl_->reg_batch = -1;
+    }
   }
 }
 
@@ -156,120 +163,146 @@ std::string FaceXFormer::cuda_error() const
 
 void FaceXFormer::run(const cv::Mat & face_bgr, int task, FaceXResult & out)
 {
+  std::vector<FaceXResult> results;
+  run_batch(std::vector<cv::Mat>{face_bgr}, task, results);
+  out = results.empty() ? FaceXResult() : results.front();
+}
+
+void FaceXFormer::run_batch(
+  const std::vector<cv::Mat> & faces, int task,
+  std::vector<FaceXResult> & results)
+{
   if (task < FACE_TASK_PARSING || task > FACE_TASK_VISIBILITY) {
-    throw std::invalid_argument("FaceXFormer::run: task 越界");
+    throw std::invalid_argument("FaceXFormer::run_batch: task 越界");
   }
-  if (face_bgr.empty()) {
+  results.assign(faces.size(), FaceXResult{});
+  if (faces.empty()) {
     return;
   }
 
-  // ---------- 预处理: 224 RGB /255 + ImageNet 归一化 -> NCHW blob ----------
-  cv::Mat resized;
-  cv::resize(face_bgr, resized, cv::Size(kInput, kInput), 0, 0, cv::INTER_CUBIC);
-  if (impl_->blob.total() != static_cast<size_t>(3) * kInput * kInput ||
-    impl_->blob.type() != CV_32F)
-  {
-    impl_->blob.create(1, 3 * kInput * kInput, CV_32F);
-  }
   const int plane = kInput * kInput;
-  float * base = impl_->blob.ptr<float>();
-  std::vector<cv::Mat> ch(3);
-  cv::split(resized, ch);   // BGR 三通道
-  for (int c = 0; c < 3; ++c) {
-    cv::Mat cf;
-    ch[c].convertTo(cf, CV_32F, 1.0 / 255.0);
-    // BGR 通道序 -> RGB 平面序 (R=ch[2], G=ch[1], B=ch[0])
-    const int src = 2 - c;
-    cf = (cf - kMean[src]) / kStd[src];
-    std::memcpy(base + static_cast<size_t>(c) * plane,
-      cf.ptr<float>(), sizeof(float) * plane);
-  }
-  const std::array<int64_t, 4> in_shape{1, 3, kInput, kInput};
-  auto in = Ort::Value::CreateTensor<float>(
-    impl_->mem, impl_->blob.ptr<float>(), impl_->blob.total(),
-    in_shape.data(), in_shape.size());
-  const char * in_names[] = {impl_->input_name.c_str()};
-  auto outs = impl_->session->Run(
-    Ort::RunOptions{nullptr}, in_names, &in, 1,
-    impl_->output_name_ptrs.data(), impl_->output_name_ptrs.size());
+  const size_t sample = 3 * static_cast<size_t>(plane);
 
-  // ---------- 按 task 解码 (输出顺序见文件头注释) ----------
-  out = FaceXResult();
-  switch (task) {
-    case FACE_TASK_PARSING: {
-        // [B,11,224,224] 逐像素取 logits 最大通道 (softmax 单调, argmax 等价)
-        const auto shape = outs[7].GetTensorTypeAndShapeInfo().GetShape();
-        const int64_t ncls = shape.size() == 4 ? shape[1] : 11;
-        const float * logits = outs[7].GetTensorData<float>();
-        out.seg_mask.create(kInput, kInput, CV_8UC1);
-        for (int y = 0; y < kInput; ++y) {
-          for (int x = 0; x < kInput; ++x) {
-            const size_t px = static_cast<size_t>(y) * kInput + x;
-            int best = 0;
-            float best_v = -std::numeric_limits<float>::infinity();
-            for (int64_t c = 0; c < ncls; ++c) {
-              const float v = logits[static_cast<size_t>(c) * plane + px];
-              if (v > best_v) {
-                best_v = v;
-                best = static_cast<int>(c);
+  // ---------- 分块批量推理: 动态 batch 模型一次 ≤8 脸 (摊薄算子调度
+  // 开销, 实测 batch=4 时 12ms/脸 vs 单张 30ms), 静态 batch=1 模型自动
+  // 退化为逐张, 行为与旧版一致 ----------
+  constexpr size_t kBatchCap = 8;
+  const size_t batch_max = impl_->reg_batch < 0 ? kBatchCap : 1;
+  cv::Mat resized;
+  std::vector<cv::Mat> ch(3);
+  for (size_t base = 0; base < faces.size(); base += batch_max) {
+    const size_t n = std::min(batch_max, faces.size() - base);
+    if (impl_->blob.total() != n * sample || impl_->blob.type() != CV_32F) {
+      impl_->blob.create(1, static_cast<int>(n * sample), CV_32F);
+    }
+    float * blob_base = impl_->blob.ptr<float>();
+    for (size_t k = 0; k < n; ++k) {
+      // 预处理: 224 RGB /255 + ImageNet 归一化 -> NCHW (样本 k 起点)
+      cv::resize(faces[base + k], resized, cv::Size(kInput, kInput),
+        0, 0, cv::INTER_CUBIC);
+      cv::split(resized, ch);   // BGR 三通道
+      float * dst = blob_base + k * sample;
+      for (int c = 0; c < 3; ++c) {
+        cv::Mat cf;
+        ch[c].convertTo(cf, CV_32F, 1.0 / 255.0);
+        // BGR 通道序 -> RGB 平面序 (R=ch[2], G=ch[1], B=ch[0])
+        const int src = 2 - c;
+        cf = (cf - kMean[src]) / kStd[src];
+        std::memcpy(dst + static_cast<size_t>(c) * plane,
+          cf.ptr<float>(), sizeof(float) * plane);
+      }
+    }
+    const std::array<int64_t, 4> in_shape{
+      static_cast<int64_t>(n), 3, kInput, kInput};
+    auto in = Ort::Value::CreateTensor<float>(
+      impl_->mem, impl_->blob.ptr<float>(), impl_->blob.total(),
+      in_shape.data(), in_shape.size());
+    const char * in_names[] = {impl_->input_name.c_str()};
+    auto outs = impl_->session->Run(
+      Ort::RunOptions{nullptr}, in_names, &in, 1,
+      impl_->output_name_ptrs.data(), impl_->output_name_ptrs.size());
+
+    // ---------- 按 task 解码 (输出顺序见文件头注释, 逐样本偏移) ----------
+    for (size_t k = 0; k < n; ++k) {
+      FaceXResult & out = results[base + k];
+      switch (task) {
+        case FACE_TASK_PARSING: {
+            // [B,11,224,224] 逐像素取 logits 最大通道 (softmax 单调, argmax 等价)
+            const auto shape = outs[7].GetTensorTypeAndShapeInfo().GetShape();
+            const int64_t ncls = shape.size() == 4 ? shape[1] : 11;
+            const float * logits = outs[7].GetTensorData<float>() +
+                                   k * static_cast<size_t>(ncls) * plane;
+            out.seg_mask.create(kInput, kInput, CV_8UC1);
+            for (int y = 0; y < kInput; ++y) {
+              for (int x = 0; x < kInput; ++x) {
+                const size_t px = static_cast<size_t>(y) * kInput + x;
+                int best = 0;
+                float best_v = -std::numeric_limits<float>::infinity();
+                for (int64_t c = 0; c < ncls; ++c) {
+                  const float v = logits[static_cast<size_t>(c) * plane + px];
+                  if (v > best_v) {
+                    best_v = v;
+                    best = static_cast<int>(c);
+                  }
+                }
+                out.seg_mask.at<uchar>(y, x) = static_cast<uchar>(best);
               }
             }
-            out.seg_mask.at<uchar>(y, x) = static_cast<uchar>(best);
+            break;
           }
-        }
-        break;
-      }
-    case FACE_TASK_LANDMARKS: {
-        // [B,136] 归一化坐标交错 x,y ([B,68,2] 展平后同布局)
-        const float * p = outs[0].GetTensorData<float>();
-        const size_t n = std::min<size_t>(tensor_numel(outs[0]), 136);
-        for (size_t i = 0; i < n; ++i) {
-          out.landmark[i / 2][i % 2] = p[i];
-        }
-        break;
-      }
-    case FACE_TASK_HEADPOSE: {
-        const float * p = outs[1].GetTensorData<float>();
-        for (int i = 0; i < 3; ++i) {
-          out.headpose[i] = p[i];
-        }
-        break;
-      }
-    case FACE_TASK_ATTRIBUTES: {
-        const float * p = outs[2].GetTensorData<float>();
-        for (int i = 0; i < 40; ++i) {
-          out.attribute[i] = 1.f / (1.f + std::exp(-p[i])) >= 0.5f;
-        }
-        break;
-      }
-    case FACE_TASK_VISIBILITY: {
-        const float * p = outs[3].GetTensorData<float>();
-        for (int i = 0; i < 29; ++i) {
-          out.visibility[i] = 1.f / (1.f + std::exp(-p[i])) >= 0.5f;
-        }
-        break;
-      }
-    case FACE_TASK_AGE_GENDER_RACE: {
-        // age/gender/race 各自 logits argmax (batch=1, 直接扫第一样本)
-        auto argmax1 = [](const Ort::Value & v) {
-            const float * p = v.GetTensorData<float>();
-            const size_t n = tensor_numel(v) /
-              std::max<size_t>(1, v.GetTensorTypeAndShapeInfo().GetShape()[0]);
-            size_t best = 0;
-            for (size_t i = 1; i < n; ++i) {
-              if (p[i] > p[best]) {
-                best = i;
-              }
+        case FACE_TASK_LANDMARKS: {
+            // [B,136] 归一化坐标交错 x,y ([B,68,2] 展平后同布局)
+            const float * p = outs[0].GetTensorData<float>() + k * 136;
+            for (size_t i = 0; i < 136; ++i) {
+              out.landmark[i / 2][i % 2] = p[i];
             }
-            return static_cast<int>(best);
-          };
-        out.age_bin = argmax1(outs[4]);
-        out.gender = argmax1(outs[5]);
-        out.race = argmax1(outs[6]);
-        break;
+            break;
+          }
+        case FACE_TASK_HEADPOSE: {
+            const float * p = outs[1].GetTensorData<float>() + k * 3;
+            for (int i = 0; i < 3; ++i) {
+              out.headpose[i] = p[i];
+            }
+            break;
+          }
+        case FACE_TASK_ATTRIBUTES: {
+            const float * p = outs[2].GetTensorData<float>() + k * 40;
+            for (int i = 0; i < 40; ++i) {
+              out.attribute[i] = 1.f / (1.f + std::exp(-p[i])) >= 0.5f;
+            }
+            break;
+          }
+        case FACE_TASK_VISIBILITY: {
+            const float * p = outs[3].GetTensorData<float>() + k * 29;
+            for (int i = 0; i < 29; ++i) {
+              out.visibility[i] = 1.f / (1.f + std::exp(-p[i])) >= 0.5f;
+            }
+            break;
+          }
+        case FACE_TASK_AGE_GENDER_RACE: {
+            // age/gender/race 各自 logits argmax ([B,Na] 按样本偏移)
+            auto argmax_at = [&](const Ort::Value & v, size_t b) {
+                const auto sh = v.GetTensorTypeAndShapeInfo().GetShape();
+                const size_t na = tensor_numel(v) /
+                  std::max<size_t>(1, static_cast<size_t>(sh[0]));
+                const float * p = v.GetTensorData<float>() + b * na;
+                size_t best = 0;
+                for (size_t i = 1; i < na; ++i) {
+                  if (p[i] > p[best]) {
+                    best = i;
+                  }
+                }
+                return static_cast<int>(best);
+              };
+            out.age_bin = argmax_at(outs[4], k);
+            out.gender = argmax_at(outs[5], k);
+            out.race = argmax_at(outs[6], k);
+            break;
+          }
+        default:
+          break;
       }
-    default:
-      break;
+    }
   }
 }
 

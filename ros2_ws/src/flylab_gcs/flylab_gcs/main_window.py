@@ -162,6 +162,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self.node.publish_landing_yaw_offset,
             set_aruco_dict=self.node.publish_aruco_dict,
             set_face_task=self.node.publish_face_task,
+            set_face_topk=self.node.publish_face_topk,
             set_fractal_config=self.node.publish_fractal_config)
         self.camera_tab.add_side_widget(self.algo_panel)
 
