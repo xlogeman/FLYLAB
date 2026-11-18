@@ -45,17 +45,22 @@ struct WilorHand
 ///      [box 4 + 左右手分数 2 + 可选关键点 3nk], 行 4:6 为左右手分数)
 ///   2. 逐手裁 192x256 比例 patch (左手镜像成右手, MANO 只建模右手)
 ///      归一化后过 WiLoR, 输出三路:
-///        kpts_2d (1x21x2)   21 关键点, patch 归一化坐标 → 逆仿射回原图
-///        verts   (1x778x3)  MANO 网格顶点 (拓扑在 mano_faces.hpp, 原
+///        kpts_2d (Nx21x2)   21 关键点, patch 归一化坐标 → 逆仿射回原图
+///        verts   (Nx778x3)  MANO 网格顶点 (拓扑在 mano_faces.hpp, 原
 ///                           mano_faces.npy 已烘焙进源码)
-///        pred_cam_t (1x3)   裁块相机平移 [tx, ty, tz]
+///        pred_cam_t (Nx3)   裁块相机平移 [tx, ty, tz]
 ///      顶点加 pred_cam_t 得相机系 3D, 过官方 perspective_projection
 ///      (f' = 5000/256, 光心 0) 得 patch 归一化坐标, 与 kpts_2d 同一
 ///      基准 → 镜像/逆仿射回原图像素
 ///
+/// 批量推理: 模型输入 batch 维为 symbolic 时所有检出手拼批一次回归
+/// (单次 ≤8 手, N 手耗时 ≈ batch1 的 0.6~0.7N); 输入 batch 固定为 1
+/// 的旧模型自动逐手回退, 行为不变。batch 维在构造时按模型元数据判定。
+///
 /// 推理后端为 onnxruntime (thirdparty/onnxruntime/, 同 yolo 系列)。
-/// wilor 模型用 fp16 版 (wilor_fp16.onnx, 权重已内联单文件):
-/// 实测 CUDA 单手 92→26ms, 关键点相对误差 <0.2%。
+/// wilor 模型用 fp16 版 (wilor_fp16_dyn.onnx 动态 batch, 权重已内联
+/// 单文件): 实测 CUDA 单手 ~32ms / batch=4 摊到 ~19ms/手 (旧静态
+/// wilor_fp16.onnx 单手 28ms), 关键点相对误差 <0.2%。
 /// 单实例单线程使用。
 class WilorPipeline
 {
@@ -71,6 +76,8 @@ public:
   bool cuda_active() const;
   /// CUDA EP 注册失败原因 (成功/未启用为空)
   std::string cuda_error() const;
+  /// wilor 回归是否动态 batch (动态模型多手拼批一次推理, 静态模型逐手)
+  bool batch_dynamic() const;
 
 private:
   struct Impl;

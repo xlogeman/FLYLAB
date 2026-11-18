@@ -121,8 +121,9 @@ add_executable(teleop_node src/teleop/teleop_node.cpp)
 target_link_libraries(teleop_node vision_common)
 ament_target_dependencies(teleop_node rclcpp std_msgs px4_msgs geometry_msgs mavros_msgs)
 
-# WiLoR 模型 (models/hand/): 只装 detector.onnx + wilor_fp16.onnx (fp16
-# 权重已内联单文件), 共 ~1.3GB; MANO 网格拓扑 (原 mano_faces.npy) 已烘焙
+# WiLoR 模型 (models/hand/): 只装 detector.onnx + wilor_fp16_dyn.onnx
+# (动态 batch 版, 默认; 旧静态 wilor_fp16.onnx 保留可经参数回退), 共 ~2.5GB;
+# MANO 网格拓扑 (原 mano_faces.npy) 已烘焙
 # 进 include/wilor/mano_faces.hpp, 节点经 ament share 解析,
 # detector_model/wilor_model 参数可覆盖
 install(DIRECTORY models/hand

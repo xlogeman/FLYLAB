@@ -132,6 +132,8 @@ struct WilorPipeline::Impl
   std::string det_in, det_out, wilor_in, wilor_out;
   std::string wilor_out_cam, wilor_out_verts;   // pred_cam_t / verts 输出名
   int det_size = kDetSize;    // 检测器输入边长 (空跑时按模型元数据修正)
+  int reg_batch = 1;          // wilor 输入 batch 维: 1 = 静态 (逐手回退),
+                              // -1 = 动态 (检出手拼批一次回归, 上限 8)
 
   // 每帧复用缓冲 (免重复分配)
   cv::Mat det_canvas;         // letterbox 画布 512x512
@@ -150,8 +152,9 @@ struct WilorPipeline::Impl
 
   // 检测器 letterbox 画布 → NCHW float blob (RGB, /255)
   void make_det_blob(const cv::Mat & canvas, cv::Mat & blob);
-  // wilor patch (BGR) → NCHW float blob (RGB, ImageNet 归一化)
-  void make_wilor_blob(const cv::Mat & patch, cv::Mat & blob);
+  // wilor patch (BGR) → NCHW float (RGB, ImageNet 归一化) 写入 dst
+  // (dst 为 [n,3,256,256] 连续 blob 中第 k 个样本起点, 支持批量拼接)
+  void fill_wilor_blob(const cv::Mat & patch, float * dst);
   // 两次推理封装 (输入/输出名取自构造时缓存, 只取需要的输出)
   Ort::Value run_det(cv::Mat & blob, const std::array<int64_t, 4> & shape);
   // wilor 一次取三路输出: [kpts_2d (1x21x2), pred_cam_t (1x3), verts (1x778x3)]
@@ -180,12 +183,8 @@ void WilorPipeline::Impl::make_det_blob(const cv::Mat & canvas, cv::Mat & blob)
   }
 }
 
-void WilorPipeline::Impl::make_wilor_blob(const cv::Mat & patch, cv::Mat & blob)
+void WilorPipeline::Impl::fill_wilor_blob(const cv::Mat & patch, float * base)
 {
-  if (blob.total() != 3 * kImageSize * kImageSize || blob.type() != CV_32F) {
-    blob.create(1, 3 * kImageSize * kImageSize, CV_32F);
-  }
-  float * base = blob.ptr<float>();
   const int plane = kImageSize * kImageSize;
   for (int y = 0; y < kImageSize; ++y) {
     const uchar * row = patch.ptr<uchar>(y);
@@ -279,6 +278,12 @@ WilorPipeline::WilorPipeline(const WilorConfig & config)
     if (in_shape.size() == 4 && in_shape[2] > 0 && in_shape[3] > 0) {
       impl_->det_size = static_cast<int>(in_shape[3]);
     }
+    // wilor 输入 batch 维: symbolic (≤0) = 动态批量, 固定 1 = 静态逐手
+    const auto win_shape = impl_->wilor_session->GetInputTypeInfo(0)
+      .GetTensorTypeAndShapeInfo().GetShape();
+    if (win_shape.size() == 4 && win_shape[0] <= 0) {
+      impl_->reg_batch = -1;
+    }
   }
 
   // 空跑校验 (模型坏在这里抛, 不拖到首帧)
@@ -304,6 +309,11 @@ bool WilorPipeline::cuda_active() const
 std::string WilorPipeline::cuda_error() const
 {
   return impl_->cuda_err;
+}
+
+bool WilorPipeline::batch_dynamic() const
+{
+  return impl_->reg_batch < 0;
 }
 
 std::vector<WilorHand> WilorPipeline::detect(const cv::Mat & bgr)
@@ -404,10 +414,13 @@ std::vector<WilorHand> WilorPipeline::detect(const cv::Mat & bgr)
     return {};
   }
 
-  // ---------- 第二级: 逐手 MANO 回归 ----------
-  const std::array<int64_t, 4> wilor_shape{1, 3, kImageSize, kImageSize};
-  std::vector<WilorHand> hands;
-  for (const auto & raw : raws) {
+  // ---------- 第二级: 逐手 patch 预处理 + 分批 MANO 回归 ----------
+  struct PatchData { cv::Mat patch; cv::Mat inv; };
+  std::vector<PatchData> patches;
+  patches.reserve(raws.size());
+  std::vector<WilorHand> hands(raws.size());
+  for (size_t i = 0; i < raws.size(); ++i) {
+    const auto & raw = raws[i];
     const float x1 = raw.box.x, y1 = raw.box.y;
     const float x2 = raw.box.x + raw.box.width;
     const float y2 = raw.box.y + raw.box.height;
@@ -438,55 +451,79 @@ std::vector<WilorHand> WilorPipeline::detect(const cv::Mat & bgr)
       cv::flip(impl_->patch, impl_->patch, 1);
     }
     cv::invertAffineTransform(impl_->transform, impl_->transform_inv);
-    impl_->make_wilor_blob(impl_->patch, impl_->patch_blob);
+    patches.push_back({impl_->patch.clone(), impl_->transform_inv.clone()});
+  }
+
+  // 分批回归: 动态 batch 模型一次推理处理 ≤8 手 (摊薄算子调度开销,
+  // 实测 batch=4 时 19ms/手 vs 静态逐手 28ms/手); 静态 batch=1 模型
+  // 自动退化为逐手推理, 行为与旧版完全一致
+  constexpr size_t kBatchCap = 8;   // 单次批量上限 (延迟/显存有界)
+  const size_t batch_max = impl_->reg_batch < 0 ? kBatchCap : 1;
+  const size_t plane = 3 * kImageSize * kImageSize;
+  for (size_t base = 0; base < raws.size(); base += batch_max) {
+    const size_t n = std::min(batch_max, raws.size() - base);
+    if (impl_->patch_blob.total() != n * plane ||
+        impl_->patch_blob.type() != CV_32F) {
+      impl_->patch_blob.create(1, static_cast<int>(n * plane), CV_32F);
+    }
+    float * blob_base = impl_->patch_blob.ptr<float>();
+    for (size_t k = 0; k < n; ++k) {
+      impl_->fill_wilor_blob(patches[base + k].patch, blob_base + k * plane);
+    }
+    const std::array<int64_t, 4> wilor_shape{
+      static_cast<int64_t>(n), 3, kImageSize, kImageSize};
     auto outs = impl_->run_wilor(impl_->patch_blob, wilor_shape);
 
-    // kpts_2d (1x21x2) 是 (patch 像素 - 128)/256 的归一化坐标 (与 3D 关键
-    // 点投影基准对齐, 平均偏差 <1px) → 还原 patch 像素 → (左手先镜像回
-    // x = 255-x) → 逆仿射 → 原图
-    const float * kp = outs[0].GetTensorData<float>();
-    WilorHand hand;
-    hand.box = raw.box;
-    hand.is_right = raw.is_right;
-    hand.conf = raw.conf;
-    hand.kpts2d.resize(21);
-    const float * inv = impl_->transform_inv.ptr<float>(0);
-    for (int j = 0; j < 21; ++j) {
-      float px = kp[2 * j] * kImageSize + kImageSize / 2.f;
-      float py = kp[2 * j + 1] * kImageSize + kImageSize / 2.f;
-      if (!raw.is_right) {
-        px = static_cast<float>(kImageSize - 1) - px;
-      }
-      const float u = inv[0] * px + inv[1] * py + inv[2];
-      const float v = inv[3] * px + inv[4] * py + inv[5];
-      hand.kpts2d[j] = {u, v};
-    }
+    for (size_t k = 0; k < n; ++k) {
+      WilorHand & hand = hands[base + k];
+      const auto & raw = raws[base + k];
+      const float * inv = patches[base + k].inv.ptr<float>(0);
+      const float * kp = outs[0].GetTensorData<float>() + k * 21 * 2;
+      const float * cam = outs[1].GetTensorData<float>() + k * 3;
+      const float * vt = outs[2].GetTensorData<float>() +
+                         k * kManoVertCount * 3;
 
-    // MANO 网格: verts (1x778x3, 裁块空间) + pred_cam_t → 相机系 3D (米),
-    // 官方 perspective_projection (f' = 5000/256, 光心 0) → patch 归一化
-    // 坐标 → patch 像素 → (左手镜像) → 逆仿射 → 原图像素。深度 Z 仅用于
-    // 着色/遮挡, 单位米
-    const float * cam = outs[1].GetTensorData<float>();   // [tx, ty, tz]
-    const float * vt = outs[2].GetTensorData<float>();    // 778x3
-    hand.verts3d.resize(kManoVertCount);
-    hand.verts2d.resize(kManoVertCount);
-    for (int j = 0; j < kManoVertCount; ++j) {
-      const float X = vt[3 * j] + cam[0];
-      const float Y = vt[3 * j + 1] + cam[1];
-      const float Z = std::max(vt[3 * j + 2] + cam[2], 1e-4f);
-      float px = kFocalNorm * X / Z * kImageSize + kImageSize / 2.f;
-      const float py = kFocalNorm * Y / Z * kImageSize + kImageSize / 2.f;
-      float Xc = X;
-      if (!raw.is_right) {
-        px = static_cast<float>(kImageSize - 1) - px;
-        Xc = -X;   // patch 镜像后 3D 相机系同样沿 x 翻转
+      // kpts_2d 是 (patch 像素 - 128)/256 的归一化坐标 (与 3D 关键点投
+      // 影基准对齐) → 还原 patch 像素 → (左手先镜像回 x = 255-x) →
+      // 逆仿射 → 原图
+      hand.box = raw.box;
+      hand.is_right = raw.is_right;
+      hand.conf = raw.conf;
+      hand.kpts2d.resize(21);
+      for (int j = 0; j < 21; ++j) {
+        float px = kp[2 * j] * kImageSize + kImageSize / 2.f;
+        float py = kp[2 * j + 1] * kImageSize + kImageSize / 2.f;
+        if (!raw.is_right) {
+          px = static_cast<float>(kImageSize - 1) - px;
+        }
+        const float u = inv[0] * px + inv[1] * py + inv[2];
+        const float v = inv[3] * px + inv[4] * py + inv[5];
+        hand.kpts2d[j] = {u, v};
       }
-      hand.verts3d[j] = {Xc, Y, Z};
-      hand.verts2d[j] = {
-        inv[0] * px + inv[1] * py + inv[2],
-        inv[3] * px + inv[4] * py + inv[5]};
+
+      // MANO 网格: verts (778x3, 裁块空间) + pred_cam_t → 相机系 3D (米),
+      // 官方 perspective_projection (f' = 5000/256, 光心 0) → patch 归一
+      // 化坐标 → patch 像素 → (左手镜像) → 逆仿射 → 原图像素。深度 Z 仅
+      // 用于着色/遮挡, 单位米
+      hand.verts3d.resize(kManoVertCount);
+      hand.verts2d.resize(kManoVertCount);
+      for (int j = 0; j < kManoVertCount; ++j) {
+        const float X = vt[3 * j] + cam[0];
+        const float Y = vt[3 * j + 1] + cam[1];
+        const float Z = std::max(vt[3 * j + 2] + cam[2], 1e-4f);
+        float px = kFocalNorm * X / Z * kImageSize + kImageSize / 2.f;
+        const float py = kFocalNorm * Y / Z * kImageSize + kImageSize / 2.f;
+        float Xc = X;
+        if (!raw.is_right) {
+          px = static_cast<float>(kImageSize - 1) - px;
+          Xc = -X;   // patch 镜像后 3D 相机系同样沿 x 翻转
+        }
+        hand.verts3d[j] = {Xc, Y, Z};
+        hand.verts2d[j] = {
+          inv[0] * px + inv[1] * py + inv[2],
+          inv[3] * px + inv[4] * py + inv[5]};
+      }
     }
-    hands.push_back(std::move(hand));
   }
   return hands;
 }

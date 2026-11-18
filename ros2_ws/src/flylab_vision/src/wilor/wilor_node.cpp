@@ -11,8 +11,9 @@
 ///      /flylab/aruco_info (10Hz 限频, 前 2 只手: 左右手/置信度/位置/尺寸)
 ///
 /// 模型默认取 share/flylab_vision/models/hand/ 下 detector.onnx +
-/// wilor_fp16.onnx (CMakeLists 安装; fp16 单手 26ms, fp32 92ms),
-/// 可用 detector_model / wilor_model 参数覆盖。
+/// wilor_fp16_dyn.onnx (CMakeLists 安装; 动态 batch, 多手拼批一次回归:
+/// 单手 ~32ms, batch=4 摊到 ~19ms/手, 旧静态 wilor_fp16.onnx 单手 28ms),
+/// 可用 detector_model / wilor_model 参数覆盖 (喂回旧静态模型自动逐手)。
 ///
 /// 运行:
 ///   ros2 run flylab_vision wilor_node --ros-args -p device:=cuda
@@ -39,7 +40,7 @@ public:
     const auto detector_model = declare_parameter<std::string>(
       "detector_model", default_model_path("hand", "detector.onnx"));
     const auto wilor_model = declare_parameter<std::string>(
-      "wilor_model", default_model_path("hand", "wilor_fp16.onnx"));
+      "wilor_model", default_model_path("hand", "wilor_fp16_dyn.onnx"));
     const auto conf = declare_parameter<double>("conf", 0.3);
     const auto iou = declare_parameter<double>("iou", 0.45);
     const auto det_stride = declare_parameter<int>("det_stride", 1);
@@ -58,9 +59,10 @@ public:
     pipeline_ = std::make_unique<WilorPipeline>(cfg);
     RCLCPP_INFO(
       get_logger(),
-      "模型加载完成: detector %s, wilor %s [%s, conf %.2f]",
+      "模型加载完成: detector %s, wilor %s [%s, conf %.2f, %s]",
       detector_model.c_str(), wilor_model.c_str(),
-      pipeline_->cuda_active() ? "cuda" : "cpu", cfg.conf_thres);
+      pipeline_->cuda_active() ? "cuda" : "cpu", cfg.conf_thres,
+      pipeline_->batch_dynamic() ? "动态batch" : "静态逐手");
     if (cfg.use_cuda && !pipeline_->cuda_active()) {
       RCLCPP_WARN(
         get_logger(), "CUDA EP 注册失败, 已回退 CPU: %s",
