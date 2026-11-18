@@ -136,6 +136,14 @@ class Grabber(threading.Thread):
         """跳转到相对位置 (0..1)，暂停中也可用。"""
         self.reader.seek = max(0.0, min(1.0, frac))
 
+    @property
+    def file_speed(self):
+        return self.reader.speed
+
+    def set_file_speed(self, speed):
+        """设置播放倍速 (抓取线程按 原始帧间隔/倍速 重排帧节拍)。"""
+        self.reader.speed = max(0.1, speed)
+
     def get_progress(self):
         """(当前帧, 总帧数, 是否暂停, 文件fps)；非文件源返回 None。"""
         with self.lock:

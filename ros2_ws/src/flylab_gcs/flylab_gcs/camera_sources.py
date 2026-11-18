@@ -73,11 +73,13 @@ class LocalFileReader:
         self.log = log
         self.cap = None          # VideoCapture (打开一次, 换源/异常时重开)
         self.dev = None          # 当前打开的设备路径或文件路径
-        self.interval = 1.0 / 30   # 视频文件帧间隔 (打开时按文件 fps 更新)
+        self.base_interval = 1.0 / 30   # 视频文件原始帧间隔 (打开时按文件 fps 更新)
+        self.interval = self.base_interval  # 实际帧间隔 = 原始间隔/倍速 (每帧重算)
         # 播放控制 (标志位由界面线程设置, 抓取线程处理)
         self.paused = False
         self.stop_flag = False
         self.seek = None         # 0..1, 待跳转的相对位置
+        self.speed = 1.0         # 播放倍速
         self.pos, self.total = 0.0, 0.0
         self.fps = 30.0
 
@@ -125,6 +127,7 @@ class LocalFileReader:
             self.log('未安装 OpenCV，无法播放视频文件')
             time.sleep(5.0)
             return None
+        self.interval = self.base_interval / self.speed   # 倍速改变即时生效
         if self.dev != path:
             self.close()
             cap = cv2.VideoCapture(path)
@@ -133,7 +136,8 @@ class LocalFileReader:
                 time.sleep(1.0)
                 return None
             fps = cap.get(cv2.CAP_PROP_FPS)
-            self.interval = 1.0 / fps if fps > 1e-3 else 1.0 / 30
+            self.base_interval = 1.0 / fps if fps > 1e-3 else 1.0 / 30
+            self.interval = self.base_interval / self.speed
             self.fps = fps if fps > 1e-3 else 30.0
             self.total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             dur = self.total / self.fps

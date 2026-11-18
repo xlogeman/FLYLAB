@@ -37,6 +37,7 @@ from .video_label import VideoLabel
 
 FILE_OPEN_ITEM = '打开视频文件...'
 VIDEO_FILTER = '视频 (*.mp4 *.avi *.mkv *.mov *.webm);;所有文件 (*)'
+FILE_SPEEDS = (0.5, 1.0, 2.0, 4.0)   # 播放倍速循环档位
 
 
 class CameraViewWidget(QWidget):
@@ -76,8 +77,8 @@ class CameraViewWidget(QWidget):
         self.status.setStyleSheet('color: #666; padding: 2px;')
         self.status.setWordWrap(True)
 
-        # 视频文件播放控制条: 横排在画面下方 (播放/暂停 | 停止 | 进度条 | 时长)。
-        # 非文件源自动置灰。
+        # 视频文件播放控制条: 横排在画面下方 (播放/暂停 | 停止 | 进度条 |
+        # 倍速 | 时长)。非文件源自动置灰。
         self._scrub = False      # 用户正在拖动进度条时, 定时器不回写进度
         self.btn_play = QPushButton('暂停')
         self.btn_play.setFixedWidth(56)
@@ -93,6 +94,12 @@ class CameraViewWidget(QWidget):
         self.slider.sliderMoved.connect(
             lambda v: self.grabber.set_file_position(v / 1000))
         self.slider.sliderReleased.connect(self._on_slider_released)
+        self.btn_speed = QPushButton(f'{self.grabber.file_speed:g}x')
+        self.btn_speed.setFixedWidth(44)
+        self.btn_speed.setToolTip(
+            '播放倍速: 点击切换 ' + '/'.join(
+                f'{s:g}' for s in FILE_SPEEDS))
+        self.btn_speed.clicked.connect(self._on_speed_clicked)
         self.time_label = QLabel('00:00 / 00:00')
         self.time_label.setStyleSheet(
             'color: #444; font-family: monospace;')
@@ -104,6 +111,7 @@ class CameraViewWidget(QWidget):
         ctrl_layout.addWidget(self.btn_play)
         ctrl_layout.addWidget(self.btn_stop)
         ctrl_layout.addWidget(self.slider, stretch=1)
+        ctrl_layout.addWidget(self.btn_speed)
         ctrl_layout.addWidget(self.time_label)
         self.file_ctrl.setEnabled(False)
         self._build_gimbal(in_group=side_panel)
@@ -464,6 +472,17 @@ class CameraViewWidget(QWidget):
         paused = not self.grabber.file_paused
         self.grabber.set_file_paused(paused)
         self.btn_play.setText('播放' if paused else '暂停')
+
+    def _on_speed_clicked(self):
+        """倍速按钮: 在 FILE_SPEEDS 档位间循环 (当前档的下一位)。"""
+        speeds = FILE_SPEEDS
+        try:
+            idx = speeds.index(self.grabber.file_speed)
+        except ValueError:
+            idx = speeds.index(1.0)
+        speed = speeds[(idx + 1) % len(speeds)]
+        self.grabber.set_file_speed(speed)
+        self.btn_speed.setText(f'{speed:g}x')
 
     def keyPressEvent(self, ev):          # 空格 = 播放/暂停 (仅文件源)
         if ev.key() == Qt.Key_Space and self.file_ctrl.isEnabled():
