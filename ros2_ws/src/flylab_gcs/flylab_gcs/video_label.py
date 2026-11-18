@@ -35,6 +35,9 @@ class VideoLabel(QLabel):
         self.setMouseTracking(True)
 
         self._pixmap = None       # 最新一帧的原始 QPixmap
+        self._scaled = None       # _pixmap 按 widget 尺寸缩放后的缓存 (见 _redraw)
+        self._scaled_src = None   # 缓存对应的源 QPixmap (身份比较, 新帧才失效)
+        self._scaled_size = None  # 缓存对应的 widget 尺寸 (窗口拖动时失效)
         self._img_size = (0, 0)
         self._select_enabled = False
         self._frozen = False      # 框选期间冻结画面
@@ -200,10 +203,19 @@ class VideoLabel(QLabel):
     def _redraw(self):
         if self._pixmap is None:
             return
+        # 缩放缓存: SmoothTransformation 全幅缩放开销大, 而一拍内标注/HUD/
+        # 新帧各触发一次 _redraw, 若每次都重缩放, 30fps 下每秒 ~90 次全幅
+        # 平滑缩放会占满 GUI 线程 (点击关菜单等事件被排队, 界面手感滞留)。
+        # 仅新帧或窗口尺寸变化时重缩放, 其余调用复用缓存, 绘制画在副本上。
+        if (self._scaled is None or self._scaled_src is not self._pixmap
+                or self._scaled_size != self.size()):
+            self._scaled = self._pixmap.scaled(
+                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._scaled_src = self._pixmap
+            self._scaled_size = self.size()
         # 先缩放, 之后所有绘制都在缩放后 pixmap 的坐标系里进行:
         # pixmap 会按 AlignCenter 居中显示, 尺寸 = 原图 * scale (KeepAspectRatio)
-        scaled = self._pixmap.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = self._scaled.copy()   # 缓存不可直接画: setPixmap 后重复叠加
         painter = QPainter(scaled)
         if self._sel_start is not None and self._sel_cur is not None:
             # 选择框: widget 坐标 -> pixmap 坐标 (减去居中黑边偏移)

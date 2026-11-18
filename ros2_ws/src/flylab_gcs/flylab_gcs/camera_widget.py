@@ -447,19 +447,35 @@ class CameraViewWidget(QWidget):
         threading.Thread(target=scan, daemon=True).start()
 
     def _on_src_action(self, act):
-        """菜单点击: 切到所选源; "打开视频文件..." 先弹对话框登记再切。"""
-        text = act.text()
-        if text == FILE_OPEN_ITEM:
-            path, _ = QFileDialog.getOpenFileName(
-                self, '选择视频文件', os.path.expanduser('~'), VIDEO_FILTER)
-            if not path:
-                return
-            self._file_map[f'{FILE_PREFIX}{os.path.basename(path)}'] = path
-            raw = f'{FILE_PREFIX}{path}'
-        else:
-            raw = act.data()
-            if raw is None:
-                return
+        """菜单点击: 切到所选源; "打开视频文件..." 延迟弹对话框
+        (见 _open_video_file)。"""
+        if act.text() == FILE_OPEN_ITEM:
+            # 不能在 triggered 槽里同步弹模态对话框: 弹窗菜单尚未完成
+            # 销毁、仍持有鼠标/键盘 grab, X11/WSLg 下 grab 释放与对话框
+            # show 竞争, 对话框会被闪没。也不能用 aboutToHide + 待办标志:
+            # Qt5 实测 aboutToHide 先于 triggered 发出 (最小复现实证),
+            # 首次点击时标志尚未置位, 对话框会漏到下次菜单关闭才弹
+            # (表现为"第一次点不开, 之后莫名弹出")。故直接从 triggered
+            # 延迟 100ms 弹出, 避开 grab 释放窗口期。
+            QTimer.singleShot(100, self._open_video_file)
+            return
+        raw = act.data()
+        if raw is None:
+            return
+        self._switch_source(raw)
+        self.src_btn.setText(f'视频源: {self._src_display(raw)}')
+
+    def _open_video_file(self):
+        """弹文件对话框登记视频文件源并切换 (原 _on_src_action 内联逻辑)。
+        强制 Qt 自绘对话框: WSL/XWayland + 软件渲染下原生 GTK 对话框会
+        闪烁/随焦点丢失消失, 非原生版无此问题 (外观与界面主题一致)。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, '选择视频文件', os.path.expanduser('~'), VIDEO_FILTER,
+            options=QFileDialog.DontUseNativeDialog)
+        if not path:
+            return
+        self._file_map[f'{FILE_PREFIX}{os.path.basename(path)}'] = path
+        raw = f'{FILE_PREFIX}{path}'
         self._switch_source(raw)
         self.src_btn.setText(f'视频源: {self._src_display(raw)}')
 
