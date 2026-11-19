@@ -89,7 +89,7 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 #    MPC_THR_HOVER 恢复实测换算值 0.28 ((0.416-0.2)/0.8 ≈ 0.27, 与实测互证)
 # ==================================
 param set MPC_USE_HTE 0
-param set MPC_THR_HOVER 0.28
+param set MPC_THR_HOVER 0.275
 param set MPC_THR_MIN 0.05
 param set MPC_THR_MAX 0.95
 

@@ -32,7 +32,8 @@ import traceback
 
 import rclpy
 from PyQt5.QtCore import QTimer, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QMainWindow, QToolBar, QWidget
+from PyQt5.QtWidgets import (QHBoxLayout, QMainWindow, QToolBar, QToolButton,
+                             QWidget)
 
 from . import config
 from .algo_output_panel import AlgoOutputPanel
@@ -50,6 +51,7 @@ from .panels.teleop_panel import TeleopPanelMixin
 from .panels.vehicle_panel import VehiclePanelMixin
 from .processes import ManagedProcess
 from .telemetry_bar import TelemetryBar
+from .ulg_window import UlgAnalyzerWindow
 from .vehicle_control import VehicleController
 
 
@@ -127,6 +129,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)
         self._fov_pub_last = None
         self._fov_pub_t = 0.0   # 上次发布时刻 (周期重发, 兜底 latched 漏收)
+        # ULG 日志分析窗口 (独立非模态, 见 ulg_window.py; 首次点开创建)
+        self.ulg_win = None
 
         # 顶部工具栏 (VS Code 风格): 工具按钮横排, 后续新功能往右加
         self.toolbar = QToolBar()
@@ -140,6 +144,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.toolbar.addWidget(self._build_algo_button())
         self.toolbar.addWidget(self._build_flight_button())
         self.toolbar.addWidget(self._build_takeover_button())
+        self.toolbar.addWidget(self._build_ulg_button())
         self.addToolBar(self.toolbar)
 
         # 右栏布局 (自上而下): 航线地图 + 罗盘并排一行 → 云台 (视场角
@@ -305,6 +310,26 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._fov_pub_last = fov
             self._fov_pub_t = now_mono
             self.node.publish_camera_fov(fov)
+
+    # ---------- ULG 日志分析 (独立窗口, 见 ulg_window.py / config.ULG_LOG_ROOT) ----------
+
+    def _build_ulg_button(self):
+        """日志分析工具按钮: 点击打开/置前分析窗口 (常驻, 重复点击只置前)。"""
+        self.ulg_btn = QToolButton()
+        self.ulg_btn.setText('日志分析')
+        self.ulg_btn.setStyleSheet(self._TOOL_BTN_STYLE)
+        self.ulg_btn.setToolTip(
+            '打开 ULG 飞行日志分析窗口 (自动扫描 PX4 SITL 日志目录; '
+            '预置悬停振荡 FFT 诊断/高度/姿态/油门模板, 话题字段勾选出图)')
+        self.ulg_btn.clicked.connect(self._open_ulg_window)
+        return self.ulg_btn
+
+    def _open_ulg_window(self):
+        if self.ulg_win is None:
+            self.ulg_win = UlgAnalyzerWindow(self)
+        self.ulg_win.show()
+        self.ulg_win.raise_()
+        self.ulg_win.activateWindow()
 
     # ---------- 目标追踪 (画面框选即追踪, 话题见 config.TRACK_*) ----------
 

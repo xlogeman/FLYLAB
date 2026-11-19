@@ -11,7 +11,7 @@ ARUCO_PARAMS_FILE = os.path.join(VISION_CONFIG_DIR, 'aruco.yaml')
 
 # ---------- 地面站窗口大小 ----------
 # 初始窗口大小 = 屏幕可用区域 × 比例（仅初始值，窗口可拖拽调整）
-WINDOW_SIZE_RATIO = (0.63, 0.72)   # (宽, 高)
+WINDOW_SIZE_RATIO = (0.63, 0.75)   # (宽, 高)
 
 # ---------- AirSim RPC (相机视图) ----------
 AIRSIM_RPC_PORT = 41451   # 与 settings.json 的 ApiServerPort 一致
@@ -233,6 +233,11 @@ PX4_MODELS = [
     {'name': '70005_fucker_coax_x300',  'target': 'none_fucker_coax_x300'},
     {'name': '70006_fucker_x450',       'target': 'none_fucker_x450'},
 ]
+
+# ---------- ULG 飞行日志分析 (工具栏"日志分析"独立窗口, 见 ulg_window.py) ----------
+# PX4 SITL 日志根目录 (root/日期/时刻.ulg), run-px4.sh 默认 build rootfs 下;
+# 实机 SD 卡日志用窗口内"打开文件..."手动选
+ULG_LOG_ROOT = '/root/flylab/px4.1.15.2/build/px4_sitl_default/rootfs/log'
 
 # ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
 # 界面发归一化遥控量 (-1..1, Twist): linear.x=前后 linear.y=左右
