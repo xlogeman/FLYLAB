@@ -87,10 +87,16 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 #    (z 峰峰 5.2m, 推力指令在 0.21~0.40 间摆动)。定版 0.28, 实测值勿再用理论
 #    BEIMING 调参 2026-11-17(四): 直通方案已回退, 保持原版 0.8u+0.2 映射,
 #    MPC_THR_HOVER 恢复实测换算值 0.28 ((0.416-0.2)/0.8 ≈ 0.27, 与实测互证)
+#    BEIMING 调参 2026-11-19(二) 对标 X100 定案配方 (ulog 10_22_24.ulg 分析):
+#    悬停电机 0.2750 与 THR_HOVER 精确互证, 推力域正确; 横移期间 vz +0.15 m/s
+#    持续下沉 (NED, vzsp=0) —— 与 X100 同根因: 映射压缩 r=0.8/(0.8+0.2/0.275)≈0.524
+#    使 Z 环有效带宽仅 1.0/0.073, 倾转 20° 推力缺口 2% 靠极慢积分补, 全程下沉。
+#    ① MPC_USE_HTE 0→1 (X100 第一功臣, 在线收敛吸收推力域残差, 理论收敛点 ≈0.275)
+#    ② MPC_THR_MIN 0.05→0.12 (快速下降推力余量)
 # ==================================
-param set MPC_USE_HTE 0
+param set MPC_USE_HTE 1
 param set MPC_THR_HOVER 0.275
-param set MPC_THR_MIN 0.05
+param set MPC_THR_MIN 0.12
 param set MPC_THR_MAX 0.95
 
 # 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.44rad≈25.2°), 留 ~1° 裕量
@@ -141,11 +147,18 @@ param set MPC_XY_TRAJ_P 0.3
 #    (XY 环走倾转通道, 与映射无关, 不动)
 #    调参方向: vz 高频抖动 -> P 降 30%; 仍缓慢呼吸 -> P 升至 2.5
 # ==================================
-param set MPC_XY_VEL_P_ACC 1.2
-param set MPC_XY_VEL_I_ACC 0.1
+#    BEIMING 调参 2026-11-19(二): 对标 X100 定案有效带宽 (P_eff=6.0×0.375=2.25,
+#    I_eff=1.6×0.375=0.60, D_eff=0.11) 按 X300 失配比 1/r=1/0.524 换算 → 目标
+#    P 4.3 / I 1.15 / D 0.21。本轮先到 P 3.5 / I 1.0 (等效 P_eff 1.83 / I_eff 0.52,
+#    约为 X100 终值的 80%), D 与目标一致保持 0.21; 无呼吸再向 4.3/1.15 逼近。
+#    验收 (对照 X100 定案): 横移期间 |vz| ≤ 0.05, 打杆 3s 瞬态掉高 ≤ 0.1m
+#    (ulog 10_22_24.ulg 实测: 悬停电机 0.2750 与 THR_HOVER 互证, 推力域正确;
+#     横移 vz +0.15 m/s 持续下沉 = X100 同根因, 本段为修复)
+param set MPC_XY_VEL_P_ACC 1.8
+param set MPC_XY_VEL_I_ACC 0.4
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 1.9
-param set MPC_Z_VEL_I_ACC 0.14
+param set MPC_Z_VEL_P_ACC 3.5
+param set MPC_Z_VEL_I_ACC 1.0
 param set MPC_Z_VEL_D_ACC 0.21
 
 
@@ -159,30 +172,35 @@ param set MPC_Z_VEL_D_ACC 0.21
 #    YAW 权限比 ≈0.6, YAWRATE 0.05/0.6 ≈ 0.08, 取 0.07
 #    调参方向: 速率环仍迟钝(设定与实际差>10°) -> P 0.02; 乒乓振荡 -> 0.010
 # ==================================
-param set MC_ROLL_P 4.0
-param set MC_PITCH_P 4.0
-param set MC_YAW_P 1.0
-param set MC_ROLLRATE_MAX 120.0
-param set MC_PITCHRATE_MAX 120.0
-param set MC_YAWRATE_MAX 60.0
+param set MC_ROLL_P 4.8
+param set MC_PITCH_P 5.0
+param set MC_YAW_P 1.5
+param set MC_ROLLRATE_MAX 200.0
+param set MC_PITCHRATE_MAX 200.0
+param set MC_YAWRATE_MAX 100.0
 
-param set MC_ROLLRATE_FF 0.0
-param set MC_ROLLRATE_K 1.0
 # BEIMING 调参 2026-11-17(六) ulog (11_52_12.ulg): Z 环修好后暴露滚转通道
 # 0.22Hz 极限环 (roll 峰峰 36.7°, rollrate 跟随误差 std 7°/s vs sp 8.5°/s,
 # 舵机指令与 roll 相关≈0/滞后 900ms —— 速率环带宽不足, 按本节原定调参方向
 # "迟钝 -> P 0.02" 上调; pitch 实测安静 (std 0.13°) 保持 0.015
 # 调参方向: roll ±1 乒乓 -> P 回 0.015; 仍迟钝(误差>10°/s) -> P 0.025
-param set MC_ROLLRATE_P 0.02
-param set MC_ROLLRATE_I 0.025
-param set MC_ROLLRATE_D 0.0
-param set MC_PITCHRATE_FF 0.0
+# BEIMING 调参 2026-11-19(二) 对标 X100 定案 (TiltFilterTc 0.05→0.01 后
+# 倾转通道带宽天花板 3.2Hz→16Hz, 速率环增益不再被滤波卡死):
+# P 0.025 / I 0.1 / FF 0.01 / D 0.002 (与 X100 定案同值; X300 权限归一化后
+# 单位一致, 历史极限环是 0.05 滤波所致, 滤波修复后此增益有裕量)
+# 调参方向: 高频抖 -> FF 先回 0, 仍抖 P 降 30%; 迟钝 -> P 升 0.04
+param set MC_ROLLRATE_FF 0.01
+param set MC_ROLLRATE_K 1.0
+param set MC_ROLLRATE_P 0.025
+param set MC_ROLLRATE_I 0.1
+param set MC_ROLLRATE_D 0.002
+param set MC_PITCHRATE_FF 0.01
 param set MC_PITCHRATE_K 1.0
-param set MC_PITCHRATE_P 0.015
-param set MC_PITCHRATE_I 0.025
-param set MC_PITCHRATE_D 0.0
-param set MC_YAWRATE_FF 0.0
+param set MC_PITCHRATE_P 0.025
+param set MC_PITCHRATE_I 0.1
+param set MC_PITCHRATE_D 0.002
+param set MC_YAWRATE_FF 0.01
 param set MC_YAWRATE_K 1.0
 param set MC_YAWRATE_P 0.07
-param set MC_YAWRATE_I 0.07
+param set MC_YAWRATE_I 0.12
 param set MC_YAWRATE_D 0.00

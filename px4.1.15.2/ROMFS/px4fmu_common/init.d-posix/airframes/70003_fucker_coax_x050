@@ -90,15 +90,23 @@ param set-default PWM_MAIN_FUNC4 202            # Servo 2 (pitch 倾转)
 #    悬停段均值应 ≈ 0.15 且 |vz| 收敛
 #    BEIMING 调参 2026-11-17(四): 曾尝试 normalizeRotorControls 直通 (MPC_THR_HOVER=0.32),
 #    已回退保持原版映射 —— 以后配置机型务必记得 0.2 偏置/0.8 系数换算
+#    BEIMING 调参 2026-11-19(一) 实机对齐 (log_57/58_2026-10-21, CubeOrange 定制 v1.14
+#    fork 实飞 ulog 分析): 实机增强算法全关 (MC_RATE_ESO_EN=0 / MC_SPE_ATT_CTL=0),
+#    飞行效果 = HTE 开启 + 强积分器 + 正常档外环, 全部是参数层差异, 分项对齐:
+#    ① MPC_USE_HTE 0→1: 实机悬停推力在线收敛 (~0.39), 推力模型误差全被吸收, Z 稳第一功臣;
+#       仿真端 HTE 预期收敛 u≈0.15 (使 0.8u+0.2 = 物理悬停 0.3205), 收敛值兼作推力域自检
+#    ② MPC_THR_MIN 0.05→0.12 (实机值; 需覆盖快速下降时低于悬停的推力余量)
 # ==================================
-param set MPC_USE_HTE 0
+param set MPC_USE_HTE 1
 param set MPC_THR_HOVER 0.15
-param set MPC_THR_MIN 0.05
+param set MPC_THR_MIN 0.12
 param set MPC_THR_MAX 0.95
 
 # 最大倾斜角: 受倾转电机架物理限制 (sim MaxTiltAngle=0.44rad≈25.2°), 留 ~1° 裕量
 # 最大水平加速度 ≈ g·tan(24°) ≈ 4.4 m/s²
 # 理论平飞极速 = m·g·tanθ/DragCoef ≈ 1.5×9.81×tan(25.2°)/0.325 ≈ 21 m/s, 取 VEL_MAX=10 留大裕量
+# BEIMING 调参 2026-11-19(一): MPC_TILTMAX_AIR 保持 24 —— 实机为 30, 但 sim 倾转架
+# 物理上限 25.2° (MaxTiltAngle=0.44rad), 倾角指令超舵机能力只会白白饱和
 param set MPC_TILTMAX_AIR 24.0
 
 
@@ -106,20 +114,24 @@ param set MPC_TILTMAX_AIR 24.0
 # 2. 速度与加速度限制 (按倾转能力 4.4 m/s² 折算)
 #    注意: POSCTL 手动满杆限速是 MPC_VEL_MANUAL (默认4!), MPC_XY_VEL_MAX
 #    只管自动航线任务, 两者都要改; 侧向/后退另有 MPC_VEL_MAN_SIDE/BACK
+#    BEIMING 调参 2026-11-19(一) 对齐实机: 实机 VEL 16/17, ACC 5/3/3 ——
+#    速度取 14 留裕量, 加速度照抄 (实机包线 vy 12.8 m/s 验证过该档位)
 # ==================================
-param set MPC_VEL_MANUAL 10.0
-param set MPC_XY_VEL_MAX 10.0
+param set MPC_VEL_MANUAL 14.0
+param set MPC_XY_VEL_MAX 14.0
 param set MPC_Z_VEL_MAX_UP 3.0
-param set MPC_Z_VEL_MAX_DN 1.5
-param set MPC_ACC_HOR_MAX 3.5
-param set MPC_ACC_UP_MAX 2.0
-param set MPC_ACC_DOWN_MAX 1.2
+param set MPC_Z_VEL_MAX_DN 2.0
+param set MPC_ACC_HOR_MAX 5.0
+param set MPC_ACC_UP_MAX 3.0
+param set MPC_ACC_DOWN_MAX 3.0
 
 
 # ==================================
-# 3. 位置控制器 (共轴机机动性弱, 增益温和防振荡)
+# 3. 位置控制器
+#    BEIMING 调参 2026-11-19(一): MPC_XY_P 0.5→0.95 对齐实机 (实机悬停速度跟踪
+#    rms 0.07~0.24 m/s 验证过该档位; XY 通道无映射压缩可 1:1 抄)
 # ==================================
-param set MPC_XY_P 0.5
+param set MPC_XY_P 0.95
 param set MPC_Z_P 1.0
 param set MPC_XY_ERR_MAX 2.0
 param set MPC_XY_TRAJ_P 0.4
@@ -139,11 +151,18 @@ param set MPC_XY_TRAJ_P 0.4
 #    P 0.5→2.7, I 0.1→0.2, D 0.4→0.3。试飞验证悬停稳定。
 #    BEIMING 调参 2026-11-17(四): 直通方案已回退, 保持本补偿增益 (现役定案配方)
 # ==================================
-param set MPC_XY_VEL_P_ACC 1.4
-param set MPC_XY_VEL_I_ACC 0.15
+#    BEIMING 调参 2026-11-19(一) 对齐实机 (log_57/58_2026-10-21):
+#    - XY 通道: 倾转舵机不经 normalizeRotorControls 映射, 无增益压缩, 1:1 抄实机
+#      (实机 P 1.8 / I 0.4 / D 0.2 —— D 与实机一致)
+#    - Z 通道: 实机 P 3.8 / I 2.2 / D 0, 按映射压缩 r=0.375 折算理论值 P 10.1 / I 5.9;
+#      一次到位太激进, 本轮先到 P 4.0 / I 0.8, 试飞无振荡再向 10/5.9 逼近
+#    - 验收 (对照实机悬停段): vz rms ≤0.08 m/s, z 漂移 ≤0.3 m/min, HTE 收敛值 ≈0.15,
+#      速度跟踪 rms ≤0.25 m/s; 若 HTE 显著偏离 0.15 说明推力域仍不准, 先查映射再动环
+param set MPC_XY_VEL_P_ACC 1.8
+param set MPC_XY_VEL_I_ACC 0.4
 param set MPC_XY_VEL_D_ACC 0.2
-param set MPC_Z_VEL_P_ACC 2.7
-param set MPC_Z_VEL_I_ACC 0.2
+param set MPC_Z_VEL_P_ACC 6.0
+param set MPC_Z_VEL_I_ACC 1.6
 param set MPC_Z_VEL_D_ACC 0.3
 
 
@@ -152,26 +171,39 @@ param set MPC_Z_VEL_D_ACC 0.3
 #    满舵角加速度 ≈ 11 rad/s², 增益降一个量级, 目标开环穿越 ~10 rad/s:
 #    P=0.012, I=0.02, FF=0 (FF=0.1 会直接把舵机打进饱和)
 #    调参方向: 持续 ±1 乒乓再减半; 迟钝则 +50%; 方向反翻 TRQ 符号 (见 §0))
+#    BEIMING 调参 2026-11-19(一) 对齐实机 (log_57/58: 实机 P 0.168 / I 0.5 / FF 0.08,
+#    速率限幅 260°/s, 姿态 P 4.8/5.0/1.9 —— 实机倾转打满 ±1.0 仍跟踪良好):
+#    - 注意效力模型体系不同 (实机 CT=6.5/KM=0.05 物理化, 仿真 TRQ=0.022 归一化),
+#      增益不可 1:1 搬, 按 P×4 / I×5 / FF 0.02 (≈0.4·P, 低于实机 FF/P 比 0.48) 分步逼近
+#    - 速率限幅 120→200 (实机 260, 共轴舵机权限留裕量), 偏航 60→100 (实机 160)
+#    - 调参方向: 迟钝则 P +50% 向 0.168 逼近; 出现高频振荡先减 FF 再减 P;
+#      稳态侧倾靠积分 (实机 roll rms 4.5° 全由 I=0.5 顶着), 不要加 trim
 # ==================================
-param set MC_ROLL_P 4.0
-param set MC_PITCH_P 4.0
-param set MC_YAW_P 1.5
-param set MC_ROLLRATE_MAX 120.0
-param set MC_PITCHRATE_MAX 120.0
-param set MC_YAWRATE_MAX 60.0
+param set MC_ROLL_P 4.8
+param set MC_PITCH_P 5.0
+param set MC_YAW_P 1.8
+param set MC_ROLLRATE_MAX 200.0
+param set MC_PITCHRATE_MAX 200.0
+param set MC_YAWRATE_MAX 100.0
 
-param set MC_ROLLRATE_FF 0.0
+#    BEIMING 调参 2026-11-19(二) ulog 定论 (09_35_13.ulg):
+#    - 抖动根因: 速率环 P 0.05 极限环 —— 设定值平滑 (峰 0.1Hz), 实测角速度 4.7~4.8Hz
+#      振荡 (峰值 ±170°/s), 舵机指令同频打满 ±1.0 (饱和 3~6%) —— P+FF 超出仿真
+#      倾转架执行动力学相位裕度 (实机舵机快能吃 P=0.168, 仿真不行);
+#      回退 P 0.05→0.025 / FF 0.02→0.01 (仍为原 0.012 的 2 倍+), I 0.1 保留
+#    - 调参方向: 再抖再减半; 迟钝则 +50%; 若 0.025 稳定且迟钝, 优先加 FF 不加 P
+param set MC_ROLLRATE_FF 0.01
 param set MC_ROLLRATE_K 1.0
-param set MC_ROLLRATE_P 0.012
-param set MC_ROLLRATE_I 0.02
-param set MC_ROLLRATE_D 0.0
-param set MC_PITCHRATE_FF 0.0
+param set MC_ROLLRATE_P 0.025
+param set MC_ROLLRATE_I 0.1
+param set MC_ROLLRATE_D 0.002
+param set MC_PITCHRATE_FF 0.01
 param set MC_PITCHRATE_K 1.0
-param set MC_PITCHRATE_P 0.012
-param set MC_PITCHRATE_I 0.02
-param set MC_PITCHRATE_D 0.0
-param set MC_YAWRATE_FF 0.0
+param set MC_PITCHRATE_P 0.025
+param set MC_PITCHRATE_I 0.1
+param set MC_PITCHRATE_D 0.002
+param set MC_YAWRATE_FF 0.01
 param set MC_YAWRATE_K 1.0
 param set MC_YAWRATE_P 0.05
-param set MC_YAWRATE_I 0.05
+param set MC_YAWRATE_I 0.15
 param set MC_YAWRATE_D 0.00
