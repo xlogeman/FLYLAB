@@ -55,11 +55,17 @@ public:
     const auto follow_kp = node.declare_parameter<double>("follow_kp", 1.2);
     const auto follow_rate_max = node.declare_parameter<double>(
       "follow_yaw_rate_max_deg", 45.0);
+    const auto follow_deadband = node.declare_parameter<double>(
+      "follow_deadband_deg", 2.0);
+    const auto follow_slow = node.declare_parameter<double>(
+      "follow_slow_deg", 30.0);
     frame_timeout_sec_ = node.declare_parameter<double>("frame_timeout_sec", 2.0);
     warmup_sec_ = warmup;
     retry_sec_ = retry;
     follow_kp_ = follow_kp;
     follow_rate_max_ = follow_rate_max;
+    follow_deadband_deg_ = follow_deadband;
+    follow_slow_deg_ = follow_slow;
 
     // ---------- PX4 执行层 (复用组件, 链路按 link 参数选择) ----------
     if (link == "mavros") {
@@ -217,14 +223,32 @@ private:
   }
 
   /// 机头跟随偏航角速率 (rad/s, NED 正=右转): 误差 (度, 视线在机头右侧
-  /// 为正) × KP, 与转向同号; 开关关闭 / NaN (未跟随/过期) / 死区内为 0
+  /// 为正) × KP, 与转向同号; 开关关闭 / NaN (未跟随/过期) / 死区内为 0。
+  /// 收敛段两条抑摆措施 (误差链路有图像+云台伺服延迟, 纯 P 律在零附近
+  /// 极限环 = 左右摇摆反复对准):
+  ///   1. 死区带回差: |err| < deadband 停, 须偏离 1.5× deadband 才重启
+  ///      (回差防测量噪声在死区边界抖动)
+  ///   2. 中心减速段: |err| < slow_deg 时增益随误差线性衰减, 越接近
+  ///      对准转得越慢, 平滑收敛不冲过; 超过后恢复线性全增益
   double follow_yaw_rate()
   {
     if (!nose_follow_ || std::isnan(yaw_err_deg_)) {
       return 0.0;
     }
+    const double err = yaw_err_deg_;
+    const double abs_err = std::fabs(err);
+    if (in_deadband_) {
+      if (abs_err < follow_deadband_deg_ * 1.5) {
+        return 0.0;
+      }
+      in_deadband_ = false;
+    } else if (abs_err <= follow_deadband_deg_) {
+      in_deadband_ = true;
+      return 0.0;
+    }
+    const double u = std::min(1.0, abs_err / follow_slow_deg_);
     const double rate_deg = std::clamp(
-      follow_kp_ * yaw_err_deg_, -follow_rate_max_, follow_rate_max_);
+      follow_kp_ * err * u, -follow_rate_max_, follow_rate_max_);
     return rate_deg * M_PI / 180.0;
   }
 
@@ -275,6 +299,9 @@ private:
   double retry_sec_ = 10.0;
   double follow_kp_ = 1.2;
   double follow_rate_max_ = 45.0;
+  double follow_deadband_deg_ = 2.0;   // 对准死区 (度, 回差 1.5×)
+  double follow_slow_deg_ = 30.0;      // 中心减速段宽度 (度)
+  bool in_deadband_ = false;           // 死区状态 (回差迟滞)
   double frame_timeout_sec_ = 2.0;
 };
 

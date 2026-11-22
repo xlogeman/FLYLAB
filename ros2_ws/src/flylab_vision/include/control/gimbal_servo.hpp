@@ -27,7 +27,10 @@ namespace flylab_vision
 ///
 /// 控制律 (PD, 输入像素误差): 目标框中心相对画面中心的像素偏移经 FOV
 /// 换算成角度误差 (小角度 atan, 水平/垂直共用一个焦距像素), 死区内
-/// 归零, PD 输出夹紧到限速。方向约定 (与地面站软云台一致):
+/// 归零, PD 输出夹紧到限速。P 增益随目标偏离画面中心的归一化距离
+/// 渐增 (中心 1 倍 → 画面边缘 servo_edge_gain 倍, 二次曲线): 目标
+/// 冲向边缘时加速追赶, 靠近中心时减速防抖。方向约定 (与地面站软
+/// 云台一致):
 ///   图像 x 右+  -> 云台偏航右+ (yaw_rate 同号)
 ///   图像 y 下+  -> 云台俯仰向下 (pitch_rate 取负号: pitch+ 为抬头)
 ///
@@ -44,6 +47,8 @@ public:
   {
     const auto kp = node.declare_parameter<double>("servo_kp", 3.0);
     const auto kd = node.declare_parameter<double>("servo_kd", 0.6);
+    const auto edge_gain = node.declare_parameter<double>(
+      "servo_edge_gain", 2.0);
     const auto max_rate = node.declare_parameter<double>(
       "servo_max_rate_deg", 45.0);
     const auto deadband = node.declare_parameter<double>(
@@ -57,6 +62,7 @@ public:
 
     kp_ = kp;
     kd_ = kd;
+    edge_gain_ = edge_gain;
     max_rate_ = max_rate;
     deadband_ = deadband;
     fov_ = fov_default;
@@ -79,9 +85,10 @@ public:
 
     RCLCPP_INFO(
       node.get_logger(),
-      "云台伺服就绪: KP %.1f KD %.1f 限速 %.0f°/s 死区 %.1f° "
+      "云台伺服就绪: KP %.1f KD %.1f 边缘倍率 %.1f 限速 %.0f°/s 死区 %.1f° "
       "(指令经 %s, FOV 同步自 %s)",
-      kp_, kd_, max_rate_, deadband_, cmd_topic.c_str(), fov_topic.c_str());
+      kp_, kd_, edge_gain_, max_rate_, deadband_, cmd_topic.c_str(),
+      fov_topic.c_str());
   }
 
   bool enabled() const {return enabled_.load();}
@@ -131,20 +138,25 @@ public:
     ay_prev_ = ay;
     was_target_ = true;
     ctrl_t_ = now;
-    const double rx = clamp_rate(pd(ax, dx, dt));
-    const double ry = clamp_rate(pd(ay, dy, dt));
+    // 归一化画面距离 (0=中心, 1=边缘): P 增益形状因子 (像素系, 双轴各自归一)
+    const double ux = std::min(1.0, std::fabs(ex) / (W * 0.5));
+    const double uy = std::min(1.0, std::fabs(ey) / (H * 0.5));
+    const double rx = clamp_rate(pd(ax, dx, dt, ux));
+    const double ry = clamp_rate(pd(ay, dy, dt, uy));
     publish_locked(rx, -ry);   // 图像 y 下+ = 俯仰向下 (pitch+ 为抬头, 取负)
   }
 
 private:
-  double pd(double err, double derr, double dt) const
+  double pd(double err, double derr, double dt, double u) const
   {
     // 死区: 角度误差在此内视为已对准 (悬停抖动不触发无限微转)
     if (std::fabs(err) < deadband_) {
       return 0.0;
     }
+    // P 增益形状: 中心 1 倍 → 边缘 edge_gain 倍 (二次渐增, =1 退化为线性)
+    const double shape = 1.0 + (edge_gain_ - 1.0) * u * u;
     const double d = dt > 1e-3 ? kd_ * derr / dt : 0.0;
-    return kp_ * err + d;
+    return kp_ * err * shape + d;
   }
 
   double clamp_rate(double rate) const
@@ -190,6 +202,7 @@ private:
   // ---------- 参数 (构造后只读) ----------
   double kp_ = 3.0;            // P 增益 (1/s): 角度误差 × KP = 角速率
   double kd_ = 0.6;            // D 增益: 误差变化率阻尼
+  double edge_gain_ = 2.0;     // P 增益边缘倍率 (画面边缘处 KP 的倍数)
   double max_rate_ = 45.0;     // 角速率限幅 (°/s, 对齐摇杆满偏量级)
   double deadband_ = 1.0;      // 对准死区 (度)
 
