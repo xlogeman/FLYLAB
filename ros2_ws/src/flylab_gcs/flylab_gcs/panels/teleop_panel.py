@@ -189,10 +189,12 @@ class TeleopPanelMixin:
 
     def _on_teleop_toggle(self):
         if self.teleop_act.isChecked():
-            # 遥控接管优先 (防炸机出口): 先取消反控, 降落节点交还 offboard
+            # 遥控接管优先 (防炸机出口): 先取消反控, 节点交还 offboard
             # 后遥控再接管
             if self.landing_act.isChecked():
                 self.landing_act.setChecked(False)
+            if self.gimbal_act.isChecked():
+                self._cancel_track_takeover()   # 目标追踪反控交还 offboard
             # 避障链路跟踪器同样走 offboard, 与遥控互斥, 先整链路退出
             if self.running_flight is not None and self.running_flight.get('need_link'):
                 self._stop_flight()
@@ -252,7 +254,10 @@ class TeleopPanelMixin:
         self._teleop_clear_axes()
         self._set_teleop_controls_enabled(False)
         self.teleop_act.setChecked(False)
-        self.takeover_btn.setText('接管控制')
+        # 目标追踪反控中开遥控抢回时, 遥控复位不能覆盖反控按钮文字
+        self.takeover_btn.setText(
+            '接管控制: 目标追踪' if self.gimbal_act.isChecked()
+            else '接管控制')
 
     def _set_teleop_controls_enabled(self, enabled):
         for w in self._teleop_widgets:

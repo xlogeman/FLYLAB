@@ -269,6 +269,12 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.LANDING_STATUS_TOPIC, self._landing_status_cb, 10)
 
+        # 目标追踪反控状态回传: 同降落/遥控状态回传模式 (engaged/idle/failed)
+        self._track_status = ''
+        self._track_status_seq = 0
+        self.create_subscription(
+            String, config.TRACK_STATUS_TOPIC, self._track_status_cb, 10)
+
         # 算法输出面板数据 (右栏): JSON 按 src 分组 (detect/landing),
         # 各存最新一条, 界面轮询 get_aruco_info() 取用
         self.aruco_info = {}
@@ -321,6 +327,14 @@ class GroundStationNode(Node):
     def _landing_status_cb(self, msg):
         self._landing_status = msg.data.strip()
         self._landing_status_seq += 1
+
+    def _track_status_cb(self, msg):
+        self._track_status = msg.data.strip()
+        self._track_status_seq += 1
+
+    def get_track_status(self):
+        """返回 (最新反控状态, 事件序号); 序号变化 = 有新状态事件。"""
+        return self._track_status, self._track_status_seq
 
     def _teleop_status_cb(self, msg):
         self._teleop_status = msg.data.strip()

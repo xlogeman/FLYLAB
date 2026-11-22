@@ -193,6 +193,7 @@ class CameraViewWidget(QWidget):
         btn_center.setFixedWidth(40)
         btn_center.setToolTip('云台回中 (平滑转动到挂载原始姿态, 摇杆可打断)')
         btn_center.clicked.connect(self.grabber.gimbal_reset)
+        self._btn_center = btn_center
 
         btn_stab = QPushButton('稳定')
         btn_stab.setFixedWidth(40)
@@ -205,17 +206,19 @@ class CameraViewWidget(QWidget):
             '俯仰/横滚不随机体晃动, 偏航跟随机头; 关闭则相机刚性随机体 '
             '(FPV 手感)')
         btn_stab.toggled.connect(self.grabber.set_gimbal_stab)
+        self._btn_stab = btn_stab
 
         btn_follow = QPushButton('跟随')
         btn_follow.setFixedWidth(40)
         btn_follow.setCheckable(True)
-        btn_follow.setEnabled(False)   # 可用性由接管控制门控刷新 (遥控接管中)
+        btn_follow.setEnabled(False)   # 可用性由接管控制门控刷新 (遥控接管中/云台跟随中)
         btn_follow.setStyleSheet(
             'QPushButton:checked { background-color: #2d8a3e; color: white; }')
         btn_follow.setToolTip(
             '航向跟随: 转动云台偏航时机头跟着转向视线方向, 追上后云台偏航'
             '自动回中 (限位变为最大超前角)。需先开启通信链路并接管手动遥控'
-            ' (指令走遥控 offboard 通道); 反控降落中不可用')
+            ' (指令走遥控 offboard 通道); 视觉反控降落/目标追踪反控中由'
+            '算法节点自己跟随, 此按钮不可用')
         btn_follow.toggled.connect(self._on_follow_toggle)
         self.btn_follow = btn_follow
         self._follow_avail = False
@@ -328,8 +331,9 @@ class CameraViewWidget(QWidget):
         self.grabber.set_follow(on)
 
     def set_follow_available(self, ok):
-        """跟随按钮可用性 (接管控制 33ms 轮询门控): 需手动遥控接管中。
-        父面板置灰 (反控锁云台) 时按钮随父级, 解锁后按本标志恢复。"""
+        """跟随按钮可用性 (接管控制 33ms 轮询门控): 需手动遥控接管中
+        (目标追踪反控的机头跟随由算法节点自己注入, 不经此按钮)。
+        不随云台面板锁定置灰, 可用性完全由本标志决定。"""
         if ok == self._follow_avail:
             return
         self._follow_avail = ok
@@ -371,13 +375,18 @@ class CameraViewWidget(QWidget):
 
     def _apply_gimbal_enabled(self):
         """云台面板门控拆分置灰: 云台本体 + 视场仅 AirSim 源且 RPC 已连通
-        可用 (反控锁定期间强制置灰); 数字变焦是显示层中心裁切, 与源无关,
-        本机摄像头/视频文件也可拖动, 仅反控锁定时一并禁用 (变焦会改变
-        转发给算法的显示帧, 反控对帧中作动需要画面稳定)。"""
+        可用 (反控/云台跟随锁定期间强制置灰); 数字变焦是显示层中心裁切,
+        与源无关, 本机摄像头/视频文件也可拖动, 仅反控锁定时一并禁用
+        (变焦会改变转发给算法的显示帧, 反控对帧中作动需要画面稳定)。
+        云台本体按子控件逐个置灰而非整面板禁用 —— "跟随"按钮不随锁定
+        置灰, 可用性由接管门控独立决定 (set_follow_available)。"""
         ok = (not self._gimbal_locked
               and self.grabber.get_gimbal() is not None
               and self.grabber.airsim_connected())
-        self._gimbal_core.setEnabled(ok)
+        self._joy.setEnabled(ok)
+        self._btn_center.setEnabled(ok)
+        self._btn_stab.setEnabled(ok)
+        self.btn_follow.setEnabled(self._follow_avail)   # 独立门控 (接管轮询)
         self._fov_widget.setEnabled(ok)
         self._zoom_widget.setEnabled(not self._gimbal_locked)
 

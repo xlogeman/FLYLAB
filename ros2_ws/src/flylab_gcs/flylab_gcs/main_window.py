@@ -111,6 +111,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.running_flight = None   # 运行中的飞行链路 (config.FLIGHT_LINKS 项)
         self._last_landing_seq = 0     # 已处理的降落状态事件序号
         self._last_teleop_seq = 0      # 已处理的遥控状态事件序号
+        self._last_takeover_seq = 0    # 已处理的目标追踪反控状态事件序号
         # 归一化遥控量 (-1..1): x 前 y 右 z 升 w 左转, 组合成 Twist 下发
         self._teleop_axes = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}
         # 显示帧转发断流告警: 计数在转发线程累计, 每 2s 检查一次
@@ -269,25 +270,30 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                 self._track_tracking = False
                 self.node.clear_annotation_group('track')
                 self.node.publish_track_roi_reset()
-            # track 分组已移除 (追踪算法停止/切换): 云台跟随联动取消
-            self._cancel_gimbal_follow()
+            # track 分组已移除 (追踪算法停止/切换): 反控联动取消
+            self._cancel_track_takeover()
         self.algo_panel.refresh()
         self._check_algo_alive()
         self._check_flight_alive()   # 链路进程异常退出则复位按钮
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
-        # 飞行控制按钮: 需 PX4 已启动 + RPC 已连通, 且未被遥控/视觉反控
-        # 接管 (offboard 期间飞控命令会打断接管); 飞行中未被接管时点亮
+        # 飞行控制按钮: 需 PX4 已启动 + RPC 已连通, 且未被遥控/视觉反控/
+        # 目标追踪反控接管 (offboard 期间飞控命令会打断接管); 飞行中未被
+        # 接管时点亮
+        takeover_on = self.gimbal_act.isChecked()
         veh_ok = (self.px4.is_running() and self.veh_ctrl.is_connected()
                   and not self.teleop_act.isChecked()
-                  and not self.landing_act.isChecked())
+                  and not self.landing_act.isChecked()
+                  and not takeover_on)
         if self.veh_btn.isEnabled() != veh_ok:
             self.veh_btn.setEnabled(veh_ok)
         self._set_btn_on(self.veh_btn, veh_ok and self.veh_ctrl.is_flying()
                          and not self.teleop_act.isChecked()
-                         and not self.landing_act.isChecked())
+                         and not self.landing_act.isChecked()
+                         and not takeover_on)
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 菜单项弹起)
         self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 菜单项与摇杆联动)
+        self._check_takeover_status()  # 目标追踪反控状态 (接管/交还/失败 → 菜单项联动)
         self._update_takeover_gates()   # 降落(视觉反控)/遥控互斥门控
         self._log_forward_stats()   # 转发断流告警 (2s 一次, 计数在转发线程)
         # 相机机体系姿态 (10Hz): 供 aruco_landing 做云台泛化的方向映射;
@@ -373,7 +379,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             lambda: self._stop_flight() if self.running_flight is not None else None,
             lambda: self.node.publish_cmd(config.LANDING_STOP_CMD)
                 if self.landing_act.isChecked() else None,
-            lambda: self._cancel_gimbal_follow(),   # 云台跟随兜底取消 (清速率)
+            lambda: self._cancel_track_takeover(),   # 目标追踪反控兜底取消
+            self.algo_proc.stop,   # 反控中 _stop_algo 的延迟回收在退出流程不触发, 兜底
             self.land_proc.stop,
             lambda: self.node.publish_cmd(config.TELEOP_STOP_CMD)
                 if self.teleop_act.isChecked() else None,
