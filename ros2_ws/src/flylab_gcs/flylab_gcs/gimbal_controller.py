@@ -252,10 +252,15 @@ class GimbalController(threading.Thread):
 
     def get_follow_error(self):
         """航向跟随误差 (度, 右+ = 视线在机头右侧): 真实视线方位 − 航向。
-        取最近一次实际下发的相机机体系姿态 (_gimbal_last) 的"屏幕上方"
-        方位角, 而非存储云台角的模型值 —— 安装基准若被污染 (重采把已转动
+        取最近一次实际下发的相机机体系姿态 (_gimbal_last) 的视轴方位角,
+        而非存储云台角的模型值 —— 安装基准若被污染 (重采把已转动
         的相机位姿采进去), 模型值与真实视线差一个基准偏移, 跟随会把机头
         收敛到偏移后的航向 (图像与面板都显示对准、机头却不对准码朝向)。
+        视轴 (+x) 水平方位角在俯仰全域 (上仰/平视/下俯) 都等于视线方位;
+        不能用"屏幕上方"向量 —— 其方位角只在下俯 (pitch<0) 时等于视线
+        方位, 平视时投影为零 (误差恒 0 机头不转), 上仰时翻转 180° (机头
+        转向视线反方向)。仅近垂直 (±90°, 视轴水平投影退化) 时退回上方
+        向量 (垂直向下时图像上方即偏航方向, 垂直摆位语义不变)。
         未跟随 / 航向测量过期 / 相机姿态缺失 返回 None, 外环按 0 处理
         (停止转向, 遥控量保持悬停)。"""
         with self.lock:
@@ -267,6 +272,9 @@ class GimbalController(threading.Thread):
             q = self._gimbal_last.get(self._camera)
             if q is None:
                 return self._gimbal[0]   # 尚未下发过 (理论少见): 退回模型值
+            v = quat_rot_vec(q, airsim.Vector3r(1.0, 0.0, 0.0))
+            if math.hypot(v.x_val, v.y_val) > 0.2:
+                return math.degrees(math.atan2(v.y_val, v.x_val))
             up = quat_rot_vec(q, airsim.Vector3r(0.0, 0.0, -1.0))
             return math.degrees(math.atan2(up.y_val, up.x_val))
 
