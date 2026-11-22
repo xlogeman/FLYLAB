@@ -222,6 +222,11 @@ LANDING_YAW_OFFSET_DEFAULT = 0     # 度 (初始显示值, 与 aruco.yaml 的 ya
 # 即换目标; 停止靠工具栏"停止算法" (无独立取消指令)。ROI 进入追踪即消费。
 TRACK_ROI_TOPIC = '/flylab/track_roi'
 TRACK_BEGIN_CMD = 'track_begin'
+# 云台跟随 (接管控制菜单 → 追踪节点): 追踪节点按目标在画面中的偏移
+# 反控软云台 (/flylab/gimbal_cmd), 让目标保持在画面中央 —— 只动云台
+# 不动飞机, 不需要通信链路与升空 (与视觉反控降落 offboard 机制不同)
+TRACK_GIMBAL_START_CMD = 'track_gimbal_start'
+TRACK_GIMBAL_STOP_CMD = 'track_gimbal_stop'
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）
@@ -402,6 +407,9 @@ ALGORITHMS = [
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_track_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
+         # gimbal_track: 支持云台跟随 (接管控制→云台跟随, 反控软云台
+         # 让追踪目标保持在画面中央; 只动云台不动飞机)
+         'gimbal_track': True,
          'panel': 'track'},   # 右栏面板: 追踪状态卡片 (框选在画面完成)
         # ORTrack (CVPR 2025): 模板匹配式单目标追踪, 无需检测候选,
         # 框选即锁定; 与 yolo26s-track 共用右栏追踪面板与框选/开始按钮
@@ -409,6 +417,7 @@ ALGORITHMS = [
          'cmd': ['ros2', 'run', 'flylab_vision', 'ortrack_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
+         'gimbal_track': True,
          'panel': 'track'},
     ]},
 ]

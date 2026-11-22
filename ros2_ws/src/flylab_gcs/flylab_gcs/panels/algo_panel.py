@@ -126,6 +126,8 @@ class AlgoPanelMixin:
         if algo.get('enables_landing') and self.landing_act.isChecked():
             self.node.publish_cmd(config.LANDING_STOP_CMD)
             self.landing_act.setChecked(False)
+        # 目标追踪停止时云台跟随失去输入源, 自动一并取消
+        self._cancel_gimbal_follow()
 
     def _reset_algo(self):
         """算法异常退出时复位状态 (不重复发停止指令)。"""
@@ -133,6 +135,8 @@ class AlgoPanelMixin:
         self.algo_proc.clear()
         self.node.clear_annotations()
         self._update_algo_state()
+        # 目标追踪异常退出时云台跟随失去输入源, 自动一并取消
+        self._cancel_gimbal_follow()
 
     def _check_algo_alive(self):
         """轮询里顺带检查进程存活: 异常退出则复位并提示。"""

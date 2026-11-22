@@ -15,6 +15,10 @@
 ///      追踪中重新框选即换目标 (重裁模板重新锁定), 停止靠 track_stop
 ///   5. 画面叠加: 目标框转 JSON 标注发 /flylab/annotations (组名 "track")
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
+///   7. 云台跟随: /flylab/vision_cmd 收 track_gimbal_start/stop 开关伺服
+///      (地面站"接管控制→云台跟随"); 开启后按追踪框相对画面中心的偏移
+///      发 /flylab/gimbal_cmd [yaw_rate, pitch_rate] 反控软云台, 让目标
+///      保持在画面中央 (只动云台不动飞机, 见 control/gimbal_servo.hpp)
 ///
 /// 流程: track_start 启动 → 画面拖框框住目标 (松开即自动锁定) → 当前帧
 /// 裁 128x128 模板, 全程固定不更新 → 逐帧以上帧结果为中心裁
@@ -36,6 +40,7 @@
 
 #include "classify/yolo_classifier.hpp"
 #include "common/display_vision_node.hpp"
+#include "control/gimbal_servo.hpp"
 #include "track/ortrack.hpp"
 
 namespace flylab_vision
@@ -102,6 +107,7 @@ public:
       ctl_topic, 10,
       [this](const std_msgs::msg::String::SharedPtr msg) {on_ctl(*msg);});
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
+    servo_ = std::make_unique<GimbalServo>(*this);
 
     log_ready("ORTrack 追踪");
   }
@@ -126,11 +132,13 @@ protected:
       track_box_ = box;
       track_state_ = "TRACK";
       classify_target(bgr, box);
+      servo_->update(box, bgr, true);   // 云台伺服: 模板匹配恒有目标框
       json = track_annotations(box, tracker_->last_score());
       publish_info();
     } else {
       // 未追踪: 无检测候选可画, 只回显框选区域供用户核对
       track_state_ = has_roi_ ? "SELECTED" : "IDLE";
+      servo_->update(cv::Rect2f(), bgr, false);   // 无目标: 伺服清零
       json = has_roi_ ? browse_annotations() : "";
       publish_info();
     }
@@ -208,6 +216,13 @@ private:
     if (msg.data == "track_begin") {
       // 帧上下文里锁定 (需要裁模板); 追踪中收到且带新框选即换目标
       begin_req_ = true;
+    } else if (msg.data == "track_gimbal_start") {
+      // 云台跟随 (接管控制菜单): 先开亦可, 框选锁定目标后自动介入
+      servo_->set_enabled(true);
+      RCLCPP_INFO(get_logger(), "云台跟随已开启: 追踪目标将保持在画面中央");
+    } else if (msg.data == "track_gimbal_stop") {
+      servo_->set_enabled(false);
+      RCLCPP_INFO(get_logger(), "云台跟随已关闭");
     }
   }
 
@@ -309,7 +324,8 @@ private:
        << "\"conf\":" << num(has_cls ? cls_conf_ : last_score_, 2) << ","
        << "\"sim\":" << num(last_score_, 2) << ","
        << "\"w\":" << num(track_box_.width, 0) << ","
-       << "\"h\":" << num(track_box_.height, 0) << "}";
+       << "\"h\":" << num(track_box_.height, 0) << ","
+       << "\"follow\":" << (servo_->enabled() ? 1 : 0) << "}";
     std_msgs::msg::String out;
     out.data = os.str();
     info_pub_->publish(out);
@@ -324,6 +340,7 @@ private:
 
   std::unique_ptr<ORTracker> tracker_;
   std::unique_ptr<YoloClassifier> classifier_;   // 类别模型 (面板"目标"栏)
+  std::unique_ptr<GimbalServo> servo_;           // 云台跟随 (接管控制菜单开关)
   double cls_interval_ = 0.5;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr roi_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ctl_sub_;

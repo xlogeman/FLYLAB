@@ -269,6 +269,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
                 self._track_tracking = False
                 self.node.clear_annotation_group('track')
                 self.node.publish_track_roi_reset()
+            # track 分组已移除 (追踪算法停止/切换): 云台跟随联动取消
+            self._cancel_gimbal_follow()
         self.algo_panel.refresh()
         self._check_algo_alive()
         self._check_flight_alive()   # 链路进程异常退出则复位按钮
@@ -371,6 +373,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             lambda: self._stop_flight() if self.running_flight is not None else None,
             lambda: self.node.publish_cmd(config.LANDING_STOP_CMD)
                 if self.landing_act.isChecked() else None,
+            lambda: self._cancel_gimbal_follow(),   # 云台跟随兜底取消 (清速率)
             self.land_proc.stop,
             lambda: self.node.publish_cmd(config.TELEOP_STOP_CMD)
                 if self.teleop_act.isChecked() else None,

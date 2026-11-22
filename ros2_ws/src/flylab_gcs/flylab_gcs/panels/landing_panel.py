@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """视觉反控 (ArUco 降落) 面板 (MainWindow 的功能域 mixin)。
 
-接管控制下拉按钮 (工具栏) 的本体在此: 视觉反控 + 手动遥控两块菜单
-共用一个 QToolButton, 手动遥控的菜单项由 TeleopPanelMixin 提供
+接管控制下拉按钮 (工具栏) 的本体在此: 视觉反控 + 云台跟随 + 手动遥控
+三块菜单共用一个 QToolButton, 手动遥控的菜单项由 TeleopPanelMixin 提供
 (_build_teleop_menu_item), 互斥门控 (_update_takeover_gates) 也在此 ——
 门控是一张整体决策表 (谁运行中锁谁、谁是防炸机出口), 拆开反而要重复
-分支结构; 遥控专属的启停流程/摇杆/手柄见 teleop_panel.py。
+分支结构; 遥控专属的启停流程/摇杆/手柄见 teleop_panel.py。云台跟随
+(目标追踪算法反控软云台) 只动云台不动飞机, 亦挂在本菜单统一门控。
 
 菜单为常驻双层结构: 逻辑 QAction (checkable, 不进菜单) 承载勾选状态机,
 菜单显示项 (非 checkable, 绿点 = 运行中, 再点取消) 经 triggered -> 逻辑项
@@ -98,22 +99,32 @@ class LandingPanelMixin:
         - 视觉反控: 需已解锁升空 + ArUco检测运行中 + AirSim 源 + 链路已开;
           进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口);
           模式子菜单 (图像空间/3D 姿态) 互斥: 运行中非现役模式置灰
-        - 遥控: 仅需链路已开; 进行中仍可点视觉反控 (先取消遥控再反控)
+        - 云台跟随: 目标追踪算法运行中 + AirSim 源即可 (只动云台不动
+          飞机, 不需要链路与升空); 进行中锁云台 UI, 与遥控可并存
+          (遥控飞飞机, 算法跟云台), 与视觉反控互斥 (都占算法云台通道)
+        - 遥控: 仅需链路已开; 进行中仍可点视觉反控/云台跟随 (自动让位)
         同时维护接管按钮的状态灯 (任一功能运行中点亮)。"""
         link_ok = self._selected_link() is not None
+        algo = self.running_algo
         # 视觉反控的完整门控条件 (进行中恒可点以便取消)
         landing_ok = False
-        algo = self.running_algo
         if algo is not None and algo.get('enables_landing') and link_ok:
             # 需已解锁且在空中 (地面/未解锁点反控无意义); 俯仰由点击时
             # 自动打到垂直向下, 只要求 AirSim 源 (有云台)
             landing_ok = (self.veh_ctrl.is_flying()
                           and self.camera_tab.grabber.get_gimbal() is not None)
+        # 云台跟随门控: 追踪算法运行中 + AirSim 源 (有软云台); 不需要
+        # 链路/升空 —— 追踪节点经 gimbal_cmd 直驱地面站软云台
+        gimbal_ok = (algo is not None and algo.get('gimbal_track')
+                     and self.camera_tab.grabber.get_gimbal() is not None)
+        gimbal_on = self.gimbal_act.isChecked()
         if self.teleop_act.isChecked():
             self.link_btn.setEnabled(False)
-            self.camera_tab.set_gimbal_locked(False)
+            # 遥控中云台跟随可并存 (遥控管飞机, 算法管云台), 跟随中仍锁云台 UI
+            self.camera_tab.set_gimbal_locked(gimbal_on)
             # 遥控中仍可点视觉反控: 接管时自动取消遥控
             self.landing_act.setEnabled(landing_ok)
+            self.gimbal_act.setEnabled(gimbal_ok)
         elif self.landing_act.isChecked():
             self.link_btn.setEnabled(False)
             self.camera_tab.set_gimbal_locked(True)
@@ -125,14 +136,24 @@ class LandingPanelMixin:
                 self.landing_act.image.isChecked())
             self.landing_act.pose.setEnabled(
                 self.landing_act.pose.isChecked())
+            # 反控与云台跟随都占算法云台通道, 互斥 (算法注册表已保证
+            # 两者不会同时运行, 此处为双保险)
+            self.gimbal_act.setEnabled(False)
+        elif gimbal_on:
+            self.camera_tab.set_gimbal_locked(True)   # 云台交算法, UI 置灰
+            self.link_btn.setEnabled(True)            # 不占 offboard
+            self.teleop_act.setEnabled(link_ok)
+            self.landing_act.setEnabled(landing_ok)   # = False (追踪算法不反控)
         else:
             self.camera_tab.set_gimbal_locked(False)
             self.link_btn.setEnabled(True)
             self.teleop_act.setEnabled(link_ok)
             self.landing_act.setEnabled(landing_ok)
+            self.gimbal_act.setEnabled(gimbal_ok)
         self._set_btn_on(self.takeover_btn,
                          self.landing_act.isChecked()
-                         or self.teleop_act.isChecked())
+                         or self.teleop_act.isChecked()
+                         or gimbal_on)
         # 航向跟随按钮: 仅手动遥控接管成功 (offboard 通道可用) 且 AirSim
         # 源在线时可开; 反控中云台父面板整体置灰, 此处只管按钮自身
         follow_ok = (self._teleop_live
@@ -242,6 +263,30 @@ class LandingPanelMixin:
         self.node.publish_cmd(config.LANDING_STOP_CMD)
         QTimer.singleShot(500, self.land_proc.stop)
 
+    # ---------- 云台跟随 (目标追踪算法反控软云台, 只动云台不动飞机) ----------
+
+    def _on_gimbal_follow_toggled(self, checked):
+        """云台跟随开关: 发伺服启停指令给追踪节点 (track_gimbal_start/stop,
+        经 /flylab/vision_cmd)。关闭时兜底清零云台速率 —— 速率指令是保持型
+        (软云台按最后速率持续步进), 节点已死/失联时最后一条非零速率会让
+        云台一直转。开启时无需已框选目标: 先开亦可, 框选锁定后自动介入。"""
+        if checked:
+            self.takeover_btn.setText('接管控制: 云台跟随')
+            self.node.publish_cmd(config.TRACK_GIMBAL_START_CMD)
+            self.log.info('云台跟随已开启: 追踪节点将把目标保持在画面中央 '
+                          '(只动云台不动飞机, 云台偏航 ±45° 超限需转机头补视角)')
+        else:
+            self.takeover_btn.setText('接管控制')
+            self.node.publish_cmd(config.TRACK_GIMBAL_STOP_CMD)
+            self.camera_tab.grabber.note_algo_cmd(0.0, 0.0)   # 兜底清速率
+
+    def _cancel_gimbal_follow(self):
+        """云台跟随联动取消 (追踪算法停止/切换/异常退出时调用, 主轮询与
+        停止算法路径共用): 未开启时无副作用。弹起分支发 stop 指令并清零
+        云台速率。"""
+        if self.gimbal_act.isChecked():
+            self.gimbal_act.setChecked(False)
+
     # ---------- 接管控制 (工具栏下拉菜单 = 视觉反控 + 手动遥控) ----------
 
     def _build_takeover_button(self):
@@ -253,7 +298,9 @@ class LandingPanelMixin:
               3D 姿态  = 以码的 3D 位姿 (机体系米级误差) 闭环降落
             其余反控算法 / 无算法 → 普通"视觉反控"单项 (无下级选项)
         - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
-          遥控抢回控制权 (防炸机出口)"""
+          遥控抢回控制权 (防炸机出口)
+        - 云台跟随: 目标追踪算法反控软云台让目标保持在画面中央, 只动云台
+          不动飞机 (不接 offboard, 无需链路)"""
         self.takeover_btn = QToolButton()
         self.takeover_btn.setText('接管控制')
         self.takeover_btn.setPopupMode(QToolButton.InstantPopup)
@@ -261,7 +308,8 @@ class LandingPanelMixin:
         self.takeover_btn.setToolTip(
             '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落 '
             '(反控算法运行时展开 图像空间 / 3D 姿态 模式子菜单); '
-            '手动遥控 = 摇杆控速度。均需先开启通信链路')
+            '手动遥控 = 摇杆控速度。均需先开启通信链路; '
+            '云台跟随 = 追踪算法反控软云台 (只动云台不动飞机, 无需链路)')
         menu = QMenu(self.takeover_btn)
         self.takeover_btn.setMenu(menu)
 
@@ -292,6 +340,16 @@ class LandingPanelMixin:
         self.landing_flat_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_IMAGE, self.landing_flat_act))
+        # 云台跟随 (目标追踪算法反控软云台): 与 offboard 反控不同, 只驱动
+        # 地面站软云台让追踪目标保持在画面中央, 不接管飞行 —— 不需要链路
+        # 与升空, 与手动遥控可并存 (遥控管飞机, 算法管云台)
+        self.gimbal_act, self.gimbal_disp = make_action_pair(
+            menu, '云台跟随',
+            '需先: 目标追踪算法运行中 (yolo26s-track/ORTrack) + AirSim 源。'
+            '追踪节点按目标在画面中的偏移反控云台, 让目标保持在画面中央 '
+            '(只动云台不动飞机, 无需通信链路; 可先开再框选目标); '
+            '云台偏航 ±45° 超限需转机头补视角; 再点取消')
+        self.gimbal_act.toggled.connect(self._on_gimbal_follow_toggled)
         # 手动遥控菜单项 (TeleopPanelMixin, 勾选联动其启停流程)
         self.teleop_act, self.teleop_disp = self._build_teleop_menu_item(menu)
         # 显示项联动: 逻辑项 enabled/checked 任何变化同步到菜单显示项
@@ -303,6 +361,7 @@ class LandingPanelMixin:
                 (self.landing_img_act, self.landing_img_disp),
                 (self.landing_pose_act, self.landing_pose_disp),
                 (self.landing_flat_act, self.landing_flat_disp),
+                (self.gimbal_act, self.gimbal_disp),
                 (self.teleop_act, self.teleop_disp)):
             logic.changed.connect(lambda l=logic, d=disp: _sync(l, d))
             _sync(logic, disp)
