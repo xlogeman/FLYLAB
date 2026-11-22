@@ -230,6 +230,10 @@ TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
 # 反控节点状态回传 (engaged=接管成功 / idle=已交还 / failed=接管失败),
 # 地面站据此联动菜单项 (同降落/遥控状态回传模式)
 TRACK_STATUS_TOPIC = '/flylab/track_status'
+# 目标追踪反控机头跟随开关 (云台面板"跟随"按钮在反控中复用为该开关):
+# latched Bool 发给追踪节点, True=机头跟随视线方向 (默认) / False=机头
+# 保持航向, 仅云台伺服转 (目标仍居中, 云台偏航 ±45° 限位内)
+TRACK_FOLLOW_TOPIC = '/flylab/track_follow'
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）

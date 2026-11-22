@@ -256,6 +256,16 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 目标追踪反控机头跟随开关 (latched 约定见 config.TRACK_FOLLOW_TOPIC):
+        # 云台面板"跟随"按钮在反控中的点击经此下发追踪节点, 后启动的
+        # 节点一接入即拿到当前开关
+        self.track_follow_pub = self.create_publisher(
+            Bool, config.TRACK_FOLLOW_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -335,6 +345,13 @@ class GroundStationNode(Node):
     def get_track_status(self):
         """返回 (最新反控状态, 事件序号); 序号变化 = 有新状态事件。"""
         return self._track_status, self._track_status_seq
+
+    def publish_track_follow(self, on):
+        """发布目标追踪反控机头跟随开关 (latched): True=机头跟随视线,
+        False=机头保持航向仅转云台。仅目标追踪反控中由跟随按钮调用。"""
+        m = Bool()
+        m.data = bool(on)
+        self.track_follow_pub.publish(m)
 
     def _teleop_status_cb(self, msg):
         self._teleop_status = msg.data.strip()

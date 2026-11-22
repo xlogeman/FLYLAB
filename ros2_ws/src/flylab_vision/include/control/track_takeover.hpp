@@ -31,7 +31,10 @@ namespace flylab_vision
 ///         图像断流 / 接管超时 自动交还并回 idle
 /// 机头跟随: 发布 /flylab/gimbal_follow 请求相机侧反卷 (世界系锚点,
 /// 0.5s 保活), 订阅 /flylab/gimbal_yaw_err (latched) 按误差 P 律注入偏航
-/// 角速率 —— 与 aruco_landing 同一通道约定。
+/// 角速率 —— 与 aruco_landing 同一通道约定; 可经 /flylab/track_follow
+/// (latched Bool, 地面站云台面板"跟随"按钮) 开关 —— 关闭时机头保持
+/// 航向仅注入零偏航, 云台伺服 (相机侧反卷) 不受影响, 目标仍保持画面
+/// 中央, 云台偏航被 ±45° 限位收口。
 /// 状态回传 /flylab/track_status (engaged/idle/failed), 地面站据此联动按钮。
 ///
 /// 线程约定: activate/deactivate 在指令回调 (默认组), tick 在定时器
@@ -92,6 +95,23 @@ public:
       rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
       [this](const std_msgs::msg::Float64::SharedPtr msg) {
         yaw_err_deg_ = msg->data;   // NaN = 未跟随/测量过期
+      });
+    // 机头跟随开关 (地面站云台面板"跟随"按钮, latched): 默认开 —— 与
+    // 地面站未发布时的旧行为一致; 关闭仅停偏航注入, 云台伺服照常
+    const auto follow_switch_topic = node.declare_parameter<std::string>(
+      "follow_switch_topic", "/flylab/track_follow");
+    follow_switch_sub_ = node.create_subscription<std_msgs::msg::Bool>(
+      follow_switch_topic,
+      rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+      [this](const std_msgs::msg::Bool::SharedPtr msg) {
+        if (nose_follow_ == msg->data) {
+          return;
+        }
+        nose_follow_ = msg->data;
+        RCLCPP_INFO(
+          node_.get_logger(), "机头跟随: %s",
+          nose_follow_ ? "\033[32m开启 (机头转向视线方向)\033[0m"
+                       : "\033[33m关闭 (机头保持航向, 仅云台伺服跟目标)\033[0m");
       });
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
@@ -197,10 +217,10 @@ private:
   }
 
   /// 机头跟随偏航角速率 (rad/s, NED 正=右转): 误差 (度, 视线在机头右侧
-  /// 为正) × KP, 与转向同号; NaN (未跟随/过期) 或死区内为 0
+  /// 为正) × KP, 与转向同号; 开关关闭 / NaN (未跟随/过期) / 死区内为 0
   double follow_yaw_rate()
   {
-    if (std::isnan(yaw_err_deg_)) {
+    if (!nose_follow_ || std::isnan(yaw_err_deg_)) {
       return 0.0;
     }
     const double rate_deg = std::clamp(
@@ -241,10 +261,12 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_req_pub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_err_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_switch_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   bool active_ = false;
   bool ever_engaged_ = false;        // 曾确认进入 offboard (外部切换判定)
+  bool nose_follow_ = true;          // 机头跟随开关 (/flylab/track_follow)
   bool follow_on_ = false;
   double yaw_err_deg_ = std::nan("");
   std::chrono::steady_clock::time_point follow_req_t_;

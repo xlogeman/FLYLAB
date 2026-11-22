@@ -153,13 +153,16 @@ class LandingPanelMixin:
                          self.landing_act.isChecked()
                          or self.teleop_act.isChecked()
                          or takeover_on)
-        # 航向跟随按钮: 仅手动遥控接管成功 (offboard 通道可用) 且 AirSim
-        # 源在线时可开; 目标追踪反控的机头跟随由节点自己注入 (offboard
-        # 单写者), 视觉反控中不可开
-        follow_ok = (self._teleop_live
-                     and link_ok
-                     and self.camera_tab.grabber.airsim_connected()
+        # 航向跟随按钮: 手动遥控接管成功 (offboard 通道可用) 或目标追踪
+        # 反控中 (复用为机头跟随开关, 经 /flylab/track_follow 下发节点,
+        # offboard 单写者 —— 偏航指令仍由算法注入, 按钮只门控), 均需
+        # AirSim 源在线; 视觉反控降落中不可开 (对准码朝向是降落几何前提)
+        airsim_ok = (self.camera_tab.grabber.airsim_connected()
                      and self.camera_tab.grabber.get_gimbal() is not None)
+        self.camera_tab.set_track_follow_cb(self.node.publish_track_follow)
+        self.camera_tab.set_follow_mode('track' if takeover_on else 'teleop')
+        follow_ok = ((self._teleop_live and link_ok) or takeover_on) \
+            and airsim_ok
         self.camera_tab.set_follow_available(follow_ok)
 
     def _on_landing_mode_toggled(self, mode, act=None):
@@ -377,8 +380,9 @@ class LandingPanelMixin:
             menu, '目标追踪',
             '需先: 目标追踪算法运行中 (yolo26s-track/ORTrack) + 已解锁升空 '
             '+ 通信链路已开。接管 offboard 拿到飞机控制权: 原地悬停跟拍 '
-            '(云台伺服保持目标在画面中央 + 机头跟随视线方向, 飞机跟目标飞'
-            '将在此反控环扩展); 可先开再框选目标; 再点取消或停止算法即交还')
+            '(云台伺服保持目标在画面中央 + 机头跟随视线方向, 机头跟随可由'
+            '云台面板"跟随"按钮开关, 飞机跟目标飞将在此反控环扩展); '
+            '可先开再框选目标; 再点取消或停止算法即交还')
         self.gimbal_act.toggled.connect(self._on_track_takeover_toggled)
         # 手动遥控菜单项 (TeleopPanelMixin, 勾选联动其启停流程)
         self.teleop_act, self.teleop_disp = self._build_teleop_menu_item(menu)
