@@ -57,16 +57,10 @@ private:
   ScrfdConfig config_;
 };
 
-/// 检测结果 -> 地面站叠加标注 JSON (schema 见 flylab_gcs/overlay.py)。
-/// 输出为按算法分组的消息 {"algo": algo, "items": [...]}, 每张脸:
-///   bbox (box=[x,y,w,h], label="face 置信度", 绿色) +
-///   5 个关键点 point (黄色, 无 label)
-/// 坐标为原图像素, 图像源须与地面站显示的相机/分辨率一致。
-std::string to_annotations_json(
-  const std::vector<ScrfdFace> & faces, const std::string & algo = "face");
-
-/// 单张脸的标注图元序列化进流 (bbox + 5 关键点, 不带 {"algo":...} 包装
-/// 与前后逗号), 供节点把 FaceXFormer 任务标注拼进同一条消息
+/// 单张脸的标注图元序列化进流 (bbox (box=[x,y,w,h], label="face 置信度",
+/// 绿色) + 5 个关键点 point (黄色), 不带 {"algo":...} 包装与前后逗号),
+/// 供节点把 FaceXFormer 任务标注拼进同一条消息; 坐标为原图像素,
+/// 图像源须与地面站显示的相机/分辨率一致, schema 见 flylab_gcs/overlay.py。
 void face_items_json(
   std::ostream & os, const std::vector<ScrfdFace> & faces);
 

@@ -4,9 +4,9 @@
 读手柄双摇杆 → 死区/夹紧/轴翻转 → Qt 信号投递 GUI 线程, 由控制面板注入
 VirtualJoystick.set_external (画面旋钮联动, 下发走与鼠标拖动同一条链路)。
 
-- 轴布局按 SDL Xbox 布局默认 (左 0/1 右 2/3), 其他手柄在 config.GAMEPAD_AXES
-  覆盖 (查轴号: python3 -m pygame.examples.joystick_gui)
-- 摇杆物理上推是负轴值, 统一翻转为 VirtualJoystick 约定 (前/左为正) 再发
+- 轴布局默认 Linux xpad 驱动原始轴序 (左 0/1 右 3/4), 其他手柄在
+  config.GAMEPAD_AXES 覆盖 (查轴号: python3 /root/flylab/scripts/test-gamepad.py)
+- 摇杆物理上推是负轴值, 统一翻转为 VirtualJoystick 约定 (前/右为正) 再发
 - 热插拔: 事件驱动 (JOYDEVICEADDED/REMOVED), 断开即发零保悬停;
   初始化失败只报一次并让线程退出, 不拖垮地面站
 
@@ -32,7 +32,7 @@ class GamepadReader(QObject):
     """手柄读取线程。start/stop 由控制面板按"手柄控制"开关管理,
     信号自动排队投递 GUI 线程 (emit 来自工作线程安全)。"""
 
-    stick = pyqtSignal(float, float, float, float)   # (lx, ly, rx, ry) 前/左为正
+    stick = pyqtSignal(float, float, float, float)   # (lx, ly, rx, ry) 前/右为正
     plugged = pyqtSignal(bool, str)                  # (连接状态, 手柄名; 断开为空串)
     failed = pyqtSignal(str)                         # 初始化失败 (线程即将退出)
 

@@ -174,8 +174,7 @@ private:
             //   - 不能填 0: 触发 FAST-LIO "按方位角反推时间"兜底, 重新注入伪畸变;
             //   - 不能填递增值: 反向注入最大 sweep_dur*速度 的剪切。
             // 有段级时刻时: time = 真实捕获时刻 - header, 按真实时刻去畸变。
-            const float kPointTime =
-                static_cast<float>((rotation_hz_ > 0.0) ? 1.0 / rotation_hz_ : 0.1);
+            const float kPointTime = static_cast<float>(sweep_dur);
 
             // velodyne 风格字段: x,y,z,intensity (float32), ring (uint16), time (float32)
             // 点坐标保持 AirSim 原生传感器局部 NED 系, 坐标变换由桥接节点完成

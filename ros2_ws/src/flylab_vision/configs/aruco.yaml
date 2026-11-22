@@ -6,8 +6,8 @@
 #     ros2 run flylab_vision aruco_landing_node --ros-args --params-file <本文件> \
 #         -p dict_name:=DICT_6X6_250 -p target_id:=92
 #
-# /**: 通配所有节点名 (aruco_detector / aruco_landing_node),
-#      各节点只取自己声明的参数, 其余自动忽略, 因此两个节点可共用本文件。
+# /**: 通配所有节点名 (aruco_detector / aruco_landing_node / fractal_detector),
+#      各节点只取自己声明的参数, 其余自动忽略, 因此三个节点可共用本文件。
 /**:
   ros__parameters:
     # ---------- 检测参数 (aruco_node / aruco_landing_node 共用) ----------

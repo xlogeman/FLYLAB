@@ -19,8 +19,6 @@
 
 #include "airsim_common.hpp"
 
-using namespace std::chrono_literals;
-
 class AirsimNavNode : public rclcpp::Node {
 public:
     AirsimNavNode() : Node("airsim_nav_node") {

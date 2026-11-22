@@ -277,7 +277,7 @@ GAMEPAD_DEADZONE = 0.08     # 死区: 内视为回中, 外线性重标定到全�
 # 右摇杆 3/4, 右扳机 5 —— 注意与 SDL Xbox 标准布局不同, 扳机平时恒 -1!
 # 其他手柄用 `python3 /root/flylab/scripts/test-gamepad.py` 看轴号后在此覆盖
 GAMEPAD_AXES = {'lx': 0, 'ly': 1, 'rx': 3, 'ry': 4}
-# 摇杆物理上推是负轴值, 统一翻转成 VirtualJoystick 约定 (前/左为正)
+# 摇杆物理上推是负轴值, 统一翻转成 VirtualJoystick 约定 (前/右为正)
 GAMEPAD_INVERT = {'lx': 1.0, 'ly': -1.0, 'rx': 1.0, 'ry': -1.0}
 
 # ---------- 通信链路 (地面站一键拉起) ----------

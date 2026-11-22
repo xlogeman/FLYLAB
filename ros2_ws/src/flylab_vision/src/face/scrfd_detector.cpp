@@ -317,14 +317,4 @@ void face_items_json(std::ostream & os, const std::vector<ScrfdFace> & faces)
   }
 }
 
-std::string to_annotations_json(
-  const std::vector<ScrfdFace> & faces, const std::string & algo)
-{
-  std::ostringstream os;
-  os << "{\"algo\":\"" << algo << "\",\"items\":[";
-  face_items_json(os, faces);
-  os << "]}";
-  return os.str();
-}
-
 }  // namespace flylab_vision

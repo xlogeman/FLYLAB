@@ -229,7 +229,6 @@ class CameraViewWidget(QWidget):
         # 通道) / 'track'=目标追踪反控 (开关经 track_follow_cb 下发追踪节点)
         self._follow_mode = 'teleop'
         self._track_follow_cb = None   # node.publish_track_follow (界面注入)
-        self._track_follow_on = True   # 反控中机头跟随当前值 (按钮显示依据)
 
         self.gimbal = QWidget()
         g = QGridLayout(self.gimbal)
@@ -265,7 +264,6 @@ class CameraViewWidget(QWidget):
         angles.addWidget(self._gimbal_labels['pitch'])
         angles.addStretch(1)
         cg.addLayout(angles, 1, 0, 1, 2)
-        self._gimbal_core = core
         g.addWidget(core, 1, 0, 2, 1)
 
         # 视场角滑杆 (竖排): 经 simSetCameraFov 实时调整 UE 相机 FOV,
@@ -339,7 +337,6 @@ class CameraViewWidget(QWidget):
         冻结由其处理); track 经 track_follow_cb 下发追踪节点 (offboard
         单写者 —— 反控中偏航指令由算法注入, 开关只门控其机头跟随)。"""
         if self._follow_mode == 'track':
-            self._track_follow_on = bool(on)
             if self._track_follow_cb is not None:
                 self._track_follow_cb(bool(on))
             return
@@ -382,7 +379,6 @@ class CameraViewWidget(QWidget):
             return
         self._follow_mode = mode
         if mode == 'track':
-            self._track_follow_on = True
             self.btn_follow.blockSignals(True)
             self.btn_follow.setChecked(True)
             self.btn_follow.blockSignals(False)

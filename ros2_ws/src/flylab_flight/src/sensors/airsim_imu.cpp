@@ -26,8 +26,6 @@
 
 #include "airsim_common.hpp"
 
-using namespace std::chrono_literals;
-
 class AirsimImuNode : public rclcpp::Node {
 public:
     AirsimImuNode() : Node("airsim_imu_node") {

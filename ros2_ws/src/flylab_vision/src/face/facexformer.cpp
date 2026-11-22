@@ -161,13 +161,6 @@ std::string FaceXFormer::cuda_error() const
   return impl_->cuda_err;
 }
 
-void FaceXFormer::run(const cv::Mat & face_bgr, int task, FaceXResult & out)
-{
-  std::vector<FaceXResult> results;
-  run_batch(std::vector<cv::Mat>{face_bgr}, task, results);
-  out = results.empty() ? FaceXResult() : results.front();
-}
-
 void FaceXFormer::run_batch(
   const std::vector<cv::Mat> & faces, int task,
   std::vector<FaceXResult> & results)

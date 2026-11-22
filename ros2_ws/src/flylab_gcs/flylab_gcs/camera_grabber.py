@@ -332,9 +332,8 @@ class Grabber(threading.Thread):
             self.n, self.t_prev = 0, now
 
     def run(self):
-        # 云台/FOV/航向跟随 RPC 走独立线程 (独立连接): 若与拉图串行,
-        # 机体运动时姿态跟随每拍多 2 次串行 RPC (kinematics + setCameraPose,
-        # 后者还触发 UE 重渲染), 图传帧率会被拉低一半以上
+        # 云台/FOV/航向跟随 RPC 走独立线程 (独立连接, rationale 见
+        # gimbal_controller 模块 docstring)
         self.gimbal.start()
         # AirSim 拉图流水线: N 个 worker 各持独立 RPC 连接并发拉图 (见
         # AIRSIM_FETCH_THREADS 注释); 本机/文件源仍由本线程处理
@@ -419,9 +418,7 @@ class Grabber(threading.Thread):
                 t_start = time.monotonic()
                 is_depth = 'depth' in cam.lower()
                 # 云台/FOV/跟随 RPC 全部在 GimbalController 线程处理 (独立
-                # 连接), 拉图循环只剩 simGetImages —— 机体运动时的姿态跟随
-                # 重下发不再与拉图串行, 否则每拍多 2 次串行 RPC 会把帧率
-                # 拉低一半
+                # 连接), 拉图循环只剩 simGetImages
                 if is_depth:
                     # 深度必须用 DepthPlanar: Scene+float 读回会触发 D3D12
                     # 断言并返回 NaN/Inf

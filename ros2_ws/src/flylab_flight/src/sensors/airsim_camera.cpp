@@ -28,8 +28,6 @@
 
 #include "airsim_common.hpp"
 
-using namespace std::chrono_literals;
-
 class AirsimCameraNode : public rclcpp::Node {
 public:
     AirsimCameraNode() : Node("airsim_camera_node") {

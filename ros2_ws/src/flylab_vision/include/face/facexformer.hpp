@@ -71,10 +71,6 @@ public:
   FaceXFormer(const FaceXFormer &) = delete;
   FaceXFormer & operator=(const FaceXFormer &) = delete;
 
-  /// 单脸推理 (BGR, 任意尺寸, 内部缩放 224), 结果解到 out。
-  /// task 超出 0..5 时抛 std::invalid_argument
-  void run(const cv::Mat & face_bgr, int task, FaceXResult & out);
-
   /// 多脸批量推理: 各脸分别缩放 224 拼 [N,3,224,224] 一次前向 (模型输入
   /// batch 维为 symbolic 时分块 ≤8, 静态 batch=1 自动退化为逐张), results
   /// 与 faces 一一对应。task 越界抛 std::invalid_argument

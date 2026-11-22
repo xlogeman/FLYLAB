@@ -102,18 +102,17 @@ private:
         }
     }
 
-    // 按时间戳插值位姿; 返回 false 表示超出缓冲范围 (过旧/过新且无法覆盖)
-    bool get_pose_at(const rclcpp::Time& t, tf2::Quaternion& q_out, tf2::Vector3& p_out) const {
-        if (hist_.empty()) return false;
-        if (t <= hist_.front().t) return false;         // 过旧, 调用方决定丢弃
-        if (t >= hist_.back().t) {                       // 略超前: 用最新位姿
-            q_out = hist_.back().q;
-            p_out = hist_.back().p;
-            return true;
+    // 按时间戳在单调样本序列中插值位姿 (要求 size>=2 且 front.t < t < back.t);
+    // 返回 false 表示区间不覆盖
+    static bool interp_pose_in(const std::deque<PoseSample>& hist,
+                               const rclcpp::Time& t,
+                               tf2::Quaternion& q_out, tf2::Vector3& p_out) {
+        if (hist.size() < 2 || t <= hist.front().t || t >= hist.back().t) {
+            return false;
         }
-        for (size_t i = hist_.size() - 1; i > 0; --i) {
-            const auto& s0 = hist_[i - 1];
-            const auto& s1 = hist_[i];
+        for (size_t i = hist.size() - 1; i > 0; --i) {
+            const auto& s0 = hist[i - 1];
+            const auto& s1 = hist[i];
             if (s0.t <= t && t <= s1.t) {
                 const double alpha = (s1.t == s0.t)
                     ? 0.0
@@ -124,6 +123,18 @@ private:
             }
         }
         return false;  // 不可达兜底 (时间戳单调, 区间必命中)
+    }
+
+    // 按时间戳插值位姿; 返回 false 表示超出缓冲范围 (过旧/过新且无法覆盖)
+    bool get_pose_at(const rclcpp::Time& t, tf2::Quaternion& q_out, tf2::Vector3& p_out) const {
+        if (hist_.empty()) return false;
+        if (t <= hist_.front().t) return false;         // 过旧, 调用方决定丢弃
+        if (t >= hist_.back().t) {                       // 略超前: 用最新位姿
+            q_out = hist_.back().q;
+            p_out = hist_.back().p;
+            return true;
+        }
+        return interp_pose_in(hist_, t, q_out, p_out);
     }
 
     static sensor_msgs::msg::PointField make_field(
@@ -174,31 +185,11 @@ private:
         const tf2::Matrix3x3 r_end(q_end);
 
         // 位姿快照拷贝一次, 循环内免锁插值
-        std::vector<PoseSample> snap;
+        std::deque<PoseSample> hist_snap;
         if (deskew_en_) {
             std::lock_guard<std::mutex> lk(hist_mutex_);
-            snap.assign(hist_.begin(), hist_.end());
+            hist_snap = hist_;
         }
-        std::deque<PoseSample> hist_snap(snap.begin(), snap.end());
-        auto interp_pose = [&](const rclcpp::Time& t,
-                               tf2::Quaternion& q_o, tf2::Vector3& p_o) -> bool {
-            if (hist_snap.size() < 2 || t <= hist_snap.front().t || t >= hist_snap.back().t) {
-                return false;
-            }
-            for (size_t i = hist_snap.size() - 1; i > 0; --i) {
-                const auto& s0 = hist_snap[i - 1];
-                const auto& s1 = hist_snap[i];
-                if (s0.t <= t && t <= s1.t) {
-                    const double alpha = (s1.t == s0.t)
-                        ? 0.0
-                        : (t - s0.t).seconds() / (s1.t - s0.t).seconds();
-                    p_o = s0.p.lerp(s1.p, alpha);
-                    q_o = s0.q.slerp(s1.q, alpha);
-                    return true;
-                }
-            }
-            return false;
-        };
 
         // XYZI 字段 (SUPER 按 pcl::PointXYZI 解析, intensity < intensity_thresh 的点被过滤)
         struct PointXYZI { float x, y, z, intensity; };
@@ -233,7 +224,7 @@ private:
                     rclcpp::Duration::from_seconds(pt);
                 tf2::Quaternion q_i;
                 tf2::Vector3 t_i;
-                if (interp_pose(t_cap, q_i, t_i)) {
+                if (interp_pose_in(hist_snap, t_cap, q_i, t_i)) {
                     p_w = tf2::Matrix3x3(q_i) * p_body_flu + t_i;
                     placed = true;
                 }

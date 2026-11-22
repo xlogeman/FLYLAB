@@ -22,8 +22,6 @@
 
 #include "airsim_common.hpp"
 
-using namespace std::chrono_literals;
-
 class AirsimOdomNode : public rclcpp::Node {
 public:
     AirsimOdomNode() : Node("airsim_odom_node") {

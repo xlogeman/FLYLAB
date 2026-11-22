@@ -620,9 +620,7 @@ class GimbalController(threading.Thread):
     # ---------- 后台线程 ----------
 
     def run(self):
-        """云台/FOV/航向跟随后台线程 (独立 RPC 连接): 与拉图线程分离,
-        姿态跟随的周期重下发 (kinematics + setCameraPose, 后者触发 UE
-        重渲染) 不再占抓取往返 —— 机体运动时图传帧率不被拉低。
+        """云台/FOV/航向跟随后台线程 (独立 RPC 连接, rationale 见模块 docstring)。
 
         每 GIMBAL_LOOP_HZ 一拍: 心跳超时检查 → 摇杆步进/回中动画 →
         航向跟随反卷 → 周期重下发云台 → FOV 对齐。下发频率仍由
