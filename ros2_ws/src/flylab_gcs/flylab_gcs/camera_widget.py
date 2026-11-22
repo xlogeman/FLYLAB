@@ -211,19 +211,20 @@ class CameraViewWidget(QWidget):
         btn_follow = QPushButton('跟随')
         btn_follow.setFixedWidth(40)
         btn_follow.setCheckable(True)
-        btn_follow.setEnabled(False)   # 可用性由接管控制门控刷新 (遥控接管中/云台跟随中)
+        btn_follow.setEnabled(False)   # 可用性由接管控制门控刷新 (遥控接管中=强制开+锁定/云台跟随中=可点开关)
         btn_follow.setStyleSheet(
             'QPushButton:checked { background-color: #2d8a3e; color: white; }')
         btn_follow.setToolTip(
-            '航向跟随 (机头跟随): 手动遥控中 = 转动云台偏航时机头跟着转向'
-            '视线方向, 追上后云台偏航自动回中 (限位变为最大超前角, 指令走'
-            '遥控 offboard 通道); 目标追踪反控中 = 机头是否跟随视线方向'
-            ' (关闭时机头保持航向, 仅云台伺服转动保持目标居中, 云台偏航'
-            ' ±45° 限位内)。需先开启通信链路; 视觉反控降落中由算法节点'
-            '自己跟随, 此按钮不可用')
+            '航向跟随 (机头跟随): 手动遥控中默认开启且锁定 (转动云台偏航'
+            '时机头跟着转向视线方向, 追上后云台偏航自动回中, 限位变为最大'
+            '超前角, 指令走遥控 offboard 通道), 退出接管自动关闭; 目标追踪'
+            '反控中 = 机头是否跟随视线方向的可点开关 (关闭时机头保持航向, '
+            '仅云台伺服转动保持目标居中, 云台偏航 ±45° 限位内)。需先开启'
+            '通信链路; 视觉反控降落中由算法节点自己跟随, 此按钮不可用')
         btn_follow.toggled.connect(self._on_follow_toggle)
         self.btn_follow = btn_follow
         self._follow_avail = False
+        self._follow_applied = None   # 最近一次落地按钮状态时的语义模式 (模式切换后强制重落地)
         # 跟随按钮语义模式: 'teleop'=手动遥控 (走抓取器反卷+遥控 offboard
         # 通道) / 'track'=目标追踪反控 (开关经 track_follow_cb 下发追踪节点)
         self._follow_mode = 'teleop'
@@ -347,11 +348,25 @@ class CameraViewWidget(QWidget):
     def set_follow_available(self, ok):
         """跟随按钮可用性 (接管控制 33ms 轮询门控): 手动遥控接管中, 或
         目标追踪反控中 (开关机头跟随)。不随云台面板锁定置灰, 可用性
-        完全由本标志决定。"""
-        if ok == self._follow_avail:
+        完全由本标志决定。
+        - 手动遥控 (teleop) 可用: 跟随默认开启且锁定不可点 —— 航向跟随
+          是遥控跟拍的固有行为, 不留开关; 退出接管自动关闭 (勾选弹起经
+          toggled 走 grabber.set_follow(False))
+        - 目标追踪反控 (track) 可用: 保持可点, 用户可开关机头跟随"""
+        if ok == self._follow_avail and self._follow_applied == self._follow_mode:
             return
         self._follow_avail = ok
-        self.btn_follow.setEnabled(ok)
+        self._follow_applied = self._follow_mode
+        if ok and self._follow_mode == 'teleop':
+            if not self.btn_follow.isChecked():
+                self.btn_follow.setChecked(True)   # toggled → grabber.set_follow(True)
+            self.btn_follow.setEnabled(False)
+        elif ok:
+            self.btn_follow.setEnabled(True)
+        else:
+            if self.btn_follow.isChecked():
+                self.btn_follow.setChecked(False)  # 退出接管自动关闭 (toggled 分发)
+            self.btn_follow.setEnabled(False)
 
     def set_track_follow_cb(self, cb):
         """注入反控机头跟随开关的发布通道 (node.publish_track_follow)。"""
@@ -361,8 +376,8 @@ class CameraViewWidget(QWidget):
         """切换跟随按钮语义 ('teleop'|'track', 接管控制门控调用):
         进入 track 时按钮勾选复位为开 (机头跟随默认开, 与节点默认一致),
         并立即下发 True 兜底 —— 节点的开关跨反控会话保持, 上次关掉后
-        重新反控须复位同步; 退回 teleop 时不动按钮, 状态由抓取线程
-        (get_follow) 的周期同步自动校正。"""
+        重新反控须复位同步; 切换后立即按新语义重落地可用性 (teleop=
+        默认开+锁定, track=可点), 不等下一轮 33ms 轮询。"""
         if mode == self._follow_mode:
             return
         self._follow_mode = mode
@@ -373,6 +388,8 @@ class CameraViewWidget(QWidget):
             self.btn_follow.blockSignals(False)
             if self._track_follow_cb is not None:
                 self._track_follow_cb(True)
+        self._follow_applied = None
+        self.set_follow_available(self._follow_avail)
 
     def _on_fov_slider(self, value):
         """视场滑杆变化 → 下发 FOV (拖动中实时跟手, 节流靠抓取帧率)。
@@ -421,7 +438,9 @@ class CameraViewWidget(QWidget):
         self._joy.setEnabled(ok)
         self._btn_center.setEnabled(ok)
         self._btn_stab.setEnabled(ok)
-        self.btn_follow.setEnabled(self._follow_avail)   # 独立门控 (接管轮询)
+        # "跟随"按钮完全不在此维护: 可用性/锁定由接管轮询独立决定
+        # (set_follow_available 按语义落地, teleop=默认开+锁定) —— 这里
+        # 若按 _follow_avail 重设会把 teleop 锁定改回可点
         self._fov_widget.setEnabled(ok)
         self._zoom_widget.setEnabled(not self._gimbal_locked)
 

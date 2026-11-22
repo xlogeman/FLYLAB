@@ -194,6 +194,10 @@ class Grabber(threading.Thread):
         """仅退出 UI 来源的跟随 (交还遥控/异常复位)。"""
         self.gimbal.clear_ui_follow()
 
+    def note_user_yaw(self, active):
+        """遥控偏航杆活动标记 (外环定时器上报, 见 GimbalController)。"""
+        self.gimbal.note_user_yaw(active)
+
     def set_algo_follow(self, on):
         """反控算法经 /flylab/gimbal_follow 请求/取消跟随。"""
         self.gimbal.set_algo_follow(on)

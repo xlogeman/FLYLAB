@@ -156,7 +156,9 @@ class LandingPanelMixin:
         # 航向跟随按钮: 手动遥控接管成功 (offboard 通道可用) 或目标追踪
         # 反控中 (复用为机头跟随开关, 经 /flylab/track_follow 下发节点,
         # offboard 单写者 —— 偏航指令仍由算法注入, 按钮只门控), 均需
-        # AirSim 源在线; 视觉反控降落中不可开 (对准码朝向是降落几何前提)
+        # AirSim 源在线; 视觉反控降落中不可开 (对准码朝向是降落几何前提)。
+        # 手动遥控中跟随默认开且锁定不可点 (固有行为, 开关在 camera_widget
+        # 按语义落地), 退出接管自动关闭
         airsim_ok = (self.camera_tab.grabber.airsim_connected()
                      and self.camera_tab.grabber.get_gimbal() is not None)
         self.camera_tab.set_track_follow_cb(self.node.publish_track_follow)

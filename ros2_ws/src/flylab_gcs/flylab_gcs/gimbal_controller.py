@@ -105,6 +105,8 @@ class GimbalController(threading.Thread):
         self._algo_cmd_t = None      # 最近一次算法云台指令时刻 (心跳判定)
         self._az_target = None       # 视线世界方位锚点 (度, 北偏东右+), None=待快照
         self._veh_yaw_t = None       # 航向测量时刻 (monotonic, 秒)
+        self._veh_yaw_prev = None    # 上拍航向 (用户转机头时按增量平移锚点用)
+        self._user_yaw_t = None      # 最近一次遥控偏航杆活动时刻 (None=未在打杆)
         self.running = True
 
     # ---------- 状态通知 (Grabber 驱动) ----------
@@ -220,6 +222,7 @@ class GimbalController(threading.Thread):
                 self._follow = True
                 self._follow_src = source
                 self._az_target = None   # 来源切换重快照 (值不变, 仅换归属)
+                self._veh_yaw_prev = None
                 self._gimbal_anim = None
             else:
                 if not self._follow or self._follow_src != source:
@@ -232,6 +235,13 @@ class GimbalController(threading.Thread):
         """交还遥控/异常复位时调用: 仅退出 UI 来源的跟随, 算法来源的
         跟随不受遥控生命周期影响 (由算法自己退或心跳超时退)。"""
         self.set_follow(False, source='ui')
+
+    def note_user_yaw(self, active):
+        """遥控偏航杆活动标记 (外环定时器 25Hz 调用): 跟随开启时用户
+        打杆转机头, 锚点随实测航向增量平移 (相机偏航临时刚性, 画面跟转
+        不拉回), 机制见 _follow_tick。"""
+        with self.lock:
+            self._user_yaw_t = time.monotonic() if active else None
 
     def set_algo_follow(self, on):
         """反控算法经 /flylab/gimbal_follow 请求/取消跟随 (ros_node 转发)。"""
@@ -438,6 +448,18 @@ class GimbalController(threading.Thread):
             if self._az_target is None:
                 # 进入跟随后的首次测量: 快照锚点 = 航向 + 当前偏航 (不跳变)
                 self._az_target = _wrap180(yaw_b + self._gimbal[0])
+            elif (self._user_yaw_t is not None
+                  and time.monotonic() - self._user_yaw_t
+                  <= config.GIMBAL_FOLLOW_USER_HOLD_SEC
+                  and self._veh_yaw_prev is not None):
+                # 用户打偏航杆转机头: 锚点随实测航向增量平移 —— 相机偏航
+                # 变刚性 (画面跟转), 松杆后锚点停在新视线方向; 误差两侧
+                # 同移保持不变, 外环不再把机头拉回。增量取 wrap 差 (防
+                # 359→0 跳变); 打杆期间外环也让位 (teleop_panel)
+                self._az_target = _wrap180(
+                    self._az_target
+                    + _wrap180(yaw_b - self._veh_yaw_prev))
+            self._veh_yaw_prev = yaw_b
             yaw = _wrap180(self._az_target - yaw_b)
             limit = config.GIMBAL_YAW_LIMIT_DEG
             if abs(yaw) > limit:
@@ -475,6 +497,8 @@ class GimbalController(threading.Thread):
             self._algo_cmd_t = None
             self._az_target = None
             self._veh_yaw_t = None
+            self._veh_yaw_prev = None
+            self._user_yaw_t = None
 
     def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur, q_b=None):
         """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。

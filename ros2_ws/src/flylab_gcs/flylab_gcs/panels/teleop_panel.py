@@ -107,9 +107,15 @@ class TeleopPanelMixin:
         云台偏航 (视线世界方位 − 航向, 右+), 死区外按 P 律折算偏航角速率,
         归一化后并入遥控量 angular.z (符号取反: teleop 左转+)。内环是
         teleop_node/PX4 的偏航角速率闭环。未接管遥控 / 数据过期发零
-        (跟随开关本身只在接管中可开, 这里兜底复位残留指令)。"""
+        (跟随开关本身只在接管中可开, 这里兜底复位残留指令)。
+        用户打偏航杆转机头: 持续上报活动标记 (云台线程锚点随实测航向
+        平移, 相机偏航临时刚性), 外环同时让位 —— 锚点平移滞后测量一拍,
+        不让位会在快转时有小幅反向指令互搏。"""
+        user_yaw = (self._teleop_live and abs(self._teleop_axes.get('w', 0.0))
+                    > config.GIMBAL_FOLLOW_USER_YAW_DEADBAND)
+        self.camera_tab.grabber.note_user_yaw(user_yaw)
         cmd = 0.0
-        if self._teleop_live:
+        if self._teleop_live and not user_yaw:
             err = self.camera_tab.grabber.get_follow_error()
             if err is not None and abs(err) > config.GIMBAL_FOLLOW_DEADBAND_DEG:
                 rate = min(abs(err) * config.GIMBAL_FOLLOW_KP,

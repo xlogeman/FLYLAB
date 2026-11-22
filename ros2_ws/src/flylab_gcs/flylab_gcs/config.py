@@ -71,6 +71,8 @@ GIMBAL_FOLLOW_KP = 1.2                 # P 增益 (1/s): 满速率对应误差 �
 GIMBAL_FOLLOW_DEADBAND_DEG = 2.0       # 死区: 悬停姿态噪声不触发无限微转
 GIMBAL_FOLLOW_YAW_RATE_DEG_S = 45.0    # 偏航角速率上限 (须 = teleop yaw_rate_deg)
 GIMBAL_FOLLOW_FRESH_SEC = 0.5          # 航向测量新鲜度上限 (过期按误差 0 停转)
+GIMBAL_FOLLOW_USER_YAW_DEADBAND = 0.05 # 遥控偏航杆死区 (归一化): 超过视为用户在转机头
+GIMBAL_FOLLOW_USER_HOLD_SEC = 0.3      # 用户转机头判定窗口: 锚点随实测航向平移 (相机偏航临时刚性)
 
 # ---------- 航向跟随的算法通道 (视觉反控算法控制云台 + 机头跟随) ----------
 # offboard 单写者原则: 反控节点独占 setpoint 流时, 跟随指令必须由算法
