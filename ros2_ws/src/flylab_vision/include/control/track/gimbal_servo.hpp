@@ -1,6 +1,6 @@
 // Copyright 2026 flylab
-#ifndef FLYLAB_VISION__CONTROL__GIMBAL_SERVO_HPP_
-#define FLYLAB_VISION__CONTROL__GIMBAL_SERVO_HPP_
+#ifndef FLYLAB_VISION__CONTROL__TRACK__GIMBAL_SERVO_HPP_
+#define FLYLAB_VISION__CONTROL__TRACK__GIMBAL_SERVO_HPP_
 
 #include <atomic>
 #include <chrono>
@@ -222,4 +222,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // FLYLAB_VISION__CONTROL__GIMBAL_SERVO_HPP_
+#endif  // FLYLAB_VISION__CONTROL__TRACK__GIMBAL_SERVO_HPP_

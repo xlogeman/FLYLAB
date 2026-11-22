@@ -1,6 +1,6 @@
 // Copyright 2026 flylab
-#ifndef FLYLAB_VISION__CONTROL__TRACK_TAKEOVER_HPP_
-#define FLYLAB_VISION__CONTROL__TRACK_TAKEOVER_HPP_
+#ifndef FLYLAB_VISION__CONTROL__TRACK__TRACK_TAKEOVER_HPP_
+#define FLYLAB_VISION__CONTROL__TRACK__TRACK_TAKEOVER_HPP_
 
 #include <algorithm>
 #include <chrono>
@@ -9,9 +9,9 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 
+#include "control/common/gimbal_follow.hpp"
 #include "control/px4_offboard_client.hpp"
 
 namespace flylab_vision
@@ -29,9 +29,9 @@ namespace flylab_vision
 ///         offboard 心跳 (速度全零 = 原地悬停, yaw 为机头跟随)
 ///   交还: requestLoiter 切回 AUTO.LOITER; 上锁 / OFFBOARD 被外部切换 /
 ///         图像断流 / 接管超时 自动交还并回 idle
-/// 机头跟随: 发布 /flylab/gimbal_follow 请求相机侧反卷 (世界系锚点,
-/// 0.5s 保活), 订阅 /flylab/gimbal_yaw_err (latched) 按误差 P 律注入偏航
-/// 角速率 —— 与 aruco_landing 同一通道约定; 可经 /flylab/track_follow
+/// 机头跟随: 经 GimbalFollow 组件 (control/common/gimbal_follow.hpp, 通道
+/// 约定同 aruco_landing) 请求相机侧反卷 + 订阅误差, 按误差 P 律注入偏航
+/// 角速率; 可经 /flylab/track_follow
 /// (latched Bool, 地面站云台面板"跟随"按钮) 开关 —— 关闭时机头保持
 /// 航向仅注入零偏航, 云台伺服 (相机侧反卷) 不受影响, 目标仍保持画面
 /// 中央, 云台偏航被 ±45° 限位收口。
@@ -88,20 +88,14 @@ public:
     // ---------- 地面站通道 (状态回传 / 机头跟随, 约定同 aruco_landing) ----------
     const auto status_topic = node.declare_parameter<std::string>(
       "status_topic", "/flylab/track_status");
+    status_pub_ =
+      node.create_publisher<std_msgs::msg::String>(status_topic, 10);
+    // 机头跟随通道 (复用组件: 请求 0.5s 保活 + 误差 latched 订阅)
     const auto follow_req_topic = node.declare_parameter<std::string>(
       "follow_req_topic", "/flylab/gimbal_follow");
     const auto follow_err_topic = node.declare_parameter<std::string>(
       "follow_err_topic", "/flylab/gimbal_yaw_err");
-    status_pub_ =
-      node.create_publisher<std_msgs::msg::String>(status_topic, 10);
-    follow_req_pub_ =
-      node.create_publisher<std_msgs::msg::Bool>(follow_req_topic, 10);
-    follow_err_sub_ = node.create_subscription<std_msgs::msg::Float64>(
-      follow_err_topic,
-      rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
-      [this](const std_msgs::msg::Float64::SharedPtr msg) {
-        yaw_err_deg_ = msg->data;   // NaN = 未跟随/测量过期
-      });
+    follow_ = std::make_unique<GimbalFollow>(node, follow_req_topic, follow_err_topic);
     // 机头跟随开关 (地面站云台面板"跟随"按钮, latched): 默认开 —— 与
     // 地面站未发布时的旧行为一致; 关闭仅停偏航注入, 云台伺服照常
     const auto follow_switch_topic = node.declare_parameter<std::string>(
@@ -158,7 +152,7 @@ public:
       RCLCPP_INFO(node_.get_logger(), "目标追踪反控结束 (%s)", reason);
     }
     ever_engaged_ = false;
-    request_follow(false);
+    follow_->request(false);
     publish_status("idle");
   }
 
@@ -218,7 +212,7 @@ private:
       return;
     }
     // 已接管: 机头跟随 + 悬停 (速度全零), offboard 心跳随 setpoint 持续发
-    request_follow(true);
+    follow_->request(true);
     px4_->sendVelocityFRDYawRate(0.0, 0.0, 0.0, follow_yaw_rate());
   }
 
@@ -232,10 +226,10 @@ private:
   ///      对准转得越慢, 平滑收敛不冲过; 超过后恢复线性全增益
   double follow_yaw_rate()
   {
-    if (!nose_follow_ || std::isnan(yaw_err_deg_)) {
+    const double err = follow_->yaw_err_deg();   // NaN = 未跟随/测量过期
+    if (!nose_follow_ || std::isnan(err)) {
       return 0.0;
     }
-    const double err = yaw_err_deg_;
     const double abs_err = std::fabs(err);
     if (in_deadband_) {
       if (abs_err < follow_deadband_deg_ * 1.5) {
@@ -252,27 +246,6 @@ private:
     return rate_deg * M_PI / 180.0;
   }
 
-  /// 机头跟随请求 (相机侧反卷): 开启 0.5s 保活重发 (自愈地面站侧悄悄
-  /// 退出的失步), 关闭只发一次
-  void request_follow(bool on)
-  {
-    const auto now = std::chrono::steady_clock::now();
-    if (on) {
-      if (follow_on_ && now - follow_req_t_ <
-          std::chrono::milliseconds(500))
-      {
-        return;
-      }
-      follow_req_t_ = now;
-    } else if (!follow_on_) {
-      return;
-    }
-    follow_on_ = on;
-    std_msgs::msg::Bool m;
-    m.data = on;
-    follow_req_pub_->publish(m);
-  }
-
   void publish_status(const char * status)
   {
     std_msgs::msg::String m;
@@ -282,18 +255,14 @@ private:
 
   rclcpp::Node & node_;
   std::unique_ptr<Px4OffboardClientBase> px4_;
+  std::unique_ptr<GimbalFollow> follow_;      // 机头跟随通道 (复用组件)
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_req_pub_;
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_err_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_switch_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   bool active_ = false;
   bool ever_engaged_ = false;        // 曾确认进入 offboard (外部切换判定)
   bool nose_follow_ = true;          // 机头跟随开关 (/flylab/track_follow)
-  bool follow_on_ = false;
-  double yaw_err_deg_ = std::nan("");
-  std::chrono::steady_clock::time_point follow_req_t_;
   std::chrono::steady_clock::time_point frame_t_;
   double warmup_sec_ = 1.0;
   double retry_sec_ = 10.0;
@@ -307,4 +276,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // FLYLAB_VISION__CONTROL__TRACK_TAKEOVER_HPP_
+#endif  // FLYLAB_VISION__CONTROL__TRACK__TRACK_TAKEOVER_HPP_

@@ -1,13 +1,13 @@
 // Copyright 2026 flylab
 /// 朝向对齐子系统 —— 云台对准码 0° 方向 (+偏置), 机头经跟随通道追随
-#ifndef FLYLAB_VISION__ARUCO__YAW_ALIGNER_HPP_
-#define FLYLAB_VISION__ARUCO__YAW_ALIGNER_HPP_
+#ifndef FLYLAB_VISION__CONTROL__ARUCO__YAW_ALIGNER_HPP_
+#define FLYLAB_VISION__CONTROL__ARUCO__YAW_ALIGNER_HPP_
 
 #include <cmath>
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "aruco/landing_math.hpp"
+#include "control/aruco/landing_math.hpp"
 
 namespace flylab_vision
 {
@@ -184,4 +184,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // FLYLAB_VISION__ARUCO__YAW_ALIGNER_HPP_
+#endif  // FLYLAB_VISION__CONTROL__ARUCO__YAW_ALIGNER_HPP_

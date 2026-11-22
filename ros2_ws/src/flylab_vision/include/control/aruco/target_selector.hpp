@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// 降落目标码选择器 —— 指定 ID 优先 + 最大码回退 (多尺度嵌套码)
-#ifndef FLYLAB_VISION__ARUCO__TARGET_SELECTOR_HPP_
-#define FLYLAB_VISION__ARUCO__TARGET_SELECTOR_HPP_
+#ifndef FLYLAB_VISION__CONTROL__ARUCO__TARGET_SELECTOR_HPP_
+#define FLYLAB_VISION__CONTROL__ARUCO__TARGET_SELECTOR_HPP_
 
 #include <vector>
 
@@ -145,4 +145,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // FLYLAB_VISION__ARUCO__TARGET_SELECTOR_HPP_
+#endif  // FLYLAB_VISION__CONTROL__ARUCO__TARGET_SELECTOR_HPP_

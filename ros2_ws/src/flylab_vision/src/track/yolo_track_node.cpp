@@ -12,9 +12,9 @@
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
 ///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start/stop
 ///      开关 (地面站"接管控制→目标追踪"); 接管 offboard 拿到飞机控制权
-///      (悬停跟拍 + 机头跟随, 见 control/track_takeover.hpp), 同时云台
+///      (悬停跟拍 + 机头跟随, 见 control/track/track_takeover.hpp), 同时云台
 ///      伺服按追踪框相对画面中心的偏移发 /flylab/gimbal_cmd 反控软云台,
-///      让目标保持在画面中央 (control/gimbal_servo.hpp)
+///      让目标保持在画面中央 (control/track/gimbal_servo.hpp)
 ///
 /// 流程: 启动后逐帧检测 (未追踪时显示全部检测 + 框选区域) → 地面站框选
 /// 目标 → track_begin 锁定: 框选区内 IoU 最大的检测裁块出 ReID 外观向量
@@ -37,8 +37,8 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
-#include "control/gimbal_servo.hpp"
-#include "control/track_takeover.hpp"
+#include "control/track/gimbal_servo.hpp"
+#include "control/track/track_takeover.hpp"
 #include "detect/yolo_detector.hpp"
 #include "track/yolo_tracker.hpp"
 

@@ -66,10 +66,11 @@
 
 #include "aruco/aruco_detector.hpp"
 #include "aruco/fractal_detector.hpp"
-#include "aruco/landing_math.hpp"
-#include "aruco/target_selector.hpp"
-#include "aruco/yaw_aligner.hpp"
+#include "control/aruco/landing_math.hpp"
+#include "control/aruco/target_selector.hpp"
+#include "control/aruco/yaw_aligner.hpp"
 #include "common/image_utils.hpp"
+#include "control/common/gimbal_follow.hpp"
 #include "control/px4_offboard_client.hpp"
 
 namespace flylab_vision
@@ -244,7 +245,7 @@ public:
       "follow_err_topic", "/flylab/gimbal_yaw_err");
 
     // ---------- 目标选择 / 朝向对齐 / 趋势角子系统 (逻辑拆分, 参数在此装配) ----------
-    // 逻辑见 include/aruco/target_selector.hpp 与 yaw_aligner.hpp
+    // 逻辑见 include/control/aruco/target_selector.hpp 与 yaw_aligner.hpp
     selector_ = std::make_unique<TargetSelector>(get_logger(),
       TargetSelector::Params{target_id_, target_fallback_, reacquire_sec_});
     yaw_aligner_ = std::make_unique<YawAligner>(get_logger(), get_clock(),
@@ -372,13 +373,9 @@ public:
       gimbal_cmd_topic, 10);
 
     // ---------- 机头跟随通道 ----------
-    // 跟随请求: 开启 0.5s 保活重发 (自愈地面站侧悄悄退出的失步),
-    // 关闭只发一次; 误差广播 latched 订阅 (后启动即拿当前值),
-    // 新鲜度靠地面站 1s 保活重发判定
-    follow_req_pub_ = create_publisher<std_msgs::msg::Bool>(follow_req_topic, 10);
-    follow_err_sub_ = create_subscription<std_msgs::msg::Float64>(
-      follow_err_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_follow_err(*msg);});
+    // 复用组件 (请求 0.5s 保活重发自愈失步 + 关闭边沿一次; 误差 latched
+    // 订阅, 新鲜度靠地面站 1s 保活重发判定, 见 gimbal_follow.hpp)
+    follow_ = std::make_unique<GimbalFollow>(*this, follow_req_topic, follow_err_topic);
 
     // ---------- 右栏"算法输出"面板数据 ----------
     // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
@@ -451,7 +448,7 @@ private:
     yaw_aligner_->reset();    // 航向重新对齐
     marker_ned_valid_ = false;  // 落点估计滤波复位 (重新捕获)
     marker_ned_id_ = -1;
-    gimbal_follow_req_ = false;   // 跟随请求复位 (上次运行若遗留, 地面站心跳超时自退)
+    follow_->reset_request();     // 跟随请求复位 (上次运行若遗留, 地面站心跳超时自退)
     trend_est_.reset();
     last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     px4_->takeoverReset(now());
@@ -483,7 +480,7 @@ private:
     state_ = State::IDLE;
     start_pending_ = false;  // 取消/完成时丢弃尚未触发的挂起指令
     gimbalYawRate(0.0);      // 停云台 (速率指令持续生效, 必须显式清零)
-    requestGimbalFollow(false);   // 停跟随 (相机切回跟随机头)
+    follow_->request(false);      // 停跟随 (相机切回跟随机头)
     if (notify) {
       publishStatus(kStatusIdle);
     }
@@ -602,7 +599,7 @@ private:
     const double rate = clampd(yaw_rate_deg, yaw_rate_max_deg_);
     const bool changed = std::fabs(rate - gimbal_rate_sent_) > 0.5;
     const bool keep = (now() - gimbal_pub_t_).seconds() >= 0.5;
-    if (!changed && !(keep && (rate != 0.0 || gimbal_follow_req_))) {
+    if (!changed && !(keep && (rate != 0.0 || follow_->requested()))) {
       return;
     }
     std_msgs::msg::Float64MultiArray msg;
@@ -610,38 +607,6 @@ private:
     gimbal_cmd_pub_->publish(msg);
     gimbal_rate_sent_ = rate;
     gimbal_pub_t_ = now();
-  }
-
-  /// 机头跟随请求 (相机侧反卷, 世界锚定): 开启按 0.5s 保活重发 —— 地面站
-  /// 侧跟随可能被悄悄退出 (gimbal_cmd 心跳超时/抓取线程重连复位), 节点
-  /// 无感知, 重发可在 0.5s 内拉回跟随自愈失步; 关闭仍为边沿触发 (只发
-  /// 一次, GCS 断流超时自退兜底)。
-  void requestGimbalFollow(bool on)
-  {
-    const bool changed = (on != gimbal_follow_req_);
-    const bool keep = (now() - follow_req_t_).seconds() >= 0.5;
-    if (!changed && !(on && keep)) {
-      return;
-    }
-    std_msgs::msg::Bool msg;
-    msg.data = on;
-    follow_req_pub_->publish(msg);
-    gimbal_follow_req_ = on;
-    follow_req_t_ = now();
-  }
-
-  // ---------------- 地面站跟随误差广播 ----------------
-  void on_follow_err(const std_msgs::msg::Float64 & msg)
-  {
-    follow_err_valid_ = std::isfinite(msg.data);
-    follow_err_ = follow_err_valid_ ? msg.data : 0.0;
-    follow_err_t_ = now();
-  }
-
-  /// 跟随误差是否可用 (非 NaN 且在新鲜度内; 地面站 1s 保活 + 传输裕量)
-  bool followErrUsable() const
-  {
-    return follow_err_valid_ && (now() - follow_err_t_).seconds() <= follow_fresh_sec_;
   }
 
   // ---------------- 地面站码边长同步 ----------------
@@ -1004,19 +969,19 @@ private:
     // 下降会放大误差, 门控自动收小停降回去对齐, 自平衡
 
     // ---------------- 朝向对齐 (全程并行: 云台 → 码 0° 方向 + 偏置, 机头跟随) ----------------
-    // 状态机/滤波/锁定/门控在 YawAligner (include/aruco/yaw_aligner.hpp);
+    // 状态机/滤波/锁定/门控在 YawAligner (include/control/aruco/yaw_aligner.hpp);
     // 这里只提供测量输入: 云台方位 = 画面上方 (0,0,-1) 经云台姿态旋到机
     // 体系取水平方位 (与码方位同一姿态链, 不假设相机垂直向下), 码方位见
-    // markerYawDeg()。跟随请求的收发 (requestGimbalFollow) 属 ROS 管道留在本节点
+    // markerYawDeg()。跟随请求/误差收发经 GimbalFollow 组件 (gimbal_follow.hpp)
     const cv::Point3d up_b = quat_rot(cam_ori_, 0.0, 0.0, -1.0);
     const double gimbal_az = std::atan2(up_b.y, up_b.x) * 180.0 / M_PI;
     // fractal 各层同图案同朝向, 用固定伪 ID —— 层级切换不触发朝向基准复位
     const auto yaw = yaw_aligner_->update(
-      dt, fractal_mode_ ? 0 : tgt->id,
-      markerYawDeg(*tgt), gimbal_az, followErrUsable(), follow_err_);
+      dt, fractal_mode_ ? 0 : tgt->id, markerYawDeg(*tgt), gimbal_az,
+      follow_->err_usable(follow_fresh_sec_), follow_->yaw_err_deg());
     // 跟随接入: 未锁定期间持续请求相机侧反卷 (0.5s 保活自愈失步), 锁定
     // (含超时放行) 边沿切回跟随机头 (视角连续不跳变); 关闭对齐不请求
-    requestGimbalFollow(yaw_align_ && !yaw.locked);
+    follow_->request(yaw_align_ && !yaw.locked);
     gimbalYawRate(yaw.gimbal_rate);
 
     // 下降速度合成: image = 面积调度 (近慢远快); pose3d = 离码高度线性调度
@@ -1068,7 +1033,7 @@ private:
           area, align_err, trend_est_.angle());
       }
       gimbalYawRate(0.0);          // 停云台
-      requestGimbalFollow(false);  // 停跟随
+      follow_->request(false);     // 停跟随
       state_ = State::LANDING;
       last_mode_cmd_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       publishStatus(kStatusLanding);
@@ -1147,8 +1112,8 @@ private:
         yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
         !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
         yaw.yaw_gate,
-        yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
-        yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
+        yaw_align_ && follow_->err_usable(follow_fresh_sec_) ? follow_->yaw_err_deg() : 0.0,
+        yaw_align_ ? (follow_->err_usable(follow_fresh_sec_) ? "可用" : "不可用") : "—",
         v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
     } else {
       RCLCPP_INFO_THROTTLE(
@@ -1164,8 +1129,8 @@ private:
         yaw_align_ ? yaw.yaw_err_deg : 0.0, yaw_offset_deg_,
         !yaw_align_ ? "关闭" : (yaw.locked ? "已锁定" : "对齐中"),
         yaw.yaw_gate,
-        yaw_align_ && followErrUsable() ? follow_err_ : 0.0,
-        yaw_align_ ? (followErrUsable() ? "可用" : "不可用") : "—",
+        yaw_align_ && follow_->err_usable(follow_fresh_sec_) ? follow_->yaw_err_deg() : 0.0,
+        yaw_align_ ? (follow_->err_usable(follow_fresh_sec_) ? "可用" : "不可用") : "—",
         v_fwd, v_right, v_down, landing_count_, min_landing_frames_);
     }
   }
@@ -1277,14 +1242,8 @@ private:
   double gimbal_rate_sent_ = 0.0;                  // 最近下发的云台偏航速率 (°/s, 变化检测)
   rclcpp::Time gimbal_pub_t_{0, 0, RCL_ROS_TIME};  // 最近下发时刻 (保活节流)
 
-  // 机头跟随通道 (云台对齐期间机头追随云台)
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_req_pub_;   // 反卷请求
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_err_sub_;
-  bool gimbal_follow_req_ = false;   // 已请求跟随 (云台指令保活判定 + 请求去重)
-  rclcpp::Time follow_req_t_{0, 0, RCL_ROS_TIME};  // 最近请求发布时刻 (0.5s 保活节流)
-  bool follow_err_valid_ = false;    // 最近收到的跟随误差有效 (非 NaN)
-  double follow_err_ = 0.0;          // 最近收到的跟随误差 (度, 右+)
-  rclcpp::Time follow_err_t_{0, 0, RCL_ROS_TIME};  // 误差到达时刻 (新鲜度)
+  // 机头跟随通道 (云台对齐期间机头追随云台, 复用组件见 gimbal_follow.hpp)
+  std::unique_ptr<GimbalFollow> follow_;
   rclcpp::Time last_info_pub_{0, 0, RCL_ROS_TIME};                // 10Hz 限频
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;

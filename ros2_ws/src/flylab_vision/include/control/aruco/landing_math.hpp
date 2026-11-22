@@ -1,7 +1,7 @@
 // Copyright 2026 flylab
 /// 降落纯数学助手 —— 无 ROS 依赖的纯函数/纯逻辑, 可独立单测
-#ifndef FLYLAB_VISION__ARUCO__LANDING_MATH_HPP_
-#define FLYLAB_VISION__ARUCO__LANDING_MATH_HPP_
+#ifndef FLYLAB_VISION__CONTROL__ARUCO__LANDING_MATH_HPP_
+#define FLYLAB_VISION__CONTROL__ARUCO__LANDING_MATH_HPP_
 
 #include <cmath>
 #include <vector>
@@ -123,4 +123,4 @@ private:
 
 }  // namespace flylab_vision
 
-#endif  // FLYLAB_VISION__ARUCO__LANDING_MATH_HPP_
+#endif  // FLYLAB_VISION__CONTROL__ARUCO__LANDING_MATH_HPP_

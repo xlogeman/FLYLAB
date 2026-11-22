@@ -106,7 +106,7 @@ flylab_node(yolo_segment_node src/segment/yolo_segment_node.cpp yolo_segment)
 flylab_node(yolo_semantic_node src/semantic/yolo_semantic_node.cpp yolo_semantic)
 flylab_node(yolo_track_node src/track/yolo_track_node.cpp yolo_tracker yolo_detector)
 flylab_node(ortrack_node src/track/ortrack_node.cpp ortrack yolo_classifier)
-# 两个追踪节点接入了反控接管层 (control/track_takeover.hpp → px4_offboard_client),
+# 两个追踪节点接入了反控接管层 (control/track/track_takeover.hpp → px4_offboard_client),
 # 补 PX4 执行链路依赖 (展示节点模板默认只有 sensor/std_msgs)
 ament_target_dependencies(yolo_track_node px4_msgs geometry_msgs mavros_msgs)
 ament_target_dependencies(ortrack_node px4_msgs geometry_msgs mavros_msgs)
