@@ -128,7 +128,7 @@ public:
     const auto alt_deadband = node.declare_parameter<double>(
       "alt_deadband_deg", 2.0);
     const auto alt_slow =
-      node.declare_parameter<double>("alt_slow_deg", 30.0);
+      node.declare_parameter<double>("alt_slow_deg", 5.0);
     alt_kp_ = alt_kp;
     alt_rate_max_ = alt_rate_max;
     alt_deadband_deg_ = alt_deadband;
@@ -416,7 +416,7 @@ private:
   double alt_kp_ = 0.08;               // P 增益 (m/s 每 度)
   double alt_rate_max_ = 2.0;          // 升降速度限幅 (m/s)
   double alt_deadband_deg_ = 2.0;      // 俯角对准死区 (度, 回差 1.5×)
-  double alt_slow_deg_ = 30.0;         // 中心减速段宽度 (度)
+  double alt_slow_deg_ = 5.0;          // 中心减速段宽度 (度)
   bool alt_in_deadband_ = false;       // 死区状态 (回差迟滞)
 };
 

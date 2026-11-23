@@ -170,7 +170,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             set_face_task=self.node.publish_face_task,
             set_face_topk=self.node.publish_face_topk,
             set_fractal_config=self.node.publish_fractal_config,
-            set_track_pitch=self.node.publish_track_pitch)
+            set_track_pitch=self.node.publish_track_pitch,
+            get_gimbal_pitch=self.camera_tab.grabber.get_gimbal_down_deg)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         # 显示画面转发挂到帧提交点: 抓取线程提交场景帧后直接把引用交给

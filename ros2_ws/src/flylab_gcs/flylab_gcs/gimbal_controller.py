@@ -143,16 +143,22 @@ class GimbalController(threading.Thread):
 
     def gimbal_set_rate(self, yaw_rate, pitch_rate):
         """设置云台连续转动角速度 (°/s, 摇杆控制), 每帧按限位夹紧步进,
-        回零即停; 限位卡住的方向记入 _gimbal_blocked 供标红。"""
+        回零即停; 限位卡住的方向记入 _gimbal_blocked 供标红。
+        计时仅在停止→转动的沿上重置: 算法伺服每帧流式重发速率 (30Hz),
+        若每次都重置 _rate_t_prev, _rate_tick 当帧只计时不动, 下一帧才
+        步进 —— 动一帧停一帧等效 15Hz 阶梯 (视觉一顿一顿); 非零→非零
+        保持计时则每帧匀速步进, 与摇杆手感一致。"""
         with self.lock:
             if not self._airsim_src:
                 return
             if yaw_rate == 0.0 and pitch_rate == 0.0:
                 self._gimbal_rate = (0.0, 0.0)
                 return
+            started = self._gimbal_rate == (0.0, 0.0)
             self._gimbal_rate = (yaw_rate, pitch_rate)
             self._gimbal_anim = None   # 摇杆打断回中/摆位动画
-            self._rate_t_prev = None   # 下一帧重新计时
+            if started:
+                self._rate_t_prev = None   # 仅启动沿重新计时
 
     def gimbal_reset(self):
         """云台回中: 启动平滑回中动画 (非瞬跳), 角速度见

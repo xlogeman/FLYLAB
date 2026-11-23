@@ -174,6 +174,12 @@ class Grabber(threading.Thread):
         """当前云台角度 (yaw, pitch)；非 AirSim 源返回 None。"""
         return self.gimbal.get_gimbal()
 
+    def get_gimbal_down_deg(self):
+        """当前云台俯角 (度, 向下正: 水平=0 垂直下=-pitch 90)；非 AirSim
+        源返回 None。俯视角度输入框初值同步用 (云台 pitch+ 为抬头)。"""
+        g = self.get_gimbal()
+        return None if g is None else -g[1]
+
     def get_gimbal_blocked(self):
         """会话内被限位卡住的方向 (界面标红用)。"""
         return self.gimbal.get_gimbal_blocked()

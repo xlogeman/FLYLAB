@@ -247,9 +247,11 @@ class AlgoOutputPanel(QGroupBox):
     def __init__(self, get_info, set_marker_length=None,
                  set_landing_yaw=None, set_aruco_dict=None,
                  set_face_task=None, set_face_topk=None,
-                 set_fractal_config=None, set_track_pitch=None, parent=None):
+                 set_fractal_config=None, set_track_pitch=None,
+                 get_gimbal_pitch=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
+        self._get_gimbal_pitch = get_gimbal_pitch   # () -> 俯角度 (下正)|None
         self._sections = {}         # key -> _Section (仅当前显示的)
         self._order = []            # 当前显示顺序 (key 列表)
         self._landing_kind = None   # 反控降落跟随的检测器类型 (aruco|fractal|None)
@@ -288,8 +290,10 @@ class AlgoOutputPanel(QGroupBox):
         if set_fractal_config is not None:
             self._build_fractal_combo(set_fractal_config)
         # 目标追踪俯视角度 (跟随 track 分组显隐): 反控接管中设置云台俯视
-        # 角度, 追踪节点高度环控制飞机升降收敛到该角度
+        # 角度, 追踪节点高度环控制飞机升降收敛到该角度; 未动过时每次显示
+        # track 分组同步为云台当前俯角 (见 _update_top_visibility)
         self._track_pitch_box = None
+        self._track_pitch_touched = False   # 用户改过则不再自动同步
         if set_track_pitch is not None:
             self._build_track_pitch_spin(set_track_pitch)
         # track 分组激活期间画面框选常开 (主窗口控制), 拖出矩形松开即
@@ -409,10 +413,26 @@ class AlgoOutputPanel(QGroupBox):
         # 初始显示默认值不发 (未动过不发布, 节点维持悬停;
         # setValue 放在 connect 之前, 不触发 valueChanged)
         spin.setValue(config.TRACK_PITCH_DEFAULT)
-        spin.valueChanged.connect(publish)
+        spin.valueChanged.connect(
+            lambda v: (setattr(self, '_track_pitch_touched', True),
+                       publish(v))[-1])
         lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
         lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
         self._track_pitch_box = box
+        self._track_pitch_spin = spin
+
+    def _sync_track_pitch(self):
+        """俯视角度同步为云台当前俯角 (限幅): 仅用户未动过时调用
+        (track 分组显示时, 见 _update_top_visibility); 云台不可用/非
+        AirSim 源跳过保持现值。setValue 在 touched 标记不变下不发布。"""
+        if self._get_gimbal_pitch is None:
+            return
+        p = self._get_gimbal_pitch()
+        if p is None:
+            return
+        v = int(round(max(config.TRACK_PITCH_MIN,
+                          min(config.TRACK_PITCH_MAX, p))))
+        self._track_pitch_spin.setValue(v)
 
     def _build_dict_combo(self, publish):
         """ArUco 字典切换 (QComboBox): 候选取 config.ARUCO_DICTS, 选择即
@@ -559,6 +579,8 @@ class AlgoOutputPanel(QGroupBox):
             self._fractal_box.setVisible(fractal_on)
         if self._track_pitch_box is not None:
             self._track_pitch_box.setVisible(track_on)
+            if track_on and not self._track_pitch_touched:
+                self._sync_track_pitch()   # 默认跟云台当前俯角
         if self._top_row is not None:
             self._top_row.setVisible(
                 aruco_on or face_on or fractal_on or track_on)

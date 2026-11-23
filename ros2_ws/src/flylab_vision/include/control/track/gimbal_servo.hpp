@@ -46,12 +46,12 @@ class GimbalServo
 public:
   explicit GimbalServo(rclcpp::Node & node)
   {
-    const auto kp = node.declare_parameter<double>("servo_kp", 3.0);
+    const auto kp = node.declare_parameter<double>("servo_kp", 4.5);
     const auto kd = node.declare_parameter<double>("servo_kd", 0.6);
     const auto edge_gain = node.declare_parameter<double>(
       "servo_edge_gain", 2.0);
     const auto max_rate = node.declare_parameter<double>(
-      "servo_max_rate_deg", 45.0);
+      "servo_max_rate_deg", 60.0);
     const auto deadband = node.declare_parameter<double>(
       "servo_deadband_deg", 1.0);
     const auto fov_default = node.declare_parameter<double>(
@@ -217,10 +217,10 @@ private:
   }
 
   // ---------- 参数 (构造后只读) ----------
-  double kp_ = 3.0;            // P 增益 (1/s): 角度误差 × KP = 角速率
+  double kp_ = 4.5;            // P 增益 (1/s): 角度误差 × KP = 角速率
   double kd_ = 0.6;            // D 增益: 误差变化率阻尼
   double edge_gain_ = 2.0;     // P 增益边缘倍率 (画面边缘处 KP 的倍数)
-  double max_rate_ = 45.0;     // 角速率限幅 (°/s, 对齐摇杆满偏量级)
+  double max_rate_ = 60.0;     // 角速率限幅 (°/s, 对齐摇杆满偏量级)
   double deadband_ = 1.0;      // 对准死区 (度)
 
   std::atomic<bool> enabled_{false};
