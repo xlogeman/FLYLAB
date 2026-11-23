@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """视觉反控 (ArUco 降落) 面板 (MainWindow 的功能域 mixin)。
 
-接管控制下拉按钮 (工具栏) 的本体在此: 视觉反控 + 云台跟随 + 手动遥控
-三块菜单共用一个 QToolButton, 手动遥控的菜单项由 TeleopPanelMixin 提供
+接管控制下拉按钮 (工具栏) 的本体在此: 视觉反控 + 手动遥控两项菜单
+共用一个 QToolButton, 手动遥控的菜单项由 TeleopPanelMixin 提供
 (_build_teleop_menu_item), 互斥门控 (_update_takeover_gates) 也在此 ——
 门控是一张整体决策表 (谁运行中锁谁、谁是防炸机出口), 拆开反而要重复
 分支结构; 遥控专属的启停流程/摇杆/手柄见 teleop_panel.py。目标追踪
-反控 (追踪节点接管 offboard 悬停跟拍) 机制同视觉反控降落, 亦挂在
-本菜单统一门控。
+反控挂在"视觉反控"子菜单的追踪三态项: 云台追踪机制同视觉反控降落
+(追踪节点接管 offboard 悬停跟拍), 俯冲打击/机体跟随为预留接口 (模式
+常量已就位, 行为待实现), 前提 = 云台追踪运行中, 二者互斥, 启动时自动
+按下云台面板"跟随"按钮 (机头跟随云台视线), 云台追踪弹起时联动取消,
+亦在本菜单统一门控。
 
 菜单为常驻双层结构: 逻辑 QAction (checkable, 不进菜单) 承载勾选状态机,
 菜单显示项 (非 checkable, 绿点 = 运行中, 再点取消) 经 triggered -> 逻辑项
 toggle、逻辑项 changed -> 显示项图标/门控联动; 门控状态由 33ms 轮询落在
 逻辑 QAction 的 enabled 上, 菜单展开即见最新。
 
-视觉反控按运行中的算法展开模式子菜单 (反控行为因算法而异): 目前有
-ArUco检测 / fractal检测 (enables_landing), 子菜单含 图像空间 / 3D 姿态
-两个模式项, 模式经 -p landing_mode 传给降落节点, 检测器类型经 -p detector
-随算法传给同一降落节点; 其他算法将来在 config.ALGORITHMS 注册各自的反控
-形态。LandingActions 句柄对外保持旧 landing_act 单项语义,
-其余引用方 (main_window / vehicle_panel / algo_panel) 无需感知子菜单。
+"视觉反控"子菜单形态随运行中的算法两选一显隐 (_update_landing_menu_
+shape): 码检测 (enables_landing 且声明多个 landing_modes, ArUco检测/
+fractal检测) → 模式子项 图像空间/3D 姿态, 模式经 -p landing_mode 传给
+降落节点, 检测器类型经 -p detector 随算法传给同一降落节点; 目标追踪
+(enables_takeover) → 追踪三态子项; 无适用子项 (其余反控算法/无算法)
+时子项全隐、子菜单置灰不可展开。其他算法将来在 config.ALGORITHMS
+注册各自的反控形态。LandingActions 句柄对外保持旧 landing_act 单项
+语义, 其余引用方 (main_window / vehicle_panel / algo_panel) 无需感知
+子菜单。
 样式常量 _TOOL_BTN_STYLE 定义在 ui_style.py。
 """
 from PyQt5.QtCore import QTimer
@@ -46,46 +52,40 @@ def make_action_pair(parent_menu, text, tooltip):
 
 
 class LandingActions:
-    """视觉反控全部 QAction (逻辑三项 + 菜单显示三项) 的统一句柄,
+    """视觉反控全部 QAction (逻辑两项 + 菜单显示两项) 的统一句柄,
     对外兼容旧 landing_act 单项语义:
-    - isChecked() = 任一形态运行中 (读逻辑项)
+    - isChecked() = 任一模式运行中 (读逻辑项)
     - setChecked(False) = 全部弹起 (勾选由用户点选, 不支持 True)
     - setEnabled() = 同步门控到全部逻辑项与显示项
-    菜单形态按运行中的算法切换 (_update_landing_menu_shape): 声明多个
-    landing_modes 的算法 (ArUco检测) 用模式子菜单, 其余用普通单项。
+    子菜单形态按运行中的算法切换 (_update_landing_menu_shape): 声明多个
+    landing_modes 的算法 (码检测) 用模式子项, enables_takeover (目标
+    追踪) 用追踪三态子项; 无适用子项时子菜单置灰不可展开。
     显示项的绿点图标由 logic.changed 联动 (_build_takeover_button), 门控
     enabled 双侧同步由本句柄与 changed 各覆盖一半。
     """
 
-    def __init__(self, flat_act, image_act, pose_act,
-                 flat_disp, image_disp, pose_disp):
-        self.flat = flat_act
+    def __init__(self, image_act, pose_act, image_disp, pose_disp):
         self.image = image_act
         self.pose = pose_act
-        self.disp_flat = flat_disp
         self.disp_image = image_disp
         self.disp_pose = pose_disp
 
     def mode_action(self, mode):
-        """模式常量 -> 对应菜单项 (普通单项不走模式, 由调用方显式传入)。"""
+        """模式常量 -> 对应菜单项。"""
         return self.pose if mode == config.LANDING_MODE_POSE3D else self.image
 
     def isChecked(self):
-        return (self.flat.isChecked() or self.image.isChecked()
-                or self.pose.isChecked())
+        return self.image.isChecked() or self.pose.isChecked()
 
     def setChecked(self, checked):
         if checked:
             raise ValueError('视觉反控模式由用户点选, 不支持外部 setChecked(True)')
-        self.flat.setChecked(False)
         self.image.setChecked(False)
         self.pose.setChecked(False)
 
     def setEnabled(self, enabled):
-        self.flat.setEnabled(enabled)
         self.image.setEnabled(enabled)
         self.pose.setEnabled(enabled)
-        self.disp_flat.setEnabled(enabled)
         self.disp_image.setEnabled(enabled)
         self.disp_pose.setEnabled(enabled)
 
@@ -95,14 +95,32 @@ class LandingPanelMixin:
 
     # ---------- 视觉反控 (降落) / 手动遥控 门控 (都走 offboard, 互斥) ----------
 
+    def _set_track_mode_gates(self, enabled):
+        """目标追踪子菜单门控: 云台追踪按 offboard 门控 (追踪算法运行中 +
+        已解锁升空 + AirSim 源 + 链路已开); 预留接口两项前提 = 云台追踪
+        运行中 (云台追踪未勾选时恒置灰, 见 _set_track_stub_gates)。
+        显示项 enabled 由 logic.changed -> _sync 联动, 此处只落逻辑项。"""
+        self.gimbal_act.setEnabled(enabled)
+        self._set_track_stub_gates()
+
+    def _set_track_stub_gates(self):
+        """俯冲打击/机体跟随可用性: 前提 = 云台追踪运行中 (gimbal_act
+        勾选)。互斥切换/启动动作在点击流程 (_on_track_takeover_stub_
+        toggled), 此处只管可用性。"""
+        stub_ok = self.gimbal_act.isChecked()
+        self.dive_act.setEnabled(stub_ok)
+        self.bodyfollow_act.setEnabled(stub_ok)
+
     def _update_takeover_gates(self):
         """offboard 功能互斥门控 (33ms 轮询), 门控结果落在菜单项上:
-        - 视觉反控: 需已解锁升空 + ArUco检测运行中 + AirSim 源 + 链路已开;
+        - 视觉反控: 需已解锁升空 + 码检测运行中 + AirSim 源 + 链路已开;
           进行中锁链路与云台, 允许开遥控抢回控制权 (防炸机出口);
           模式子菜单 (图像空间/3D 姿态) 互斥: 运行中非现役模式置灰
         - 目标追踪反控: 需已解锁升空 + 目标追踪算法运行中 + AirSim 源 +
           链路已开 (与视觉反控降落同一门控, 接管 offboard 悬停跟拍);
-          进行中锁链路与云台, 允许开遥控抢回 (防炸机出口)
+          进行中锁链路与云台, 允许开遥控抢回 (防炸机出口)。视觉反控
+          子菜单的追踪三态统一门控与互斥; 预留接口 (俯冲打击/机体跟随)
+          另有前提 = 云台追踪运行中, 云台追踪弹起时运行中的预留项自动取消
         - 遥控: 仅需链路已开; 进行中仍可点视觉反控/目标追踪反控 (自动让位)
         同时维护接管按钮的状态灯 (任一功能运行中点亮)。"""
         link_ok = self._selected_link() is not None
@@ -118,13 +136,24 @@ class LandingPanelMixin:
                 landing_ok = air
             if algo.get('enables_takeover'):
                 takeover_ok = air
-        takeover_on = self.gimbal_act.isChecked()
+        # 联动取消: 云台追踪弹起 (用户取消/节点交还/算法停止) 时, 运行中
+        # 的俯冲打击/机体跟随自动取消 (前提失效, 正常路径已在 toggled
+        # 流程联动, 此处兜底)
+        if not self.gimbal_act.isChecked():
+            for stub in (self.dive_act, self.bodyfollow_act):
+                if stub.isChecked():
+                    stub.setChecked(False)
+        # 目标追踪任一模式 (云台追踪/俯冲打击/机体跟随) 运行中: 统一按
+        # offboard 反控处理 (锁链路/云台, 允许遥控抢回, 状态灯点亮)
+        takeover_on = (self.gimbal_act.isChecked()
+                       or self.dive_act.isChecked()
+                       or self.bodyfollow_act.isChecked())
         if self.teleop_act.isChecked():
             self.link_btn.setEnabled(False)
             self.camera_tab.set_gimbal_locked(False)
             # 遥控中仍可点反控: 接管时自动取消遥控 (防炸机出口同理)
             self.landing_act.setEnabled(landing_ok)
-            self.gimbal_act.setEnabled(takeover_ok)
+            self._set_track_mode_gates(takeover_ok)
         elif self.landing_act.isChecked():
             self.link_btn.setEnabled(False)
             self.camera_tab.set_gimbal_locked(True)
@@ -136,19 +165,20 @@ class LandingPanelMixin:
                 self.landing_act.image.isChecked())
             self.landing_act.pose.setEnabled(
                 self.landing_act.pose.isChecked())
-            self.gimbal_act.setEnabled(False)   # offboard 互斥 (双保险)
+            self._set_track_mode_gates(False)   # offboard 互斥 (双保险)
         elif takeover_on:
             self.link_btn.setEnabled(False)           # 反控锁链路 (同降落)
             self.camera_tab.set_gimbal_locked(True)   # 云台/变焦交算法
             # 反控中允许开遥控抢回控制权 (防炸机): 接管时自动取消反控
             self.teleop_act.setEnabled(link_ok)
             self.landing_act.setEnabled(False)        # offboard 互斥 (双保险)
+            self._set_track_stub_gates()   # 云台追踪运行中 → 预留项可点
         else:
             self.camera_tab.set_gimbal_locked(False)
             self.link_btn.setEnabled(True)
             self.teleop_act.setEnabled(link_ok)
             self.landing_act.setEnabled(landing_ok)
-            self.gimbal_act.setEnabled(takeover_ok)
+            self._set_track_mode_gates(takeover_ok)
         self._set_btn_on(self.takeover_btn,
                          self.landing_act.isChecked()
                          or self.teleop_act.isChecked()
@@ -167,10 +197,9 @@ class LandingPanelMixin:
             and airsim_ok
         self.camera_tab.set_follow_available(follow_ok)
 
-    def _on_landing_mode_toggled(self, mode, act=None):
-        """视觉反控菜单项勾选/弹起 (模式子菜单两项 / 普通单项共用入口)。"""
-        if act is None:
-            act = self.landing_act.mode_action(mode)
+    def _on_landing_mode_toggled(self, mode):
+        """视觉反控菜单项勾选/弹起 (模式子菜单两项共用入口)。"""
+        act = self.landing_act.mode_action(mode)
         if not act.isChecked():
             # 弹起: 模式切换时另一模式已接管 (仍勾选), 不停流程;
             # 真正取消 (无任一模式在运行) 才收尾交还控制权
@@ -271,6 +300,35 @@ class LandingPanelMixin:
 
     # ---------- 目标追踪反控 (追踪节点接管 offboard: 悬停跟拍 + 机头跟随) ----------
 
+    def _on_track_takeover_stub_toggled(self, name, act):
+        """目标追踪预留接口 (俯冲打击/机体跟随) 启停: 前提 = 云台追踪
+        运行中 (gimbal_act 勾选, 不满足则拒绝并弹起); 两项互斥, 一项运行
+        中点另一项即取消当前项再启动新项。启动时自动按下云台面板"跟随"
+        按钮 (飞机跟着云台转, 反控中该按钮经 track_follow 下发追踪节点,
+        已开则不重复发布)。当前无节点行为 (仅勾选状态机 + 跟随联动),
+        行为在节点侧实现后在此接启停流程 (模式常量见 config
+        TRACK_TAKEOVER_*)。"""
+        if not act.isChecked():
+            # 弹起 (用户取消/互斥切换/联动取消): 云台追踪仍在运行则文字
+            # 回到其显示, 全部结束才复位
+            if self.gimbal_act.isChecked():
+                self.takeover_btn.setText('接管控制: 目标追踪')
+            elif not (self.dive_act.isChecked()
+                      or self.bodyfollow_act.isChecked()):
+                self.takeover_btn.setText('接管控制')
+            return
+        if not self.gimbal_act.isChecked():
+            act.setChecked(False)   # toggled 再入 (弹起分支), 无副作用
+            self.log.warning(f'{name}: 需先开启目标追踪 (云台追踪运行中才可点)')
+            return
+        other = self.bodyfollow_act if act is self.dive_act else self.dive_act
+        other.setChecked(False)   # 互斥: 弹起运行中的另一项
+        # 自动按下"跟随"按钮 (机头跟随云台视线); 已开则无动作不重复发布
+        if not self.camera_tab.btn_follow.isChecked():
+            self.camera_tab.btn_follow.setChecked(True)
+        self.takeover_btn.setText(f'接管控制: {name}')
+        self.log.info(f'{name}: 已启动, "跟随"已自动按下 (接口预留, 行为待实现)')
+
     def _on_track_takeover_toggled(self, checked):
         """目标追踪反控开关 (机制同 ArUco 降落反控): 发接管启停指令给
         追踪节点 (track_takeover_start/stop, 经 /flylab/vision_cmd), 节点
@@ -290,16 +348,23 @@ class LandingPanelMixin:
             self.log.info('目标追踪反控: 接管 offboard 悬停跟拍 '
                           '(取消: 再点本项或停止算法即交还控制权)')
         else:
+            # 前提失效联动: 云台追踪取消/交还时弹起两个预留项 (其弹起
+            # 分支只复位文字, 本分支随后统一复位)
+            self.dive_act.setChecked(False)
+            self.bodyfollow_act.setChecked(False)
             self.takeover_btn.setText('接管控制')
             self.node.publish_cmd(config.TRACK_TAKEOVER_STOP_CMD)
             self.camera_tab.grabber.note_algo_cmd(0.0, 0.0)   # 兜底清速率
 
     def _cancel_track_takeover(self):
-        """目标追踪反控联动取消 (追踪算法停止/切换/异常退出/开遥控抢回时
-        调用): 未开启时无副作用。弹起分支发 stop 指令 (节点切回 LOITER
-        交还控制权) 并清零云台速率。"""
+        """目标追踪反控联动取消 (追踪算法停止/切换/异常退出时调用):
+        未开启时无副作用。云台追踪弹起分支发 stop 指令 (节点切回 LOITER
+        交还控制权) 并清零云台速率; 预留接口两项幂等弹起 (无节点流程,
+        弹起分支只在无其他模式运行中时复位按钮文字)。"""
         if self.gimbal_act.isChecked():
             self.gimbal_act.setChecked(False)
+        self.dive_act.setChecked(False)
+        self.bodyfollow_act.setChecked(False)
 
     def _check_takeover_status(self):
         """目标追踪反控节点状态事件 (engaged/idle/failed, 同降落状态回传
@@ -327,29 +392,31 @@ class LandingPanelMixin:
     def _build_takeover_button(self):
         """接管控制下拉按钮: 两项均需先开通信链路 (走 offboard), 同一时刻
         只运行一个, 点运行中的项即取消。
-        - 视觉反控: 形态随运行中的算法 (_update_landing_menu_shape):
-            声明多个 landing_modes (ArUco检测) → 模式子菜单:
+        - 视觉反控: 子菜单形态随运行中的算法 (_update_landing_menu_shape):
+            码检测 (声明多个 landing_modes) → 模式子项:
               图像空间 = 按图像空间量对准码下降并切 AUTO.LAND
               3D 姿态  = 以码的 3D 位姿 (机体系米级误差) 闭环降落
-            其余反控算法 / 无算法 → 普通"视觉反控"单项 (无下级选项)
+            目标追踪算法 (enables_takeover) → 追踪三态子项:
+              云台追踪 = 悬停跟拍 (云台伺服保持目标居中 + 机头跟随)
+              俯冲打击 / 机体跟随 = 预留接口
+            无适用子项 (其余反控算法/无算法) → 子项全隐, 子菜单置灰不可点
         - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
-          遥控抢回控制权 (防炸机出口)
-        - 目标追踪: 追踪节点接管 offboard 悬停跟拍 (云台伺服保持目标居中
-          + 机头跟随), 机制同视觉反控降落"""
+          遥控抢回控制权 (防炸机出口)"""
         self.takeover_btn = QToolButton()
         self.takeover_btn.setText('接管控制')
         self.takeover_btn.setPopupMode(QToolButton.InstantPopup)
         self.takeover_btn.setStyleSheet(self._TOOL_BTN_STYLE)
         self.takeover_btn.setToolTip(
-            '接管飞机控制权 (offboard): 视觉反控 = 按视觉输出降落 '
-            '(反控算法运行时展开 图像空间 / 3D 姿态 模式子菜单); '
-            '手动遥控 = 摇杆控速度; 目标追踪 = 追踪算法悬停跟拍。'
-            '均需先开启通信链路')
+            '接管飞机控制权 (offboard): 视觉反控 = 子菜单随运行中算法切换 '
+            '(码检测: 图像空间/3D 姿态; 目标追踪: 云台追踪/俯冲打击/'
+            '机体跟随); 手动遥控 = 摇杆控速度。均需先开启通信链路')
         menu = QMenu(self.takeover_btn)
         self.takeover_btn.setMenu(menu)
 
-        # 形态一: 视觉反控模式子菜单 (仅声明多个 landing_modes 的算法运行时显示)
+        # 视觉反控子菜单 (常驻顶级, 子项形态随运行中算法两态显隐,
+        # 无适用子项时整项置灰不可展开)
         self.landing_menu = menu.addMenu('视觉反控')
+        # 形态一: 码检测模式子项 (声明多个 landing_modes 的算法运行时显示)
         self.landing_img_act, self.landing_img_disp = make_action_pair(
             self.landing_menu, '图像空间',
             '需先: 反控算法运行中 (ArUco检测/fractal检测) + 已解锁升空 '
@@ -366,26 +433,34 @@ class LandingPanelMixin:
         self.landing_pose_act.toggled.connect(
             lambda checked: self._on_landing_mode_toggled(
                 config.LANDING_MODE_POSE3D))
-        # 形态二: 普通"视觉反控"单项 (其余反控算法 / 无算法运行时显示),
-        # 按图像模式启动 (模式参数对未实现的节点无感, 见 config 注释)
-        self.landing_flat_act, self.landing_flat_disp = make_action_pair(
-            menu, '视觉反控',
-            '需先: 反控算法运行中 + 已解锁升空 + 通信链路已开。'
-            '按当前视觉算法的输出反控降落; 再点取消')
-        self.landing_flat_act.toggled.connect(
-            lambda checked: self._on_landing_mode_toggled(
-                config.LANDING_MODE_IMAGE, self.landing_flat_act))
-        # 目标追踪反控 (追踪节点接管 offboard): 机制同 ArUco 降落反控 ——
-        # 拿到飞机控制权悬停跟拍 (云台伺服保持目标居中 + 机头跟随), 与
-        # 手动遥控/视觉反控降落互斥 (都走 offboard), 开遥控可抢回
+        # 形态二: 目标追踪三态子项 (enables_takeover 算法运行时显示):
+        # 云台追踪=现役 (追踪节点接管 offboard 悬停跟拍, 机制同降落反控 ——
+        # 与手动遥控/视觉反控降落互斥, 开遥控可抢回), 俯冲打击/机体跟随=
+        # 预留接口 (模式常量 TRACK_TAKEOVER_*, 前提 = 云台追踪运行中)
         self.gimbal_act, self.gimbal_disp = make_action_pair(
-            menu, '目标追踪',
+            self.landing_menu, '云台追踪',
             '需先: 目标追踪算法运行中 (yolo26s-track/ORTrack) + 已解锁升空 '
             '+ 通信链路已开。接管 offboard 拿到飞机控制权: 原地悬停跟拍 '
             '(云台伺服保持目标在画面中央 + 机头跟随视线方向, 机头跟随可由'
             '云台面板"跟随"按钮开关, 飞机跟目标飞将在此反控环扩展); '
             '可先开再框选目标; 再点取消或停止算法即交还')
         self.gimbal_act.toggled.connect(self._on_track_takeover_toggled)
+        self.dive_act, self.dive_disp = make_action_pair(
+            self.landing_menu, '俯冲打击',
+            '需先: 云台追踪运行中 (本菜单"云台追踪"项)。与机体跟随互斥 '
+            '(点另一项自动取消本项); 启动时自动按下云台面板"跟随"按钮 '
+            '(飞机跟着云台转)。预留接口, 飞控行为待实现')
+        self.dive_act.toggled.connect(
+            lambda checked: self._on_track_takeover_stub_toggled(
+                '俯冲打击', self.dive_act))
+        self.bodyfollow_act, self.bodyfollow_disp = make_action_pair(
+            self.landing_menu, '机体跟随',
+            '需先: 云台追踪运行中 (本菜单"云台追踪"项)。与俯冲打击互斥 '
+            '(点另一项自动取消本项); 启动时自动按下云台面板"跟随"按钮 '
+            '(飞机跟着云台转)。预留接口, 飞控行为待实现')
+        self.bodyfollow_act.toggled.connect(
+            lambda checked: self._on_track_takeover_stub_toggled(
+                '机体跟随', self.bodyfollow_act))
         # 手动遥控菜单项 (TeleopPanelMixin, 勾选联动其启停流程)
         self.teleop_act, self.teleop_disp = self._build_teleop_menu_item(menu)
         # 显示项联动: 逻辑项 enabled/checked 任何变化同步到菜单显示项
@@ -396,27 +471,37 @@ class LandingPanelMixin:
         for logic, disp in (
                 (self.landing_img_act, self.landing_img_disp),
                 (self.landing_pose_act, self.landing_pose_disp),
-                (self.landing_flat_act, self.landing_flat_disp),
                 (self.gimbal_act, self.gimbal_disp),
+                (self.dive_act, self.dive_disp),
+                (self.bodyfollow_act, self.bodyfollow_disp),
                 (self.teleop_act, self.teleop_disp)):
             logic.changed.connect(lambda l=logic, d=disp: _sync(l, d))
             _sync(logic, disp)
         # 统一句柄 (兼容旧 landing_act 单项语义, 其余引用方零改动)
         self.landing_act = LandingActions(
-            self.landing_flat_act, self.landing_img_act, self.landing_pose_act,
-            self.landing_flat_disp, self.landing_img_disp,
-            self.landing_pose_disp)
-        self._update_landing_menu_shape()   # 初始无算法 → 普通单项形态
+            self.landing_img_act, self.landing_pose_act,
+            self.landing_img_disp, self.landing_pose_disp)
+        self._update_landing_menu_shape()   # 初始无算法 → 子菜单置灰不可点
         return self.takeover_btn
 
     def _update_landing_menu_shape(self):
-        """按运行中的算法切换视觉反控菜单形态 (反控行为因算法而异):
-        算法在 config.ALGORITHMS 声明了多个 landing_modes (ArUco检测:
-        图像空间/3D 姿态) 时展开模式子菜单; 其余反控算法/无算法运行时
-        退化为普通单项。形态切换只影响菜单展示, 勾选状态由统一句柄
-        LandingActions 承载, 引用方无感。"""
+        """按运行中的算法切换"视觉反控"子菜单形态 (反控行为因算法而异,
+        两种形态互斥显隐, 子菜单本体常驻):
+        - 码检测: 声明多个 landing_modes (ArUco/fractal检测) → 模式子项
+          (图像空间/3D 姿态)
+        - 目标追踪: 声明 enables_takeover (yolo26s-track/ORTrack) →
+          追踪三态子项 (云台追踪/俯冲打击/机体跟随)
+        无适用子项 (其余反控算法/无算法运行) 时子项全隐、子菜单整项置灰
+        不可展开 (不隐藏)。形态切换只影响菜单展示, 勾选状态由各自逻辑项
+        承载 (追踪三态见 gimbal_act/dive_act/bodyfollow_act), 引用方无感。"""
         algo = self.running_algo
         modes = algo.get('landing_modes') if algo is not None else None
-        use_menu = bool(modes) and len(modes) > 1
-        self.landing_menu.menuAction().setVisible(use_menu)
-        self.landing_flat_disp.setVisible(not use_menu)
+        track = bool(algo.get('enables_takeover')) \
+            if algo is not None else False
+        use_modes = bool(modes) and len(modes) > 1
+        self.landing_img_disp.setVisible(use_modes)
+        self.landing_pose_disp.setVisible(use_modes)
+        for disp in (self.gimbal_disp, self.dive_disp, self.bodyfollow_disp):
+            disp.setVisible(track)
+        # 子菜单常驻: 有适用子项才可展开, 其余反控算法/无算法置灰不可点
+        self.landing_menu.menuAction().setEnabled(use_modes or track)

@@ -123,8 +123,8 @@ LANDING_STATUS_TOPIC = '/flylab/landing_status'
 ARUCO_INFO_TOPIC = '/flylab/aruco_info'
 
 # ---------- 视觉反控降落模式 (算法注册表 landing_modes 声明) ----------
-# 反控形态随算法: 声明了多个 landing_modes 的算法 (ArUco检测) 在"视觉反控"
-# 下展开模式子菜单, 未声明的反控算法只显示普通单项:
+# 反控形态随算法: 声明了多个 landing_modes 的算法 (码检测) 在"接管控制→
+# 视觉反控"子菜单显示模式子项, 未声明的不显示模式子项:
 #   图像空间 = 现有逻辑 (cx/cy/面积图像伺服, 不依赖 3D 位姿)
 #   3D 姿态  = 以码的实际距离 (solvePnP 位姿, 经云台姿态旋到机体系) 米级闭环
 #              降落 —— 前提是位姿尺度可信 (码边长准确或已标定)
@@ -229,6 +229,12 @@ TRACK_BEGIN_CMD = 'track_begin'
 # 让目标保持在画面中央; 再点菜单项或停止算法即交还控制权
 TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
+# 目标追踪反控模式 (菜单三态; 将来随 track_takeover_start 以模式参数下发
+# 节点, 同 landing_mode 的传参约定)。云台追踪为现役功能, 俯冲打击/机体
+# 跟随为预留接口 (菜单项已就位, 节点侧行为待实现)
+TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 云台追踪: 悬停跟拍 (现役)
+TRACK_TAKEOVER_DIVE = 'dive'              # 俯冲打击: 预留
+TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随: 预留
 # 反控节点状态回传 (engaged=接管成功 / idle=已交还 / failed=接管失败),
 # 地面站据此联动菜单项 (同降落/遥控状态回传模式)
 TRACK_STATUS_TOPIC = '/flylab/track_status'
@@ -333,9 +339,9 @@ ALGORITHMS = [
                  '--ros-args', '--params-file', ARUCO_PARAMS_FILE],
          'start': 'aruco_start', 'stop': 'aruco_stop',
          'enables_landing': True,
-         # 反控模式子菜单: 声明了多个 landing_modes 的算法在"接管控制→视觉反控"
-         # 下展开模式子项 (ArUco: 图像空间/3D 姿态); 未声明或单项的反控算法
-         # 只显示普通"视觉反控"单项, 无下级选项
+         # 反控模式子项: 声明了多个 landing_modes 的算法在"接管控制→视觉反控"
+         # 子菜单显示模式子项 (ArUco: 图像空间/3D 姿态); 未声明的反控算法
+         # 不显示模式子项 (enables_takeover 算法显示追踪三态, 其余隐藏子菜单)
          'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
          'panel': 'aruco'},   # 右栏算法信息面板分组 (panel_sections.SECTIONS)
         {'name': 'fractal检测',
@@ -425,8 +431,9 @@ ALGORITHMS = [
          'cmd': ['ros2', 'run', 'flylab_vision', 'yolo_track_node',
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
-         # enables_takeover: 支持目标追踪反控 (接管控制→目标追踪, 接管
-         # offboard 悬停跟拍 + 云台伺服保持目标居中)
+         # enables_takeover: 支持目标追踪反控 (接管控制→视觉反控子菜单的
+         # 追踪三态: 云台追踪/俯冲打击/机体跟随, 接管 offboard 悬停跟拍
+         # + 云台伺服保持目标居中)
          'enables_takeover': True,
          'panel': 'track'},   # 右栏面板: 追踪状态卡片 (框选在画面完成)
         # ORTrack (CVPR 2025): 模板匹配式单目标追踪, 无需检测候选,
