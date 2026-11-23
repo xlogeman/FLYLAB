@@ -30,6 +30,7 @@
 ///       -p model:=/path/to/xx.onnx -p device:=cuda -p match_thres:=0.35
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -149,11 +150,14 @@ protected:
       }
       // 云台伺服: 目标在跟 -> 按框中心偏移驱动云台; 丢失 -> 清零速率
       servo_->update(st.box, bgr, st.has);
+      // 高度环测量: 视轴俯角 + 目标像素偏角 (丢失 = NaN 停控)
+      takeover_->notify_target(servo_->angle_y_deg(), st.has);
       json = track_annotations(st);
     } else {
       // 未追踪: 显示全部检测 + 框选区域, 供用户核对框选
       track_state_ = has_roi_ ? "SELECTED" : "IDLE";
       servo_->update(cv::Rect2f(), bgr, false);   // 无目标: 伺服清零
+      takeover_->notify_target(servo_->angle_y_deg(), false);   // 高度环停控
       json = browse_annotations(dets);
     }
     publish_info(static_cast<int>(dets.size()));
@@ -349,7 +353,14 @@ private:
        << "\"w\":" << num(track_box_.width, 0) << ","
        << "\"h\":" << num(track_box_.height, 0) << ","
        << "\"count\":" << count << ","
-       << "\"follow\":" << (servo_->enabled() ? 1 : 0) << "}";
+       << "\"follow\":" << (servo_->enabled() ? 1 : 0);
+    // 当前俯角测量 (度, 下正; 缺失 = null 面板隐藏"俯角"行)
+    const double pitch_meas = takeover_->measure_down_deg();
+    if (std::isnan(pitch_meas)) {
+      os << ",\"pitch\":null}";
+    } else {
+      os << ",\"pitch\":" << num(pitch_meas) << "}";
+    }
     std_msgs::msg::String out;
     out.data = os.str();
     info_pub_->publish(out);

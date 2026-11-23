@@ -236,6 +236,15 @@ TRACK_STATUS_TOPIC = '/flylab/track_status'
 # latched Bool 发给追踪节点, True=机头跟随视线方向 (默认) / False=机头
 # 保持航向, 仅云台伺服转 (目标仍居中, 云台偏航 ±45° 限位内)
 TRACK_FOLLOW_TOPIC = '/flylab/track_follow'
+# 目标追踪俯视角度同步 (算法信息"俯视角度"输入框): latched Float64 发给
+# 追踪节点 (度, 向下为正)。反控接管中设置后, 节点高度环控制飞机升降,
+# 使云台以该俯视角注视目标 (云台伺服保持目标居中, 飞机升降直到俯角
+# 收敛); 未动过不发布 = 不启用高度环 (与朝向偏置同步同一约定)
+TRACK_PITCH_TOPIC = '/flylab/track_pitch'
+TRACK_PITCH_MIN = 5        # 度 (下限)
+TRACK_PITCH_MAX = 85       # 度 (上限; 云台俯仰限位 ±90 内)
+TRACK_PITCH_STEP = 1       # 度 (上下箭头单步)
+TRACK_PITCH_DEFAULT = 30   # 度 (初始显示值)
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）

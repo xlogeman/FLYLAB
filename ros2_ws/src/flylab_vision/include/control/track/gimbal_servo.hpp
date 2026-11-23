@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -91,6 +92,14 @@ public:
       fov_topic.c_str());
   }
 
+  /// 最近一帧目标相对视轴的像素俯仰偏角 (度, 下+): 供 TrackTakeover 高度
+  /// 环合成目标绝对俯视角 (视轴俯仰 + 该偏角); 无目标/帧无效/未更新 = NaN。
+  double angle_y_deg() const
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return ay_;
+  }
+
   bool enabled() const {return enabled_.load();}
 
   /// 接管控制菜单开/关 (vision_cmd track_gimbal_start/stop)。
@@ -114,35 +123,43 @@ public:
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(mutex_);
     frame_t_ = now;
+    // 目标像素俯仰偏角先算 (伺服失能也算, 高度环测量用): 无目标/帧无效
+    // 置 NaN, 伺服清零路径共用
+    const bool valid = has_target && frame.cols >= 2 && frame.rows >= 2;
+    const double W = frame.cols, H = frame.rows;
+    double ex = 0.0, ey = 0.0, focal = 0.0;
+    if (valid) {
+      ex = box.x + box.width * 0.5 - W * 0.5;    // 右+
+      ey = box.y + box.height * 0.5 - H * 0.5;   // 下+
+      // 焦距像素 = (W/2)/tan(hfov/2), 双轴共用 (像素误差 -> 角度误差)
+      focal =
+        (W * 0.5) / std::tan(fov_ * 0.5 * CV_PI / 180.0);
+      ay_ = std::atan(ey / focal) * 180.0 / CV_PI;
+    } else {
+      ay_ = std::numeric_limits<double>::quiet_NaN();
+    }
     if (!enabled_.load()) {
       return;
     }
-    if (!has_target || frame.cols < 2 || frame.rows < 2) {
+    if (!valid) {
       lost_zero_locked();
       return;
     }
-    // 像素误差 -> 角度误差 (焦距像素 = (W/2)/tan(hfov/2), 双轴共用)
-    const double W = frame.cols, H = frame.rows;
-    const double ex = box.x + box.width * 0.5 - W * 0.5;    // 右+
-    const double ey = box.y + box.height * 0.5 - H * 0.5;   // 下+
-    const double focal =
-      (W * 0.5) / std::tan(fov_ * 0.5 * CV_PI / 180.0);
     const double ax = std::atan(ex / focal) * 180.0 / CV_PI;
-    const double ay = std::atan(ey / focal) * 180.0 / CV_PI;
     // PD: 丢失后重捕获不做差分 (dt 失真), 只走 P
     const double dt = was_target_ ?
       std::chrono::duration<double>(now - ctrl_t_).count() : 0.0;
     const double dx = was_target_ ? ax - ax_prev_ : 0.0;
-    const double dy = was_target_ ? ay - ay_prev_ : 0.0;
+    const double dy = was_target_ ? ay_ - ay_prev_ : 0.0;
     ax_prev_ = ax;
-    ay_prev_ = ay;
+    ay_prev_ = ay_;
     was_target_ = true;
     ctrl_t_ = now;
     // 归一化画面距离 (0=中心, 1=边缘): P 增益形状因子 (像素系, 双轴各自归一)
     const double ux = std::min(1.0, std::fabs(ex) / (W * 0.5));
     const double uy = std::min(1.0, std::fabs(ey) / (H * 0.5));
     const double rx = clamp_rate(pd(ax, dx, dt, ux));
-    const double ry = clamp_rate(pd(ay, dy, dt, uy));
+    const double ry = clamp_rate(pd(ay_, dy, dt, uy));
     publish_locked(rx, -ry);   // 图像 y 下+ = 俯仰向下 (pitch+ 为抬头, 取负)
   }
 
@@ -213,6 +230,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   // ---------- 受 mutex_ 保护的状态 ----------
   double fov_ = 90.0;          // 当前水平视场角 (度, latched 同步)
+  double ay_ = std::numeric_limits<double>::quiet_NaN();  // 目标像素俯仰偏角 (度, 下+)
   std::pair<double, double> cmd_{0.0, 0.0};   // 最近下发的速率指令
   bool was_target_ = false;    // 上一帧是否有目标 (差分有效性)
   double ax_prev_ = 0.0, ay_prev_ = 0.0;      // 上一帧角度误差 (D 项)

@@ -34,6 +34,7 @@
 ///   ros2 run flylab_vision ortrack_node
 ///   ros2 run flylab_vision ortrack_node --ros-args -p device:=cuda
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -137,12 +138,15 @@ protected:
       track_state_ = "TRACK";
       classify_target(bgr, box);
       servo_->update(box, bgr, true);   // 云台伺服: 模板匹配恒有目标框
+      // 高度环测量: 视轴俯角 + 目标像素偏角 (模板匹配恒有目标)
+      takeover_->notify_target(servo_->angle_y_deg(), true);
       json = track_annotations(box, tracker_->last_score());
       publish_info();
     } else {
       // 未追踪: 无检测候选可画, 只回显框选区域供用户核对
       track_state_ = has_roi_ ? "SELECTED" : "IDLE";
       servo_->update(cv::Rect2f(), bgr, false);   // 无目标: 伺服清零
+      takeover_->notify_target(servo_->angle_y_deg(), false);   // 高度环停控
       json = has_roi_ ? browse_annotations() : "";
       publish_info();
     }
@@ -330,7 +334,14 @@ private:
        << "\"sim\":" << num(last_score_, 2) << ","
        << "\"w\":" << num(track_box_.width, 0) << ","
        << "\"h\":" << num(track_box_.height, 0) << ","
-       << "\"follow\":" << (servo_->enabled() ? 1 : 0) << "}";
+       << "\"follow\":" << (servo_->enabled() ? 1 : 0);
+    // 当前俯角测量 (度, 下正; 缺失 = null 面板隐藏"俯角"行)
+    const double pitch_meas = takeover_->measure_down_deg();
+    if (std::isnan(pitch_meas)) {
+      os << ",\"pitch\":null}";
+    } else {
+      os << ",\"pitch\":" << num(pitch_meas) << "}";
+    }
     std_msgs::msg::String out;
     out.data = os.str();
     info_pub_->publish(out);

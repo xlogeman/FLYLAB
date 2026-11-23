@@ -169,7 +169,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             set_aruco_dict=self.node.publish_aruco_dict,
             set_face_task=self.node.publish_face_task,
             set_face_topk=self.node.publish_face_topk,
-            set_fractal_config=self.node.publish_fractal_config)
+            set_fractal_config=self.node.publish_fractal_config,
+            set_track_pitch=self.node.publish_track_pitch)
         self.camera_tab.add_side_widget(self.algo_panel)
 
         # 显示画面转发挂到帧提交点: 抓取线程提交场景帧后直接把引用交给

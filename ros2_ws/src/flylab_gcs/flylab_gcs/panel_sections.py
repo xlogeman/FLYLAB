@@ -183,7 +183,7 @@ def _semantic_fields(data):
 
 def _track_fields(data):
     """追踪节点状态 -> {字段名: 文本|None|HIDE_ROW}。"""
-    out = {'目标': None, '相似度': None, '尺寸': None,
+    out = {'目标': None, '相似度': None, '俯角': HIDE_ROW, '尺寸': None,
            '跟随': HIDE_ROW, '检出': HIDE_ROW}
     # 云台跟随状态 (追踪节点伺服开关, 旧节点无 follow 字段整行隐藏)
     follow = data.get('follow')
@@ -194,6 +194,11 @@ def _track_fields(data):
     sim = data.get('sim')
     if sim is not None and data.get('state') in ('TRACK', 'LOST'):
         out['相似度'] = f'{sim:.2f}'
+    # 当前目标俯视角 (度, 向下正): 高度环启用时节点随帧发布, 旧节点/
+    # 未启用整行隐藏
+    pitch = data.get('pitch')
+    if pitch is not None:
+        out['俯角'] = f'{pitch:.1f}°'
     w, h = data.get('w'), data.get('h')
     if w and h:
         out['尺寸'] = f'{w}x{h}px'
@@ -433,6 +438,7 @@ SECTIONS = {
         'fields': [
             ('目标', lambda d: _track_fields(d)['目标']),
             ('相似度', lambda d: _track_fields(d)['相似度']),
+            ('俯角', lambda d: _track_fields(d)['俯角']),
             ('尺寸', lambda d: _track_fields(d)['尺寸']),
             ('跟随', lambda d: _track_fields(d)['跟随']),
             ('检出', lambda d: _track_fields(d)['检出']),

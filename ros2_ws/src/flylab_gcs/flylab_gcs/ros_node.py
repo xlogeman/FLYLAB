@@ -266,6 +266,16 @@ class GroundStationNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST, depth=1))
 
+        # 目标追踪俯视角度发布器 (latched 约定见 config.TRACK_PITCH_TOPIC):
+        # 算法信息"俯视角度"输入框的值经此下发追踪节点高度环, 后启动的
+        # 节点一接入即拿到当前角度
+        self.track_pitch_pub = self.create_publisher(
+            Float64, config.TRACK_PITCH_TOPIC,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST, depth=1))
+
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
         self._anno_t = time.monotonic()
@@ -561,6 +571,13 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = json.dumps({'reset': True})
         self.track_roi_pub.publish(msg)
+
+    def publish_track_pitch(self, deg):
+        """发布追踪俯视角度 (度, 向下正): 反控接管中追踪节点高度环据此
+        控制飞机升降, 使云台以该俯视角注视目标 (未动过输入框不发布)。"""
+        msg = Float64()
+        msg.data = float(deg)
+        self.track_pitch_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

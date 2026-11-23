@@ -247,7 +247,7 @@ class AlgoOutputPanel(QGroupBox):
     def __init__(self, get_info, set_marker_length=None,
                  set_landing_yaw=None, set_aruco_dict=None,
                  set_face_task=None, set_face_topk=None,
-                 set_fractal_config=None, parent=None):
+                 set_fractal_config=None, set_track_pitch=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
         self._sections = {}         # key -> _Section (仅当前显示的)
@@ -287,8 +287,13 @@ class AlgoOutputPanel(QGroupBox):
         self._fractal_box = None
         if set_fractal_config is not None:
             self._build_fractal_combo(set_fractal_config)
-        # 目标追踪无面板控件: track 分组激活期间画面框选常开 (主窗口
-        # 控制), 拖出矩形松开即自动开始追踪, 停止靠工具栏"停止算法"
+        # 目标追踪俯视角度 (跟随 track 分组显隐): 反控接管中设置云台俯视
+        # 角度, 追踪节点高度环控制飞机升降收敛到该角度
+        self._track_pitch_box = None
+        if set_track_pitch is not None:
+            self._build_track_pitch_spin(set_track_pitch)
+        # track 分组激活期间画面框选常开 (主窗口控制), 拖出矩形松开即
+        # 自动开始追踪, 停止靠工具栏"停止算法"
         # 顶部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
         # 装进一个横向容器, 整行横跨全部分组列, 置于算法分组上方 (见 _relayout);
         # 可见性跟随激活分组 (见 _update_top_visibility), 无相关算法运行时整行隐藏
@@ -296,7 +301,8 @@ class AlgoOutputPanel(QGroupBox):
         if self._marker_box is not None or self._yaw_box is not None or \
                 self._dict_box is not None or self._face_task_box is not None or \
                 self._face_topk_box is not None or \
-                self._fractal_box is not None:
+                self._fractal_box is not None or \
+                self._track_pitch_box is not None:
             top = QWidget()
             row = QHBoxLayout(top)
             row.setContentsMargins(0, 0, 0, 0)
@@ -313,6 +319,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._face_topk_box, 1)
             if self._fractal_box is not None:
                 row.addWidget(self._fractal_box, 1)
+            if self._track_pitch_box is not None:
+                row.addWidget(self._track_pitch_box, 1)
         self._top_row = top
         self._update_top_visibility([])   # 初始无分组, 整行隐藏
 
@@ -379,6 +387,32 @@ class AlgoOutputPanel(QGroupBox):
         lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
         lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
         self._yaw_box = box
+
+    def _build_track_pitch_spin(self, publish):
+        """目标追踪俯视角度 (QSpinBox): 云台注视目标的俯视角 (度, 向下正),
+        反控接管中修改即发布 (latched), 追踪节点高度环控制飞机升降收敛;
+        未动过不发布, 节点维持悬停 (与朝向偏置同步同一约定)。
+        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
+        box = QGroupBox('俯视角度 (°)')
+        box.setToolTip(
+            '反控接管中云台注视目标的俯视角 (向下为正, 水平=0):\n'
+            '设置后飞机自动升降, 直到以该俯视角注视目标;\n'
+            '未设置时反控保持原地悬停。运行中修改立即生效')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        spin = QSpinBox()
+        spin.setRange(config.TRACK_PITCH_MIN, config.TRACK_PITCH_MAX)
+        spin.setSingleStep(config.TRACK_PITCH_STEP)
+        spin.setSuffix('°')
+        spin.setKeyboardTracking(False)
+        spin.setFixedWidth(78)
+        # 初始显示默认值不发 (未动过不发布, 节点维持悬停;
+        # setValue 放在 connect 之前, 不触发 valueChanged)
+        spin.setValue(config.TRACK_PITCH_DEFAULT)
+        spin.valueChanged.connect(publish)
+        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
+        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
+        self._track_pitch_box = box
 
     def _build_dict_combo(self, publish):
         """ArUco 字典切换 (QComboBox): 候选取 config.ARUCO_DICTS, 选择即
@@ -510,6 +544,7 @@ class AlgoOutputPanel(QGroupBox):
         face_on = 'face' in keys
         aruco_on = 'aruco' in keys or (landing_on and landing_kind == 'aruco')
         fractal_on = 'fractal' in keys or (landing_on and landing_kind == 'fractal')
+        track_on = 'track' in keys
         if self._marker_box is not None:
             self._marker_box.setVisible(aruco_on or fractal_on)
         if self._yaw_box is not None:
@@ -522,9 +557,11 @@ class AlgoOutputPanel(QGroupBox):
             self._face_topk_box.setVisible(face_on)
         if self._fractal_box is not None:
             self._fractal_box.setVisible(fractal_on)
+        if self._track_pitch_box is not None:
+            self._track_pitch_box.setVisible(track_on)
         if self._top_row is not None:
             self._top_row.setVisible(
-                aruco_on or face_on or fractal_on)
+                aruco_on or face_on or fractal_on or track_on)
 
     def refresh(self):
         info = self._get_info() or {}
