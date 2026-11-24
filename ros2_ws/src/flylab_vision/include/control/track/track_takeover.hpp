@@ -149,11 +149,16 @@ public:
     alt_rate_max_ = alt_rate_max;
     alt_deadband_deg_ = alt_deadband;
     alt_slow_deg_ = alt_slow;
-    // 俯冲打击 (纯角度制导): 撞击速度与目标方向缺失容忍
-    dive_speed_ms_ = node.declare_parameter<double>("dive_speed_ms", 6.0);
+    // 俯冲打击 (纯角度制导): 撞击速度/垂直域/拉角增益/方向缺失容忍
+    dive_speed_ms_ = node.declare_parameter<double>("dive_speed_ms", 12.0);
     dive_down_max_ms_ = node.declare_parameter<double>(
-      "dive_down_max_ms", 2.5);   // ≤ PX4 MPC_Z_VEL_MAX_DN (两机型已改 2.5),
-                                  // 超过会被飞控钳位导致航迹角压平
+      "dive_down_max_ms", 2.5);   // 须 ≤ PX4 MPC_Z_VEL_MAX_DN (机型文件当前
+                                  // 2.5), 超了被飞控钳位导致航迹角压平;
+                                  // 撞击带 φ_max = asin(D/V), 想要 45° 带
+                                  // (D=V·sin45°=4.25) 需运行时把飞控该参数
+                                  // 提上去后再设本参数
+    dive_plunge_gain_ = node.declare_parameter<double>(
+      "dive_plunge_gain", 0.7);   // 拉角段水平收敛比 (须 <1, 见 dive_velocity)
     dive_lost_timeout_sec_ = node.declare_parameter<double>(
       "dive_lost_timeout_sec", 1.0);
     // 俯视角度目标 (latched): 度, 向下正; 未动过不发布 = NaN 不启用
@@ -217,6 +222,7 @@ public:
         dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
         dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
         dive_los_t_ = std::chrono::steady_clock::now();
+        dive_in_plunge_ = false;
       }
       RCLCPP_INFO(
         node_.get_logger(), "\033[32m目标追踪反控切换模式: %s\033[0m",
@@ -232,6 +238,7 @@ public:
       dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
       dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
       dive_los_t_ = std::chrono::steady_clock::now();
+      dive_in_plunge_ = false;
     }
     px4_->takeoverReset(node_.now());
     notify_frame();
@@ -358,11 +365,18 @@ private:
   ///      表现为从目标头顶飞过。世界系俯角 = 相对量 + 机体俯仰 (下正,
   ///      从 attitudeNED 四元数提取 asin(2(xz+wy)), 已对照恒等/朝东/
   ///      低头 30° 三基准验证)。
-  ///   2. 水平受垂直约束: 垂直分量限速 (dive_down_max_ms, 须 ≤ PX4
-  ///      MPC_Z_VEL_MAX_DN, 超了被飞控钳位航迹角照样压平) 后,
-  ///      水平 = 垂直 × cotθ 按同一航迹角
-  ///      推导 —— 未限速时二者还原为 V·sinθ/V·cosθ, 限速时航迹角不变
-  ///      只降总速, 避免垂直跟不上把航迹压平。
+  ///   2. 垂直域两相制导: 沿视线全速撞要求垂直分量 V·sinθ ≤ 垂直域 D
+  ///      (dive_down_max_ms, 须 ≤ PX4 MPC_Z_VEL_MAX_DN), 即视线角
+  ///      θ ≤ φ_max = asin(D/V), 超过则域装不下、沿视线飞必被钳位:
+  ///      - θ ≤ φ_max (终端撞击带): 全速沿视线, v_dn = V·sinθ,
+  ///        vh = V·cosθ, 撞击合速度恒 V 无减速;
+  ///      - θ > φ_max (拉角段): 飞机近目标顶上方, 视线过陡。垂直压满
+  ///        D, 水平 = plunge_gain·D·cotθ (严格 < D·cotθ = 视线跟随值):
+  ///        高度消耗快于水平接近 → tanθ=h/d 下降 → 视线角逐渐张开到
+  ///        φ_max 后自动切终端带。k<1 保证不越过目标上空 (k=1 即视线
+  ///        跟随, θ 恒定不收敛); 拉角段总速 √(D²+(kDcotθ)²) 随 θ 张开
+  ///        单调升, 终端切回 V。若视线中途从浅变陡越过 φ_max (垂直
+  ///        滞后所致), 入拉角段有一次性小减速, 属垂直域物理边界。
   /// 发送走机体系分量: sendVelocityFRD 实现只按当前航向旋水平分量、
   /// 垂直分量直通世界系, 垂直闭环不含机体俯仰; 水平方位由机头跟随
   /// 收口 (视线方位 ≈ 机头方位)。θ 浅→深自然过渡, 平冲渐变俯冲。
@@ -392,10 +406,37 @@ private:
       t += std::asin(
         std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0));
     }
-    // 垂直限速 → 水平按同航迹角推导 (水平受垂直约束)
+    // 两相制导: 视线角在撞击带内 (sinθ ≤ D/V) 全速沿视线; 过陡进拉角段
+    // (垂直压满域, 水平按 plunge_gain·D·cotθ 收敛, 视线角张开到 φ_max
+    // 自动切回终端带)
     const double s = std::sin(t);
-    const double v_dn = std::min(dive_speed_ms_ * s, dive_down_max_ms_);
-    const double vh = v_dn * std::cos(t) / std::max(s, 0.01);
+    const double s_max = std::min(
+      1.0, dive_down_max_ms_ / dive_speed_ms_);   // sin(φ_max)
+    double v_dn, vh;
+    if (s <= s_max) {
+      // 终端撞击带: 全速沿视线 (v_dn 未触顶, 还原为 V·sinθ/V·cosθ)
+      v_dn = dive_speed_ms_ * s;
+      vh = v_dn * std::cos(t) / std::max(s, 0.01);
+      if (dive_in_plunge_) {
+        dive_in_plunge_ = false;
+        RCLCPP_INFO(
+          node_.get_logger(),
+          "\033[32m俯冲: 视线角 %.0f° 进入撞击带 (≤%.0f°), 全速沿视线\033[0m",
+          t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI);
+      }
+    } else {
+      // 拉角段: 垂直压满 D, 水平 < 视线跟随值 → 视线角张开 (推导见上)
+      v_dn = dive_down_max_ms_;
+      vh = dive_plunge_gain_ * v_dn * std::cos(t) / std::max(s, 0.01);
+      if (!dive_in_plunge_) {
+        dive_in_plunge_ = true;
+        RCLCPP_INFO(
+          node_.get_logger(),
+          "\033[33m俯冲: 视线角 %.0f° 过陡 (>%.0f° 域限), 拉角段垂直 %.1f "
+          "压满张开视线角\033[0m",
+          t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI, v_dn);
+      }
+    }
     // 方位快闭环: 水平速度方向直接指向视线方位 (视轴方位 + 像素偏角,
     // sendVelocityFRD 按当前航向旋水平分量 → right 分量即横向修正)。
     // 不再单靠"云台伺服→机头跟随"慢链路收方位 —— 接近段视线方位角速度
@@ -537,8 +578,11 @@ private:
   double alt_slow_deg_ = 5.0;          // 中心减速段宽度 (度)
   bool alt_in_deadband_ = false;       // 死区状态 (回差迟滞)
   // ---------- 俯冲打击 (纯角度制导) ----------
-  double dive_speed_ms_ = 6.0;         // 撞击速度 (m/s, 沿目标方向定速)
-  double dive_down_max_ms_ = 2.5;      // 垂直分量限速 (m/s, 水平按 cotθ 约束)
+  double dive_speed_ms_ = 12.0;        // 撞击速度 (m/s, 沿目标方向定速)
+  double dive_down_max_ms_ = 2.5;      // 垂直分量限速 (m/s, 须 ≤ MPC_Z_VEL_
+                                       // MAX_DN; 撞击带 φ_max = asin(D/V))
+  double dive_plunge_gain_ = 0.7;      // 拉角段水平收敛比 (<1 = 视线角张开)
+  bool dive_in_plunge_ = false;        // 当前在拉角段 (日志切换用)
   double dive_lost_timeout_sec_ = 1.0; // 目标方向缺失容忍 (超时交还)
   double dive_theta_deg_ =
     std::numeric_limits<double>::quiet_NaN();  // 最近有效目标方向 (度, 下正)
