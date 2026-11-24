@@ -6,11 +6,11 @@
 (_build_teleop_menu_item), 互斥门控 (_update_takeover_gates) 也在此 ——
 门控是一张整体决策表 (谁运行中锁谁、谁是防炸机出口), 拆开反而要重复
 分支结构; 遥控专属的启停流程/摇杆/手柄见 teleop_panel.py。目标追踪
-反控挂在"视觉反控"子菜单的追踪三态项: 云台追踪机制同视觉反控降落
-(追踪节点接管 offboard 悬停跟拍), 俯冲打击/机体跟随为预留接口 (模式
-常量已就位, 行为待实现), 前提 = 云台追踪运行中, 二者互斥, 启动时自动
-按下云台面板"跟随"按钮 (机头跟随云台视线), 云台追踪弹起时联动取消,
-亦在本菜单统一门控。
+反控挂在"视觉反控"子菜单的追踪三态项: 云台追踪 = 追踪节点接管 offboard
+悬停跟拍, 俯冲打击 = 沿云台目标方向定速撞击 (track_takeover_start 带
+模式后缀切节点模式), 机体跟随为预留接口; 前提 = 云台追踪运行中, 二者
+互斥, 启动时自动按下云台面板"跟随"按钮 (机头跟随云台视线), 云台追踪
+弹起时联动取消, 亦在本菜单统一门控。
 
 菜单为常驻双层结构: 逻辑 QAction (checkable, 不进菜单) 承载勾选状态机,
 菜单显示项 (非 checkable, 绿点 = 运行中, 再点取消) 经 triggered -> 逻辑项
@@ -105,8 +105,8 @@ class LandingPanelMixin:
 
     def _set_track_stub_gates(self):
         """俯冲打击/机体跟随可用性: 前提 = 云台追踪运行中 (gimbal_act
-        勾选)。互斥切换/启动动作在点击流程 (_on_track_takeover_stub_
-        toggled), 此处只管可用性。"""
+        勾选)。互斥切换/启停动作在点击流程 (_on_track_submode_toggled),
+        此处只管可用性。"""
         stub_ok = self.gimbal_act.isChecked()
         self.dive_act.setEnabled(stub_ok)
         self.bodyfollow_act.setEnabled(stub_ok)
@@ -300,19 +300,21 @@ class LandingPanelMixin:
 
     # ---------- 目标追踪反控 (追踪节点接管 offboard: 悬停跟拍 + 机头跟随) ----------
 
-    def _on_track_takeover_stub_toggled(self, name, act):
-        """目标追踪预留接口 (俯冲打击/机体跟随) 启停: 前提 = 云台追踪
-        运行中 (gimbal_act 勾选, 不满足则拒绝并弹起); 两项互斥, 一项运行
-        中点另一项即取消当前项再启动新项。启动时自动按下云台面板"跟随"
-        按钮 (飞机跟着云台转, 反控中该按钮经 track_follow 下发追踪节点,
-        已开则不重复发布)。当前无节点行为 (仅勾选状态机 + 跟随联动),
-        行为在节点侧实现后在此接启停流程 (模式常量见 config
-        TRACK_TAKEOVER_*)。"""
+    def _on_track_submode_toggled(self, name, act):
+        """目标追踪子模式 (俯冲打击=现役/机体跟随=预留) 勾选/弹起: 前提 =
+        云台追踪运行中 (gimbal_act 勾选, 不满足则拒绝并弹起); 两项互斥,
+        一项运行中点另一项即取消当前项再启动新项。俯冲打击勾选发
+        "track_takeover_start dive" (节点切俯冲模式, 接管不断), 弹起且
+        云台追踪仍在 → 发 start 不带模式切回悬停跟拍; 云台追踪弹起的联动
+        弹起不发指令 (stop 由其弹起分支统一发)。启动时自动按下云台面板
+        "跟随"按钮 (俯冲方位收口靠机头跟随, 已开则不重复发布)。"""
         if not act.isChecked():
-            # 弹起 (用户取消/互斥切换/联动取消): 云台追踪仍在运行则文字
-            # 回到其显示, 全部结束才复位
+            # 弹起 (用户取消/互斥切换/联动取消): 云台追踪仍在运行则切回
+            # 其模式, 全部结束才复位
             if self.gimbal_act.isChecked():
                 self.takeover_btn.setText('接管控制: 目标追踪')
+                if act is self.dive_act:
+                    self.node.publish_cmd(config.TRACK_TAKEOVER_START_CMD)
             elif not (self.dive_act.isChecked()
                       or self.bodyfollow_act.isChecked()):
                 self.takeover_btn.setText('接管控制')
@@ -327,7 +329,15 @@ class LandingPanelMixin:
         if not self.camera_tab.btn_follow.isChecked():
             self.camera_tab.btn_follow.setChecked(True)
         self.takeover_btn.setText(f'接管控制: {name}')
-        self.log.info(f'{name}: 已启动, "跟随"已自动按下 (接口预留, 行为待实现)')
+        if act is self.dive_act:
+            self.node.publish_cmd(
+                f'{config.TRACK_TAKEOVER_START_CMD} '
+                f'{config.TRACK_TAKEOVER_DIVE}')
+            self.log.info('俯冲打击: 沿云台目标方向定速撞击 '
+                          '(取消: 再点本项切回云台追踪悬停跟拍)')
+        else:
+            self.log.info(f'{name}: 已启动, "跟随"已自动按下 (接口预留, '
+                          '行为待实现)')
 
     def _on_track_takeover_toggled(self, checked):
         """目标追踪反控开关 (机制同 ArUco 降落反控): 发接管启停指令给
@@ -378,7 +388,9 @@ class LandingPanelMixin:
         if not status:
             return
         if status == 'engaged':
-            self.takeover_btn.setText('接管控制: 目标追踪')
+            self.takeover_btn.setText(
+                '接管控制: 俯冲打击' if self.dive_act.isChecked()
+                else '接管控制: 目标追踪')
             return
         if status == 'failed':
             self.log.error('目标追踪反控: offboard 接管失败 (检查通信链路/'
@@ -398,7 +410,7 @@ class LandingPanelMixin:
               3D 姿态  = 以码的 3D 位姿 (机体系米级误差) 闭环降落
             目标追踪算法 (enables_takeover) → 追踪三态子项:
               云台追踪 = 悬停跟拍 (云台伺服保持目标居中 + 机头跟随)
-              俯冲打击 / 机体跟随 = 预留接口
+              俯冲打击 = 沿云台目标方向定速撞击; 机体跟随 = 预留接口
             无适用子项 (其余反控算法/无算法) → 子项全隐, 子菜单置灰不可点
         - 手动遥控: teleop_node 接管 offboard, 右栏摇杆控速度; 反控中可点
           遥控抢回控制权 (防炸机出口)"""
@@ -447,11 +459,11 @@ class LandingPanelMixin:
         self.gimbal_act.toggled.connect(self._on_track_takeover_toggled)
         self.dive_act, self.dive_disp = make_action_pair(
             self.landing_menu, '俯冲打击',
-            '需先: 云台追踪运行中 (本菜单"云台追踪"项)。与机体跟随互斥 '
-            '(点另一项自动取消本项); 启动时自动按下云台面板"跟随"按钮 '
-            '(飞机跟着云台转)。预留接口, 飞控行为待实现')
+            '需先: 云台追踪运行中 (本菜单"云台追踪"项)。沿云台目标方向 '
+            '定速撞击 (纯角度制导, 机头跟随收口方位); 与机体跟随互斥 '
+            '(点另一项自动取消本项); 再点本项切回云台追踪悬停跟拍')
         self.dive_act.toggled.connect(
-            lambda checked: self._on_track_takeover_stub_toggled(
+            lambda checked: self._on_track_submode_toggled(
                 '俯冲打击', self.dive_act))
         self.bodyfollow_act, self.bodyfollow_disp = make_action_pair(
             self.landing_menu, '机体跟随',
@@ -459,7 +471,7 @@ class LandingPanelMixin:
             '(点另一项自动取消本项); 启动时自动按下云台面板"跟随"按钮 '
             '(飞机跟着云台转)。预留接口, 飞控行为待实现')
         self.bodyfollow_act.toggled.connect(
-            lambda checked: self._on_track_takeover_stub_toggled(
+            lambda checked: self._on_track_submode_toggled(
                 '机体跟随', self.bodyfollow_act))
         # 手动遥控菜单项 (TeleopPanelMixin, 勾选联动其启停流程)
         self.teleop_act, self.teleop_disp = self._build_teleop_menu_item(menu)

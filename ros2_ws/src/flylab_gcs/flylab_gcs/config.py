@@ -229,11 +229,11 @@ TRACK_BEGIN_CMD = 'track_begin'
 # 让目标保持在画面中央; 再点菜单项或停止算法即交还控制权
 TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
-# 目标追踪反控模式 (菜单三态; 将来随 track_takeover_start 以模式参数下发
-# 节点, 同 landing_mode 的传参约定)。云台追踪为现役功能, 俯冲打击/机体
-# 跟随为预留接口 (菜单项已就位, 节点侧行为待实现)
+# 目标追踪反控模式 (菜单三态; 随 track_takeover_start 以模式后缀下发
+# 节点, 如 "track_takeover_start dive", 同 landing_mode 的传参约定)。
+# 云台追踪/俯冲打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
 TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 云台追踪: 悬停跟拍 (现役)
-TRACK_TAKEOVER_DIVE = 'dive'              # 俯冲打击: 预留
+TRACK_TAKEOVER_DIVE = 'dive'              # 俯冲打击: 沿目标方向定速撞击
 TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随: 预留
 # 反控节点状态回传 (engaged=接管成功 / idle=已交还 / failed=接管失败),
 # 地面站据此联动菜单项 (同降落/遥控状态回传模式)

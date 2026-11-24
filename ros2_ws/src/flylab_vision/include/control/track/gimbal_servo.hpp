@@ -100,6 +100,14 @@ public:
     return ay_;
   }
 
+  /// 最近一帧目标相对视轴的像素方位偏角 (度, 右+): 供 TrackTakeover 俯冲
+  /// 制导合成目标绝对方位 (视轴方位 + 该偏角); 无效时 NaN, 约定同上。
+  double angle_x_deg() const
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return ax_;
+  }
+
   bool enabled() const {return enabled_.load();}
 
   /// 接管控制菜单开/关 (vision_cmd track_gimbal_start/stop)。
@@ -135,8 +143,10 @@ public:
       focal =
         (W * 0.5) / std::tan(fov_ * 0.5 * CV_PI / 180.0);
       ay_ = std::atan(ey / focal) * 180.0 / CV_PI;
+      ax_ = std::atan(ex / focal) * 180.0 / CV_PI;
     } else {
       ay_ = std::numeric_limits<double>::quiet_NaN();
+      ax_ = std::numeric_limits<double>::quiet_NaN();
     }
     if (!enabled_.load()) {
       return;
@@ -145,7 +155,7 @@ public:
       lost_zero_locked();
       return;
     }
-    const double ax = std::atan(ex / focal) * 180.0 / CV_PI;
+    const double ax = ax_;   // 方位像素偏角已在上方与 ay_ 一并算好
     // PD: 丢失后重捕获不做差分 (dt 失真), 只走 P
     const double dt = was_target_ ?
       std::chrono::duration<double>(now - ctrl_t_).count() : 0.0;
@@ -231,6 +241,7 @@ private:
   // ---------- 受 mutex_ 保护的状态 ----------
   double fov_ = 90.0;          // 当前水平视场角 (度, latched 同步)
   double ay_ = std::numeric_limits<double>::quiet_NaN();  // 目标像素俯仰偏角 (度, 下+)
+  double ax_ = std::numeric_limits<double>::quiet_NaN();  // 目标像素方位偏角 (度, 右+)
   std::pair<double, double> cmd_{0.0, 0.0};   // 最近下发的速率指令
   bool was_target_ = false;    // 上一帧是否有目标 (差分有效性)
   double ax_prev_ = 0.0, ay_prev_ = 0.0;      // 上一帧角度误差 (D 项)

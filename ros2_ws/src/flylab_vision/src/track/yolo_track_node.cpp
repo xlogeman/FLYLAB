@@ -10,9 +10,10 @@
 ///      追踪中重新框选即换目标 (复位后重新锁定), 停止靠 track_stop
 ///   5. 画面叠加: 检测/目标框转 JSON 标注发 /flylab/annotations (组名 "track")
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
-///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start/stop
-///      开关 (地面站"接管控制→目标追踪"); 接管 offboard 拿到飞机控制权
-///      (悬停跟拍 + 机头跟随, 见 control/track/track_takeover.hpp), 同时云台
+///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start[/stop]
+///      (可带模式后缀 " dive"=俯冲打击, 不带=云台追踪悬停跟拍); 接管
+///      offboard 拿到飞机控制权 (悬停跟拍/俯冲打击 + 机头跟随, 见
+///      control/track/track_takeover.hpp), 同时云台
 ///      伺服按追踪框相对画面中心的偏移发 /flylab/gimbal_cmd 反控软云台,
 ///      让目标保持在画面中央 (control/track/gimbal_servo.hpp)
 ///
@@ -150,14 +151,15 @@ protected:
       }
       // 云台伺服: 目标在跟 -> 按框中心偏移驱动云台; 丢失 -> 清零速率
       servo_->update(st.box, bgr, st.has);
-      // 高度环测量: 视轴俯角 + 目标像素偏角 (丢失 = NaN 停控)
-      takeover_->notify_target(servo_->angle_y_deg(), st.has);
+      // 反控测量: 视轴角 + 目标像素偏角 (俯仰/方位, 丢失 = NaN 停控)
+      takeover_->notify_target(
+        servo_->angle_y_deg(), servo_->angle_x_deg(), st.has);
       json = track_annotations(st);
     } else {
       // 未追踪: 显示全部检测 + 框选区域, 供用户核对框选
       track_state_ = has_roi_ ? "SELECTED" : "IDLE";
       servo_->update(cv::Rect2f(), bgr, false);   // 无目标: 伺服清零
-      takeover_->notify_target(servo_->angle_y_deg(), false);   // 高度环停控
+      takeover_->notify_target(servo_->angle_y_deg(), servo_->angle_x_deg(), false);
       json = browse_annotations(dets);
     }
     publish_info(static_cast<int>(dets.size()));
@@ -241,11 +243,14 @@ private:
     if (msg.data == "track_begin") {
       // 帧上下文里锁定 (需要裁外观块); 追踪中收到且带新框选即换目标
       begin_req_ = true;
-    } else if (msg.data == "track_takeover_start") {
-      // 目标追踪反控 (接管控制菜单): 接管 offboard + 开云台伺服; 先开
-      // 亦可, 框选锁定目标后伺服自动介入 (接管期间悬停)
+    } else if (msg.data.rfind("track_takeover_start", 0) == 0) {
+      // 目标追踪反控 (接管控制菜单): 可带模式后缀 "track_takeover_start
+      // dive" (俯冲打击), 不带 = 云台追踪 (悬停跟拍); 先开亦可, 框选锁定
+      // 目标后伺服自动介入; 已接管时为模式切换
       servo_->set_enabled(true);
-      takeover_->activate();
+      takeover_->activate(
+        msg.data.find("dive") != std::string::npos ?
+        TrackTakeover::Mode::Dive : TrackTakeover::Mode::Gimbal);
     } else if (msg.data == "track_takeover_stop") {
       servo_->set_enabled(false);
       takeover_->deactivate("地面站取消");

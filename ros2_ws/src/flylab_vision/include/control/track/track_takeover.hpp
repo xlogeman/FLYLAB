@@ -22,18 +22,22 @@ namespace flylab_vision
 {
 
 /// 目标追踪反控接管层 (yolo_track / ortrack 共用): 接管 offboard 拿到飞机
-/// 控制权 —— 原地悬停 + 机头跟随 (视线方位收敛), 云台伺服 (GimbalServo)
-/// 继续由帧上下文驱动让追踪目标保持在画面中央, 即"悬停跟拍"形态;
-/// 地面站设置了俯视角度 (/flylab/track_pitch) 时再叠加高度环: 以
-/// "视轴俯角 (gimbal_state) + 目标像素偏角"为测量, P 律控制飞机升降
-/// 收敛到设定俯视角 (跟着目标飞的速度环仍在 tickEngaged 里扩展)。
+/// 控制权, 按模式二选一:
+///   云台追踪 (Gimbal): 原地悬停 + 机头跟随 (视线方位收敛), 云台伺服
+///     (GimbalServo) 继续由帧上下文驱动让追踪目标保持在画面中央, 即
+///     "悬停跟拍"形态; 地面站设置了俯视角度 (/flylab/track_pitch) 时再
+///     叠加高度环: 以"视轴俯角 (gimbal_state) + 目标像素偏角"为测量,
+///     P 律控制飞机升降收敛到设定俯视角
+///   俯冲打击 (Dive): 纯角度制导 —— 沿"视轴俯角 + 目标像素偏角"合成的
+///     目标方向定速撞击 (见 dive_velocity), 机头跟随收口方位; 目标方向
+///     缺失超过 dive_lost_timeout_sec 交还
 ///
 /// 与 aruco_landing_node 同一套组件与流程 (px4_offboard_client, offboard
 /// 单写者原则 —— 接管期间偏航指令由本节点注入, 地面站遥控必须退出):
 ///   激活: takeoverReset → 定时 tick 跑接管状态机 (心跳预热 → 周期请求 →
-///         确认), ENGAGED 后持续 sendVelocityFRDYawRate(0,0,vz,yaw) 维持
-///         offboard 心跳 (vz 默认 0 = 原地悬停, 启用高度环时为升降速度;
-///         yaw 为机头跟随)
+///         确认), ENGAGED 后持续 sendVelocityFRDYawRate 维持 offboard
+///         心跳 (云台追踪: 速度=悬停/高度环升降; 俯冲打击: 速度=沿目标
+///         方向定速; yaw 均为机头跟随); 已激活时 activate 即模式切换
 ///   交还: requestLoiter 切回 AUTO.LOITER; 上锁 / OFFBOARD 被外部切换 /
 ///         图像断流 / 接管超时 自动交还并回 idle
 /// 机头跟随: 经 GimbalFollow 组件 (control/common/gimbal_follow.hpp, 通道
@@ -49,6 +53,18 @@ namespace flylab_vision
 class TrackTakeover
 {
 public:
+  /// 反控模式 (vision_cmd track_takeover_start [mode], 字符串与
+  /// 地面站 config TRACK_TAKEOVER_* 一致)
+  enum class Mode
+  {
+    Gimbal,   // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
+    Dive      // 俯冲打击: 沿云台目标方向定速撞击 (纯角度制导)
+  };
+  static const char * mode_name(Mode m)
+  {
+    return m == Mode::Dive ? "俯冲打击" : "云台追踪";
+  }
+
   explicit TrackTakeover(rclcpp::Node & node)
   : node_(node)
   {
@@ -133,6 +149,13 @@ public:
     alt_rate_max_ = alt_rate_max;
     alt_deadband_deg_ = alt_deadband;
     alt_slow_deg_ = alt_slow;
+    // 俯冲打击 (纯角度制导): 撞击速度与目标方向缺失容忍
+    dive_speed_ms_ = node.declare_parameter<double>("dive_speed_ms", 6.0);
+    dive_down_max_ms_ = node.declare_parameter<double>(
+      "dive_down_max_ms", 2.5);   // ≤ PX4 MPC_Z_VEL_MAX_DN (两机型已改 2.5),
+                                  // 超过会被飞控钳位导致航迹角压平
+    dive_lost_timeout_sec_ = node.declare_parameter<double>(
+      "dive_lost_timeout_sec", 1.0);
     // 俯视角度目标 (latched): 度, 向下正; 未动过不发布 = NaN 不启用
     // (维持悬停)。接管中修改立即生效, 未接管先设置则接管时生效
     const auto pitch_target_topic = node.declare_parameter<std::string>(
@@ -167,8 +190,10 @@ public:
         const double vz = 2.0 * (x * z - w * y);
         const double down =
           std::atan2(vz, std::hypot(vx, vy)) * 180.0 / M_PI;
+        const double az = std::atan2(vy, vx) * 180.0 / M_PI;   // 右+
         std::lock_guard<std::mutex> lk(mutex_);
         boresight_down_deg_ = down;
+        boresight_az_deg_ = az;
         gimbal_t_ = std::chrono::steady_clock::now();
       });
 
@@ -178,24 +203,42 @@ public:
       [this] {tick();});
   }
 
-  /// 激活反控 (vision_cmd track_takeover_start): 幂等, 重复激活无副作用
-  void activate()
+  /// 激活反控 (vision_cmd track_takeover_start [mode]): 幂等; 未激活时
+  /// 完整接管, 已激活时仅切换模式 (云台追踪↔俯冲打击, 接管状态不断)
+  void activate(Mode mode)
   {
     if (active_) {
+      if (mode_ == mode) {
+        return;
+      }
+      mode_ = mode;
+      {   // 俯冲方向状态复位: 丢失超时窗口从切换时刻重新起算
+        std::lock_guard<std::mutex> lk(mutex_);
+        dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
+        dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
+        dive_los_t_ = std::chrono::steady_clock::now();
+      }
+      RCLCPP_INFO(
+        node_.get_logger(), "\033[32m目标追踪反控切换模式: %s\033[0m",
+        mode_name(mode));
       return;
     }
     active_ = true;
+    mode_ = mode;
     ever_engaged_ = false;
     {   // 死区迟滞复位 (重新收敛; 与 alt_vz 同一把锁, 纪律一致)
       std::lock_guard<std::mutex> lk(mutex_);
       alt_in_deadband_ = false;
+      dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
+      dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
+      dive_los_t_ = std::chrono::steady_clock::now();
     }
     px4_->takeoverReset(node_.now());
     notify_frame();
     RCLCPP_INFO(
       node_.get_logger(),
-      "\033[32m目标追踪反控: 接管 offboard, 预热 %.1fs 后切模式 "
-      "(悬停跟拍 + 机头跟随)\033[0m", warmup_sec_);
+      "\033[32m目标追踪反控 (%s): 接管 offboard, 预热 %.1fs 后切模式\033[0m",
+      mode_name(mode), warmup_sec_);
   }
 
   /// 交还反控 (vision_cmd track_takeover_stop / 异常自愈): 幂等
@@ -224,13 +267,15 @@ public:
     frame_t_ = std::chrono::steady_clock::now();
   }
 
-  /// 帧上下文每帧调用 (process 里伺服 update 之后): 喂目标像素俯仰偏角
-  /// (GimbalServo::angle_y_deg) 与目标在跟与否 —— 高度环测量 = 视轴俯角
-  /// (gimbal_state) + 该偏角, 无目标置 NaN (高度环停控, 悬停)
-  void notify_target(double angle_y_deg, bool has_target)
+  /// 帧上下文每帧调用 (process 里伺服 update 之后): 喂目标像素俯仰/方位
+  /// 偏角 (GimbalServo::angle_y_deg/angle_x_deg) 与目标在跟与否 —— 俯冲
+  /// 制导测量 = 视轴角 (gimbal_state) + 对应像素偏角, 无目标置 NaN (停控)
+  void notify_target(double angle_y_deg, double angle_x_deg, bool has_target)
   {
     std::lock_guard<std::mutex> lk(mutex_);
     angle_y_ = has_target ? angle_y_deg :
+      std::numeric_limits<double>::quiet_NaN();
+    angle_x_ = has_target ? angle_x_deg :
       std::numeric_limits<double>::quiet_NaN();
   }
 
@@ -293,10 +338,74 @@ private:
       }
       return;
     }
-    // 已接管: 机头跟随 + 悬停/高度环 (俯视角度启用时控制升降, 否则
-    // 速度全零原地悬停), offboard 心跳随 setpoint 持续发
+    // 已接管: 机头跟随 + 模式速度指令 (云台追踪 = 悬停/高度环升降;
+    // 俯冲打击 = 沿目标方向定速, 方向缺失超时交还), 心跳随 setpoint 持续发
     follow_->request(true);
+    if (mode_ == Mode::Dive) {
+      if (!dive_velocity()) {
+        deactivate("俯冲目标方向丢失");
+      }
+      return;
+    }
     px4_->sendVelocityFRDYawRate(0.0, 0.0, alt_vz(), follow_yaw_rate());
+  }
+
+  /// 俯冲打击速度指令 (纯角度制导): 定速 dive_speed_ms 沿"视轴俯角 +
+  /// 目标像素偏角"合成的目标方向撞过去。两条修正保证航迹贴合视线:
+  ///   1. 机体俯仰补偿: 方向测量是机体相对量, 云台伺服把相机稳在
+  ///      世界系 → 机体低头的差值全落在相对量里, 比真实视线角浅出
+  ///      机体俯仰角; 不补偿则航迹比视线平, 俯冲加速越猛偏得越多,
+  ///      表现为从目标头顶飞过。世界系俯角 = 相对量 + 机体俯仰 (下正,
+  ///      从 attitudeNED 四元数提取 asin(2(xz+wy)), 已对照恒等/朝东/
+  ///      低头 30° 三基准验证)。
+  ///   2. 水平受垂直约束: 垂直分量限速 (dive_down_max_ms, 须 ≤ PX4
+  ///      MPC_Z_VEL_MAX_DN, 超了被飞控钳位航迹角照样压平) 后,
+  ///      水平 = 垂直 × cotθ 按同一航迹角
+  ///      推导 —— 未限速时二者还原为 V·sinθ/V·cosθ, 限速时航迹角不变
+  ///      只降总速, 避免垂直跟不上把航迹压平。
+  /// 发送走机体系分量: sendVelocityFRD 实现只按当前航向旋水平分量、
+  /// 垂直分量直通世界系, 垂直闭环不含机体俯仰; 水平方位由机头跟随
+  /// 收口 (视线方位 ≈ 机头方位)。θ 浅→深自然过渡, 平冲渐变俯冲。
+  /// 目标方向短缺失 (<dive_lost_timeout_sec) 沿最近有效方向惯性直飞
+  /// (单帧漏检不刹车), 超时返回 false 由调用方交还 (不盲飞)。
+  bool dive_velocity()
+  {
+    double t = 0.0, az = 0.0;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      double th = 0.0, a = 0.0;
+      if (measure_locked(&th, &a)) {
+        dive_theta_deg_ = th;
+        dive_az_deg_ = a;
+        dive_los_t_ = std::chrono::steady_clock::now();
+      } else if (std::chrono::steady_clock::now() - dive_los_t_ >
+                 std::chrono::duration<double>(dive_lost_timeout_sec_))
+      {
+        return false;
+      }
+      t = dive_theta_deg_ * M_PI / 180.0;
+      az = dive_az_deg_ * M_PI / 180.0;
+    }
+    // 机体俯仰补偿 → 世界系俯角 (下正)
+    const auto att = px4_->attitudeNED();
+    if (att.valid) {
+      t += std::asin(
+        std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0));
+    }
+    // 垂直限速 → 水平按同航迹角推导 (水平受垂直约束)
+    const double s = std::sin(t);
+    const double v_dn = std::min(dive_speed_ms_ * s, dive_down_max_ms_);
+    const double vh = v_dn * std::cos(t) / std::max(s, 0.01);
+    // 方位快闭环: 水平速度方向直接指向视线方位 (视轴方位 + 像素偏角,
+    // sendVelocityFRD 按当前航向旋水平分量 → right 分量即横向修正)。
+    // 不再单靠"云台伺服→机头跟随"慢链路收方位 —— 接近段视线方位角速度
+    // 随距离减小发散, 慢链路 (死区+限幅+多级延迟) 跟不上, 残余方位误差
+    // 以横移积累, 表现为从目标左右侧掠过。机头跟随仍运行 (把 nose 拉回
+    // 视线, 恢复前向视场), 与本环同向不冲突。±45° 限幅 = 云台方位限位
+    const double a = std::clamp(az, -45.0 * M_PI / 180.0, 45.0 * M_PI / 180.0);
+    px4_->sendVelocityFRDYawRate(
+      vh * std::cos(a), vh * std::sin(a), v_dn, follow_yaw_rate());
+    return true;
   }
 
   /// 机头跟随偏航角速率 (rad/s, NED 正=右转): 误差 (度, 视线在机头右侧
@@ -361,9 +470,10 @@ private:
       alt_kp_ * err * u, -alt_rate_max_, alt_rate_max_);
   }
 
-  /// 俯角测量合成 (须已持锁): 视轴俯角 + 目标像素偏角; 云台姿态过期
-  /// (>0.5s 未更新) / 目标像素偏角缺失 (丢失) 返回 false
-  bool measure_locked(double * out) const
+  /// 目标方向测量合成 (须已持锁): 俯角 = 视轴俯角 + 像素俯仰偏角 (下+),
+  /// 方位 = 视轴方位 + 像素方位偏角 (右+); 云台姿态过期 (>0.5s 未更新) /
+  /// 目标像素偏角缺失 (丢失) 返回 false。az_out 可为 nullptr (高度环只用俯角)
+  bool measure_locked(double * out, double * az_out = nullptr) const
   {
     if (gimbal_t_ == std::chrono::steady_clock::time_point{} ||
         std::chrono::steady_clock::now() - gimbal_t_ >
@@ -373,6 +483,10 @@ private:
       return false;
     }
     *out = boresight_down_deg_ + angle_y_;
+    if (az_out != nullptr) {
+      *az_out = boresight_az_deg_ +
+        (std::isnan(angle_x_) ? 0.0 : angle_x_);
+    }
     return true;
   }
 
@@ -395,14 +509,18 @@ private:
 
   bool active_ = false;
   bool ever_engaged_ = false;        // 曾确认进入 offboard (外部切换判定)
+  Mode mode_ = Mode::Gimbal;         // 反控模式 (activate 切换)
   bool nose_follow_ = true;          // 机头跟随开关 (/flylab/track_follow)
   std::chrono::steady_clock::time_point frame_t_;
   // ---------- 高度环测量/目标 (受 mutex_ 保护) ----------
   double pitch_target_ = std::numeric_limits<double>::quiet_NaN();
   // 俯视角度目标 (度, 下正); NaN = 未设置 (不启用)
   double boresight_down_deg_ = 0.0;  // 视轴俯角测量 (度, 下正, gimbal_state)
+  double boresight_az_deg_ = 0.0;    // 视轴方位测量 (度, 右正, gimbal_state)
   double angle_y_ = std::numeric_limits<double>::quiet_NaN();
   // 目标像素俯仰偏角 (度, 下正, 帧上下文喂入; 丢失 = NaN)
+  double angle_x_ = std::numeric_limits<double>::quiet_NaN();
+  // 目标像素方位偏角 (度, 右正, 帧上下文喂入; 丢失 = NaN)
   std::chrono::steady_clock::time_point gimbal_t_;  // 最近云台姿态时刻
   double warmup_sec_ = 1.0;
   double retry_sec_ = 10.0;
@@ -418,6 +536,15 @@ private:
   double alt_deadband_deg_ = 2.0;      // 俯角对准死区 (度, 回差 1.5×)
   double alt_slow_deg_ = 5.0;          // 中心减速段宽度 (度)
   bool alt_in_deadband_ = false;       // 死区状态 (回差迟滞)
+  // ---------- 俯冲打击 (纯角度制导) ----------
+  double dive_speed_ms_ = 6.0;         // 撞击速度 (m/s, 沿目标方向定速)
+  double dive_down_max_ms_ = 2.5;      // 垂直分量限速 (m/s, 水平按 cotθ 约束)
+  double dive_lost_timeout_sec_ = 1.0; // 目标方向缺失容忍 (超时交还)
+  double dive_theta_deg_ =
+    std::numeric_limits<double>::quiet_NaN();  // 最近有效目标方向 (度, 下正)
+  double dive_az_deg_ =
+    std::numeric_limits<double>::quiet_NaN();  // 最近有效目标方位 (度, 右正)
+  std::chrono::steady_clock::time_point dive_los_t_;  // 最近有效方向时刻
 };
 
 }  // namespace flylab_vision
