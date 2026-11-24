@@ -361,9 +361,16 @@ class CameraViewWidget(QWidget):
         elif ok:
             self.btn_follow.setEnabled(True)
         else:
-            if self.btn_follow.isChecked():
-                self.btn_follow.setChecked(False)  # 退出接管自动关闭 (toggled 分发)
-            self.btn_follow.setEnabled(False)
+            if self._follow_mode == 'track':
+                # 反控中可用性丢失 (AirSim 重连/云台缺失): 只禁用不弹回 ——
+                # 此时弹回会经 toggled 下发 latched False, 之后可用性恢复
+                # 无人补发, 机头跟随再也起不来 ("跟随有时不启动"根因);
+                # 勾选状态保留, 恢复后按钮直接可点
+                self.btn_follow.setEnabled(False)
+            else:
+                if self.btn_follow.isChecked():
+                    self.btn_follow.setChecked(False)  # 退出接管自动关闭 (toggled 分发)
+                self.btn_follow.setEnabled(False)
 
     def set_track_follow_cb(self, cb):
         """注入反控机头跟随开关的发布通道 (node.publish_track_follow)。"""
@@ -376,6 +383,11 @@ class CameraViewWidget(QWidget):
         重新反控须复位同步; 切换后立即按新语义重落地可用性 (teleop=
         默认开+锁定, track=可点), 不等下一轮 33ms 轮询。"""
         if mode == self._follow_mode:
+            # 快速重开 (停止→再点 < 一个轮询周期) 时模式来不及切回 teleop:
+            # 按钮为开则补发 True 兜底, 保证 latched 开关与按钮一致 (节点侧幂等)
+            if mode == 'track' and self.btn_follow.isChecked() \
+                    and self._track_follow_cb is not None:
+                self._track_follow_cb(True)
             return
         self._follow_mode = mode
         if mode == 'track':

@@ -22,7 +22,7 @@
 
 界面结构:
   顶部工具栏 (QToolBar): 视频源 / PX4 SITL / 飞行控制 / 通信链路 /
-  视觉算法 / 飞行链路 / 接管控制, 全部下拉或 toggle 交互
+  接管控制 / 视觉算法 / 飞行链路, 全部下拉或 toggle 交互
   左侧画面 + 底部日志框 (camera_widget 内部布局)
   右栏: 航线地图 + 罗盘 → 云台 (视场/变焦) → 手动遥控双摇杆
 """
@@ -142,9 +142,9 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.toolbar.addWidget(self._build_px4_button())
         self.toolbar.addWidget(self._build_vehicle_button())
         self.toolbar.addWidget(self._build_link_button())
+        self.toolbar.addWidget(self._build_takeover_button())
         self.toolbar.addWidget(self._build_algo_button())
         self.toolbar.addWidget(self._build_flight_button())
-        self.toolbar.addWidget(self._build_takeover_button())
         self.toolbar.addWidget(self._build_ulg_button())
         self.addToolBar(self.toolbar)
 

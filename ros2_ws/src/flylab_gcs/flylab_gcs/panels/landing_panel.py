@@ -353,6 +353,12 @@ class LandingPanelMixin:
             if self.landing_act.isChecked():
                 self.landing_act.setChecked(False)   # offboard 互斥 (双保险)
                 self._stop_landing()
+            # 同步按下"跟随"按钮 (机头跟随默认开): 不等 33ms 轮询, 与俯冲/
+            # 机体跟随子项同款 —— 否则轮询瞬间若恰逢 AirSim 重连窗口, 按下
+            # 后会被可用性门控弹回且无人补发。此刻语义可能还是 teleop,
+            # toggled 先走抓取器 (无副作用), 轮询切 track 语义时会下发 True
+            if not self.camera_tab.btn_follow.isChecked():
+                self.camera_tab.btn_follow.setChecked(True)
             self.takeover_btn.setText('接管控制: 目标追踪')
             self.node.publish_cmd(config.TRACK_TAKEOVER_START_CMD)
             self.log.info('目标追踪反控: 接管 offboard 悬停跟拍 '
