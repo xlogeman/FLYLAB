@@ -125,6 +125,9 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 话题下发
         self._track_tracking = False
         self.camera_tab.video.bbox_selected.connect(self._on_track_bbox)
+        # 深度估计悬停读数: 鼠标放在画面上显示该处深度 (气泡随数据
+        # 新鲜度自动出现/隐藏, 深度节点停止后自动失效)
+        self.camera_tab.video.set_depth_provider(self.node.get_depth_at)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
         # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)

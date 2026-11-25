@@ -29,6 +29,12 @@ DISPLAY_IMAGE_RELIABLE = False
 # 640x480 原始传输 ~900KB 对 WSL 链路无压力
 DISPLAY_SCENE_COMPRESS = False
 
+# ---------- 深度估计悬停读数 ----------
+# yolo_depth_node 把降采样深度图 (16UC1, 毫米) 发到此话题, 界面订阅后
+# 鼠标悬停画面即显示该处深度气泡 (数据随算法启停自然出现/过期)
+DEPTH_MAP_TOPIC = '/flylab/depth_map'
+DEPTH_MAP_FRESH_SEC = 0.5   # 超过此间隔无新深度图视为节点已停, 隐藏读数
+
 # 算法启停指令：按钮按下/抬起时发布 std_msgs/String
 CMD_TOPIC = '/flylab/vision_cmd'
 

@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter, QPolygonF
-from PyQt5.QtWidgets import QLabel
+from PyQt5.QtWidgets import QLabel, QToolTip
 
 
 class VideoLabel(QLabel):
@@ -47,6 +47,28 @@ class VideoLabel(QLabel):
         self._annotations = []    # 模型输出标注 (overlay.py schema)
         self._hud = None          # 画面左上角 HUD 文字 (如图像帧率)
         self._hud_algo = None     # HUD 第二行 (算法输出帧率)
+        self._depth_provider = None   # fn(x, y, w, h) -> 米|None (悬停读数)
+
+    # ---------- 深度悬停读数 ----------
+
+    def set_depth_provider(self, fn):
+        """挂载深度查询回调 fn(x, y, frame_w, frame_h) -> 米|None:
+        深度估计运行中鼠标悬停画面在鼠标处显示深度气泡; 返回 None
+        (节点没跑/数据过期) 自动隐藏。None 取消挂载。"""
+        self._depth_provider = fn
+
+    def _update_depth_tooltip(self, ev):
+        """悬停深度气泡: provider 返回新鲜值即显示, 否则隐藏。
+        无画面/框选进行中不显示 (无图可读或画面冻结)。"""
+        val = None
+        if (self._depth_provider is not None and self._pixmap is not None
+                and self._sel_start is None):
+            p = self._to_image(ev.pos())
+            val = self._depth_provider(p.x(), p.y(), *self._img_size)
+        if val is None:
+            QToolTip.hideText()
+        else:
+            QToolTip.showText(ev.globalPos(), f'深度 {val:.2f} m', self)
 
     # ---------- 帧显示 ----------
 
@@ -142,7 +164,13 @@ class VideoLabel(QLabel):
             self._pan_start = ev.pos()
             if d.x() or d.y():           # 逐段发增量, 抓取层折算窗口移动
                 self.pan_moved.emit(d.x(), d.y())
+        self._update_depth_tooltip(ev)
         super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        """鼠标移出画面: 隐藏悬停深度气泡。"""
+        QToolTip.hideText()
+        super().leaveEvent(ev)
 
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.LeftButton:

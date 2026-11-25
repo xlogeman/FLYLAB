@@ -9,6 +9,7 @@ import threading
 import time
 from array import array
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import Quaternion, Twist
 from rclpy.node import Node
@@ -301,6 +302,15 @@ class GroundStationNode(Node):
         self.create_subscription(
             String, config.ARUCO_INFO_TOPIC, self._aruco_info_cb, 10)
 
+        # 深度估计悬停读数: 订阅 yolo_depth_node 的降采样深度图 (16UC1,
+        # 毫米, best-effort)。单槽存最新帧引用 (GIL 下引用替换原子, 界面
+        # 线程悬停查询无锁); 深度节点没跑时话题静默, 查询按新鲜度返回 None
+        self._depth_map = None   # (uint16 ndarray [h, w] 毫米, monotonic 时刻)
+        self.create_subscription(
+            Image, config.DEPTH_MAP_TOPIC, self._depth_map_cb,
+            QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                       history=HistoryPolicy.KEEP_LAST, depth=2))
+
         # 手动遥控: 归一化遥控量发布 (双摇杆, -1..1) + 遥控节点状态回传
         self.teleop_cmd_pub = self.create_publisher(
             Twist, config.TELEOP_CMD_TOPIC, 10)
@@ -380,6 +390,43 @@ class GroundStationNode(Node):
     def get_aruco_info(self):
         """各来源 (src) 最新一条面板数据 {src: {data, t}}。"""
         return self.aruco_info
+
+    # ---------- 深度估计悬停读数 ----------
+
+    def _depth_map_cb(self, msg):
+        """深度图 (16UC1 毫米): 解码为 uint16 ndarray, 单槽缓存最新帧。
+        编码不符/尺寸不齐静默丢弃 (节点端保证 schema)。"""
+        if msg.encoding != '16UC1' or msg.width == 0 or msg.height == 0:
+            return
+        try:
+            arr = np.frombuffer(msg.data, np.uint16)
+        except Exception:
+            return
+        if arr.size != msg.width * msg.height:
+            return
+        self._depth_map = (
+            arr.reshape(msg.height, msg.width), time.monotonic())
+
+    def get_depth_at(self, x, y, frame_w, frame_h):
+        """鼠标悬停查询: 显示帧像素 (x, y) 处的深度 (米), 无新鲜数据返回 None。
+
+        深度图按 map_scale 缩小过, 坐标按显示帧尺寸折算后最近邻采样
+        (半像素级偏差对悬停读数无影响); 超过 DEPTH_MAP_FRESH_SEC 未更新
+        视为深度节点已停, 返回 None 让界面隐藏气泡。回调在 ROS 线程更新
+        本槽、GUI 线程读取, ndarray 引用替换 + 元组不可变, 无需加锁。
+        frame_w/h 为显示帧尺寸 (调用方保证有画面, 为正)。"""
+        item = self._depth_map
+        if item is None:
+            return None
+        arr, t = item
+        if time.monotonic() - t > config.DEPTH_MAP_FRESH_SEC:
+            return None
+        mh, mw = arr.shape
+        mx = int(x * mw / frame_w)
+        my = int(y * mh / frame_h)
+        if 0 <= mx < mw and 0 <= my < mh:
+            return float(arr[my, mx]) / 1000.0
+        return None
 
     def publish_teleop_twist(self, fwd, right, up, yaw_left):
         """发布归一化遥控量 (-1..1): fwd 前+ / right 右+ / up 升+ / yaw_left 左转+。

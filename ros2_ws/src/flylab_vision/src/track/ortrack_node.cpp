@@ -14,7 +14,7 @@
 ///   4. 开始: /flylab/vision_cmd 收 track_begin (松开框选自动发送);
 ///      追踪中重新框选即换目标 (重裁模板重新锁定), 停止靠 track_stop
 ///   5. 画面叠加: 目标框转 JSON 标注发 /flylab/annotations (组名 "track")
-///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (10Hz 限频)
+///   6. 面板数据: {"src":"track", ...} 发 /flylab/aruco_info (~30Hz 限频)
 ///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start[/stop]
 ///      (可带模式后缀 " dive"=俯冲打击, 不带=云台追踪悬停跟拍); 接管
 ///      offboard 拿到飞机控制权 (悬停跟拍/俯冲打击 + 机头跟随, 见

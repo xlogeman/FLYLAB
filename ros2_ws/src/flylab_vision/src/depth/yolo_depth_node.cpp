@@ -22,8 +22,16 @@
 ///   ros2 run flylab_vision yolo_depth_node
 ///   ros2 run flylab_vision yolo_depth_node --ros-args
 ///       -p model:=/path/to/xx.onnx -p device:=cuda
+///
+/// 深度图输出: /flylab/depth_map (sensor_msgs/Image, 16UC1 毫米, best-effort)
+/// 供地面站"鼠标悬停画面读深度"。全分辨率 float32 每帧数 MB, 按 map_scale
+/// 降采样后以毫米整型发出 (毫米精度对悬停读数绰绰有余, 65535mm 上限外
+/// 饱和); 降采样最近邻采样, 值不被邻域混合。仅订阅者在线时才发布。
 #include <memory>
 #include <string>
+
+#include <opencv2/imgproc.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
 #include <std_msgs/msg/string.hpp>
 
@@ -57,6 +65,19 @@ public:
     jpeg_quality_ = jpeg_quality;
     panel_img_width_ = panel_img_width;
 
+    // 深度图话题 (悬停读数用): map_scale 降采样比例 (0/1 = 全分辨率,
+    // 0.5 = 长宽各半, 4 倍体积收益; 最近邻缩放值不被邻域混合)
+    const auto map_topic = declare_parameter<std::string>(
+      "map_topic", "/flylab/depth_map");
+    map_scale_ = declare_parameter<double>("map_scale", 0.5);
+    if (map_scale_ <= 0.0 || map_scale_ > 1.0) {
+      map_scale_ = 1.0;
+    }
+    // best-effort + 限深: 数 MB 级消息积压无意义, 最新帧语义即可;
+    // 无订阅者 (地面站没开) 时 process() 直接跳过, 零开销
+    map_pub_ = create_publisher<sensor_msgs::msg::Image>(
+      map_topic, rclcpp::SensorDataQoS());
+
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     DepthConfig cfg;
     cfg.model_path = model;
@@ -89,16 +110,17 @@ protected:
     const DepthResult result = estimator_->estimate(bgr);
     last_dmin_ = result.dmin;
     last_dmax_ = result.dmax;
+    publishMap(result);
     publishInfo(result, bgr.cols, bgr.rows);
     // 画面上不画任何图元; 仍发空 items 标注作心跳
     // (地面站 HUD"解算 X"帧率统计依赖标注消息流)
-    return std::string("{\"algo\":\"") + algo_group() + "\",\"items\":[]}";
+    return heartbeat_json();
   }
 
   std::string clear_json() const override
   {
-    // 空 items = 清掉自己的分组标注
-    return std::string("{\"algo\":\"") + algo_group() + "\",\"items\":[]}";
+    // 空 items = 清掉自己的分组标注 (与停止前的心跳同串)
+    return heartbeat_json();
   }
 
   void log_first_infer(long ms) override
@@ -109,14 +131,54 @@ protected:
   }
 
 private:
+  /// 空 items 心跳/清屏标注串 (画面不画图元, 只供地面站 HUD 帧率统计)
+  std::string heartbeat_json() const
+  {
+    return std::string("{\"algo\":\"") + algo_group() + "\",\"items\":[]}";
+  }
+
   std::unique_ptr<YoloDepthEstimator> estimator_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;  // 面板数据
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr map_pub_; // 深度图
+  double map_scale_ = 0.5;                                        // 降采样比例
   rclcpp::Time last_info_pub_{0, 0, RCL_ROS_TIME};                // info_hz 限频
   double info_min_dt_ = 0.0;                                      // 0 = 每帧发
   int jpeg_quality_ = 70;
   int panel_img_width_ = 320;
   float last_dmin_ = 0.f;
   float last_dmax_ = 0.f;
+
+  /// 深度图发布 (悬停读数): CV_32F 米 -> 16UC1 毫米 (负值截 0, 上限
+  /// 65535mm ≈ 65.5m 饱和), map_scale 最近邻降采样后发出。
+  /// 与面板信息流独立: 无订阅者时整体跳过 (缩放/转换都不做)
+  void publishMap(const DepthResult & result)
+  {
+    if (!map_pub_ || map_pub_->get_subscription_count() == 0 ||
+        result.depth.empty()) {
+      return;
+    }
+    const cv::Mat & full = result.depth;
+    cv::Mat small;
+    if (map_scale_ < 1.0 - 1e-6) {
+      cv::resize(full, small, cv::Size(), map_scale_, map_scale_,
+                 cv::INTER_NEAREST);
+    } else {
+      small = full;
+    }
+    cv::Mat mm;
+    small.convertTo(mm, CV_16UC1, 1000.0);   // saturate_cast 自动截断越界值
+    sensor_msgs::msg::Image msg;
+    msg.height = mm.rows;
+    msg.width = mm.cols;
+    msg.encoding = "16UC1";
+    msg.is_bigendian = false;
+    msg.step = static_cast<sensor_msgs::msg::Image::_step_type>(mm.step[0]);
+    msg.header.frame_id = "depth";
+    msg.header.stamp = now();
+    msg.data.assign(
+      mm.data, mm.data + mm.total() * mm.elemSize());
+    map_pub_->publish(msg);
+  }
 
   /// 右栏"算法信息"面板: 深度摘要 + turbo 伪彩缩略图 (默认随推理帧率发布,
   /// info_hz 参数可限频)。

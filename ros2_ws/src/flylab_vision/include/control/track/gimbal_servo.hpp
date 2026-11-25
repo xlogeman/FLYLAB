@@ -110,7 +110,7 @@ public:
 
   bool enabled() const {return enabled_.load();}
 
-  /// 接管控制菜单开/关 (vision_cmd track_gimbal_start/stop)。
+  /// 接管控制菜单开/关 (vision_cmd track_takeover_start/stop)。
   /// 失能立即清零速率: 保持型指令不清零, 云台会按最后速率一直转。
   void set_enabled(bool on)
   {
@@ -118,9 +118,9 @@ public:
     if (prev == on) {
       return;
     }
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (!on && (cmd_.first != 0.0 || cmd_.second != 0.0)) {
-      publish_locked(0.0, 0.0);
+    if (!on) {
+      std::lock_guard<std::mutex> lk(mutex_);
+      lost_zero_locked();   // 条件清零 + was_target_ 复位, 与丢失路径共用
     }
   }
 

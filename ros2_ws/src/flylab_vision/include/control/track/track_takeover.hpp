@@ -219,10 +219,7 @@ public:
       mode_ = mode;
       {   // 俯冲方向状态复位: 丢失超时窗口从切换时刻重新起算
         std::lock_guard<std::mutex> lk(mutex_);
-        dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
-        dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
-        dive_los_t_ = std::chrono::steady_clock::now();
-        dive_in_plunge_ = false;
+        reset_dive_locked();
       }
       RCLCPP_INFO(
         node_.get_logger(), "\033[32m目标追踪反控切换模式: %s\033[0m",
@@ -235,10 +232,7 @@ public:
     {   // 死区迟滞复位 (重新收敛; 与 alt_vz 同一把锁, 纪律一致)
       std::lock_guard<std::mutex> lk(mutex_);
       alt_in_deadband_ = false;
-      dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
-      dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
-      dive_los_t_ = std::chrono::steady_clock::now();
-      dive_in_plunge_ = false;
+      reset_dive_locked();
     }
     px4_->takeoverReset(node_.now());
     notify_frame();
@@ -296,9 +290,16 @@ public:
       std::numeric_limits<double>::quiet_NaN();
   }
 
-  bool active() const {return active_;}
-
 private:
+  /// 俯冲方向状态复位 (调用方持锁): 丢失超时窗口从复位时刻重新起算
+  void reset_dive_locked()
+  {
+    dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
+    dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
+    dive_los_t_ = std::chrono::steady_clock::now();
+    dive_in_plunge_ = false;
+  }
+
   void tick()
   {
     if (!active_) {
@@ -554,8 +555,8 @@ private:
   bool nose_follow_ = true;          // 机头跟随开关 (/flylab/track_follow)
   std::chrono::steady_clock::time_point frame_t_;
   // ---------- 高度环测量/目标 (受 mutex_ 保护) ----------
-  double pitch_target_ = std::numeric_limits<double>::quiet_NaN();
   // 俯视角度目标 (度, 下正); NaN = 未设置 (不启用)
+  double pitch_target_ = std::numeric_limits<double>::quiet_NaN();
   double boresight_down_deg_ = 0.0;  // 视轴俯角测量 (度, 下正, gimbal_state)
   double boresight_az_deg_ = 0.0;    // 视轴方位测量 (度, 右正, gimbal_state)
   double angle_y_ = std::numeric_limits<double>::quiet_NaN();

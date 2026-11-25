@@ -7,7 +7,8 @@
 ///
 ///   - /fmu/in 三个发布者: offboard_control_mode / trajectory_setpoint / vehicle_command
 ///     (QoS 与 flylab/tracker_uxrce 一致: best_effort + transient_local)
-///   - /fmu/out 三个订阅者: vehicle_status / vehicle_local_position / vehicle_command_ack
+///   - /fmu/out 四个订阅者: vehicle_status / vehicle_local_position /
+///     vehicle_attitude / vehicle_command_ack
 
 #include <cmath>
 #include <cstdint>
