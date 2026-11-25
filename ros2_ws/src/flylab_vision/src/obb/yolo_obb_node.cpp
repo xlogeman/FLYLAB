@@ -6,7 +6,7 @@
 ///   2. 工具按钮: /flylab/vision_cmd 收 obb_start / obb_stop 启停
 ///   3. 画面叠加: 检测结果转 JSON 标注发 /flylab/annotations
 ///      (组名 "obb", 4 角点闭合多边形 + 类别置信度文字)
-///   4. 面板数据: {"src":"obb", ...} 发 /flylab/aruco_info (~30Hz 限频,
+///   4. 面板数据: {"src":"obb", ...} 发 /flylab/algo_info (~30Hz 限频,
 ///      摘要 = 检出数 + 前 3 旋转框 [按置信度降序] 的类别/位置/尺寸/角度)
 ///
 /// 模型默认取 share/flylab_vision/models/obb/yolo26s-obb.onnx
@@ -47,7 +47,7 @@ public:
     // 逗号分隔的类别名过滤器, 空 = 全部 15 类
     const auto classes = declare_parameter<std::string>("classes", "");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloObbConfig cfg;

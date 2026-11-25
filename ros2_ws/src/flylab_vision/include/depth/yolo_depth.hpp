@@ -70,7 +70,7 @@ private:
   DepthConfig config_;
 };
 
-/// 深度结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/aruco_info,
+/// 深度结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/algo_info,
 /// 与 ArUco 检测同一话题, 面板按 src 分组; 建议调用方 10Hz 限频):
 ///   {"src":"depth","dmin":..,"dmax":..,"dmean":..,"dctr":..,
 ///    "w":..,"h":..,"img":"<base64 JPEG>"|省略}

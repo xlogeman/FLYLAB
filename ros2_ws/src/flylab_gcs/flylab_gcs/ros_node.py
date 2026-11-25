@@ -297,10 +297,10 @@ class GroundStationNode(Node):
             String, config.TRACK_STATUS_TOPIC, self._track_status_cb, 10)
 
         # 算法输出面板数据 (右栏): JSON 按 src 分组 (detect/landing),
-        # 各存最新一条, 界面轮询 get_aruco_info() 取用
-        self.aruco_info = {}
+        # 各存最新一条, 界面轮询 get_algo_info() 取用
+        self.algo_info = {}
         self.create_subscription(
-            String, config.ARUCO_INFO_TOPIC, self._aruco_info_cb, 10)
+            String, config.ALGO_INFO_TOPIC, self._algo_info_cb, 10)
 
         # 深度估计悬停读数: 订阅 yolo_depth_node 的降采样深度图 (16UC1,
         # 毫米, best-effort)。单槽存最新帧引用 (GIL 下引用替换原子, 界面
@@ -377,7 +377,7 @@ class GroundStationNode(Node):
         self._teleop_status = msg.data.strip()
         self._teleop_status_seq += 1
 
-    def _aruco_info_cb(self, msg):
+    def _algo_info_cb(self, msg):
         """算法输出面板数据: JSON 解析失败静默 (节点端保证 schema)。"""
         try:
             data = json.loads(msg.data)
@@ -385,11 +385,11 @@ class GroundStationNode(Node):
             return
         src = data.get('src')
         if src:
-            self.aruco_info[src] = {'data': data, 't': time.monotonic()}
+            self.algo_info[src] = {'data': data, 't': time.monotonic()}
 
-    def get_aruco_info(self):
+    def get_algo_info(self):
         """各来源 (src) 最新一条面板数据 {src: {data, t}}。"""
-        return self.aruco_info
+        return self.algo_info
 
     # ---------- 深度估计悬停读数 ----------
 

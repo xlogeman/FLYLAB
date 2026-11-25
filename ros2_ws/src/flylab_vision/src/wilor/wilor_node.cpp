@@ -8,7 +8,7 @@
 ///   3. 画面叠加: 左右手 bbox + 6 段骨架 polyline + MANO 网格 778 顶点
 ///      点云, 转 JSON 标注发 /flylab/annotations (组名 "wilor")
 ///   4. 面板数据: {"src":"wilor", "img":网格渲染图, "items":[...]} 发
-///      /flylab/aruco_info (10Hz 限频, 前 2 只手: 左右手/置信度/位置/尺寸)
+///      /flylab/algo_info (10Hz 限频, 前 2 只手: 左右手/置信度/位置/尺寸)
 ///
 /// 模型默认取 share/flylab_vision/models/hand/ 下 detector.onnx +
 /// wilor_fp16_dyn.onnx (CMakeLists 安装; 动态 batch, 多手拼批一次回归:
@@ -46,7 +46,7 @@ public:
     const auto det_stride = declare_parameter<int>("det_stride", 1);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     WilorConfig cfg;

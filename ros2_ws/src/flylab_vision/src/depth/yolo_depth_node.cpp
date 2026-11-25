@@ -3,13 +3,13 @@
 ///
 /// 与 yolo_detector_node.cpp 同构, 区别在算法 (逐像素深度) 和输出形式:
 /// 可视化结果 (turbo 伪彩深度图 + 深度摘要) 全部在地面站右栏"算法信息"
-/// 面板显示 (信息话题与 ArUco 检测同一 /flylab/aruco_info, 面板按 src
+/// 面板显示 (信息话题与 ArUco 检测同一 /flylab/algo_info, 面板按 src
 /// 分组), 画面上不画任何东西 (标注只发空 items 供 HUD"解算 X"
 /// 帧率统计)。链路:
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 depth_start / depth_stop 启停
 ///   3. 右栏面板: 伪彩缩略图 + 摘要 JSON 随推理帧率发布 (info_hz 可限频)
-///      发到 /flylab/aruco_info (组名 "depth", 与检测/降落分组独立, 可并存)
+///      发到 /flylab/algo_info (组名 "depth", 与检测/降落分组独立, 可并存)
 ///   4. 画面叠加: 仅发空 items 标注 (帧率心跳), 不画任何图元
 ///
 /// 模型默认取 share/flylab_vision/models/depth/yolo26s-depth.onnx
@@ -98,7 +98,7 @@ public:
     // ---------- 地面站右栏"算法信息"面板数据 ----------
     // 与 ArUco 检测同一话题, 面板按 src 分组 ("depth"), 话题名可用参数覆盖
     const auto info_topic = declare_parameter<std::string>(
-      "info_topic", "/flylab/aruco_info");
+      "info_topic", "/flylab/algo_info");
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     log_ready("YOLO 深度估计");

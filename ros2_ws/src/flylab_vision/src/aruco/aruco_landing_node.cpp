@@ -380,7 +380,7 @@ public:
     // ---------- 右栏"算法输出"面板数据 ----------
     // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------

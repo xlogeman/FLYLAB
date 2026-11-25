@@ -126,7 +126,7 @@ LANDING_STOP_CMD = 'landing_stop'
 LANDING_STATUS_TOPIC = '/flylab/landing_status'
 # 算法信息面板数据话题 (std_msgs/String JSON): 各算法节点按 src 分组发布
 # 自定义 schema, 右栏"算法信息"面板按运行状态动态显示 (见 panel_sections.py)
-ARUCO_INFO_TOPIC = '/flylab/aruco_info'
+ALGO_INFO_TOPIC = '/flylab/algo_info'
 
 # ---------- 视觉反控降落模式 (算法注册表 landing_modes 声明) ----------
 # 反控形态随算法: 声明了多个 landing_modes 的算法 (码检测) 在"接管控制→

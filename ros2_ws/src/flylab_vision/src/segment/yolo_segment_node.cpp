@@ -6,7 +6,7 @@
 ///   2. 工具按钮: /flylab/vision_cmd 收 seg_start / seg_stop 启停
 ///   3. 画面叠加: 分割结果转 JSON 标注发 /flylab/annotations
 ///      (组名 "seg", 掩码轮廓多边形 + 检测框 + 类别置信度文字)
-///   4. 面板数据: {"src":"seg", ...} 发 /flylab/aruco_info (~30Hz 限频,
+///   4. 面板数据: {"src":"seg", ...} 发 /flylab/algo_info (~30Hz 限频,
 ///      摘要 = 实例数 + 主目标 [最高置信度] 的类别/位置/尺寸/掩码占比)
 ///
 /// 模型默认取 share/flylab_vision/models/segment/yolo26s-seg.onnx
@@ -49,7 +49,7 @@ public:
     // 逗号分隔的类别名过滤器, 空 = 全部 80 类
     const auto classes = declare_parameter<std::string>("classes", "");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloSegmentConfig cfg;

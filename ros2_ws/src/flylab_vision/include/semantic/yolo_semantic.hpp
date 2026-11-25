@@ -77,7 +77,7 @@ const std::vector<std::string> & cityscapes_names();
 /// 整体偏沉闷), 类别图缩略图与图例色块共用
 const std::vector<cv::Vec3b> & cityscapes_palette_rgb();
 
-/// 语义分割结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/aruco_info,
+/// 语义分割结果 -> 地面站右栏"算法信息"面板数据 JSON (发 /flylab/algo_info,
 /// 与 ArUco 检测/深度估计同一话题, 面板按 src 分组):
 ///   {"src":"semantic","nclass":..,"w":..,"h":..,
 ///    "present":[["car",12.3],...],"img":"<base64 PNG>"|省略}

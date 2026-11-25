@@ -105,7 +105,7 @@ public:
     // 结构化检测摘要 (最大码 id/占比/偏移/距离), 地面站右栏面板显示;
     // 10Hz 限频, 话题名可用参数覆盖
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     // 就绪日志带字典/边长信息, 不用基类 log_ready

@@ -8,7 +8,7 @@
   {"src": "<分组key>", ...字段...}
 
 ---------- 接入新算法 (三步) ----------
-1. 算法节点往 /flylab/aruco_info 发 {"src": "<key>", ...} (建议 10Hz 限频;
+1. 算法节点往 /flylab/algo_info 发 {"src": "<key>", ...} (建议 10Hz 限频;
    参数名 info_topic, 参照 aruco_node.publishInfo)
 2. 本文件 SECTIONS 注册一项: title + fields 字段表
    (label, extract[, opts]) —— extract(data) 返回显示文本 (可为 HTML 富

@@ -3,13 +3,13 @@
 ///
 /// 与 yolo_segment_node.cpp 同构, 区别在算法 (逐像素类别图) 和输出形式:
 /// 可视化结果 (cityscapes 配色类别图 + 类别图例) 全部在地面站右栏"算法
-/// 信息"面板显示 (信息话题与 ArUco 检测/深度估计同一 /flylab/aruco_info,
+/// 信息"面板显示 (信息话题与 ArUco 检测/深度估计同一 /flylab/algo_info,
 /// 面板按 src 分组), 画面上不画任何东西 (标注只发空 items 供 HUD"解算 X"
 /// 帧率统计)。链路:
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 semantic_start / semantic_stop 启停
 ///   3. 右栏面板: 配色缩略图 + 类别图例 JSON 随推理帧率发布 (info_hz 可限频)
-///      发到 /flylab/aruco_info (组名 "semantic", 与检测/降落/深度分组独立,
+///      发到 /flylab/algo_info (组名 "semantic", 与检测/降落/深度分组独立,
 ///      可并存)
 ///   4. 画面叠加: 仅发空 items 标注 (帧率心跳), 不画任何图元
 ///
@@ -94,7 +94,7 @@ public:
     // ---------- 地面站右栏"算法信息"面板数据 ----------
     // 与 ArUco 检测同一话题, 面板按 src 分组 ("semantic"), 话题名可用参数覆盖
     const auto info_topic = declare_parameter<std::string>(
-      "info_topic", "/flylab/aruco_info");
+      "info_topic", "/flylab/algo_info");
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     log_ready("YOLO 语义分割");

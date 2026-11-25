@@ -129,7 +129,7 @@ public:
     const auto iou = declare_parameter<double>("iou", 0.4);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
     const auto facex_model = declare_parameter<std::string>(
       "facex_model", default_model_path("face", "facexformer.onnx"));
     const auto task_name =

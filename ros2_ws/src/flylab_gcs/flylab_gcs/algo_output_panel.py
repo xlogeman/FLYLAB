@@ -2,8 +2,8 @@
 """右栏"算法信息"面板 —— 通用分组显示框架 (注册表在 panel_sections.SECTIONS)。
 
 运行哪个算法 (或视觉反控降落) 才动态显示对应分组, 停止即移除; 数据来源
-/flylab/aruco_info (std_msgs/String JSON, 节点 10Hz 限频发布), 按 src 分组
-各存最新一条 (见 ros_node._aruco_info_cb), 超时自动置灰显示 '—'。
+/flylab/algo_info (std_msgs/String JSON, 节点 10Hz 限频发布), 按 src 分组
+各存最新一条 (见 ros_node._algo_info_cb), 超时自动置灰显示 '—'。
 
 职责分工: "算法 JSON -> 显示文本" 的提取逻辑与分组注册表 (SECTIONS) 在
 panel_sections.py —— 新算法接入只改注册表, 不碰框架; 本文件只做 Qt 渲染
@@ -250,7 +250,7 @@ class AlgoOutputPanel(QGroupBox):
                  set_fractal_config=None, set_track_pitch=None,
                  get_gimbal_pitch=None, parent=None):
         super().__init__('算法信息', parent)
-        self._get_info = get_info   # -> ros_node.aruco_info ({src: {data, t}})
+        self._get_info = get_info   # -> ros_node.algo_info ({src: {data, t}})
         self._get_gimbal_pitch = get_gimbal_pitch   # () -> 俯角度 (下正)|None
         self._sections = {}         # key -> _Section (仅当前显示的)
         self._order = []            # 当前显示顺序 (key 列表)

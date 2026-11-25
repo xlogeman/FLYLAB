@@ -6,7 +6,7 @@
 ///   2. 工具按钮: /flylab/vision_cmd 收 pose_start / pose_stop 启停
 ///   3. 画面叠加: 检测结果转 JSON 标注发 /flylab/annotations
 ///      (组名 "pose", 骨架连线 + 可见关键点; 框仅用于内部 NMS 不绘制)
-///   4. 面板数据: {"src":"pose", "items":[...]} 发 /flylab/aruco_info
+///   4. 面板数据: {"src":"pose", "items":[...]} 发 /flylab/algo_info
 ///      (~30Hz 限频, 按置信度降序前 3 人体: 置信度/位置/尺寸/可见点)
 ///
 /// 模型默认取 share/flylab_vision/models/pose/yolo26s-pose.onnx
@@ -46,7 +46,7 @@ public:
     const auto kpt_conf = declare_parameter<double>("kpt_conf", 0.5);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloPoseConfig cfg;

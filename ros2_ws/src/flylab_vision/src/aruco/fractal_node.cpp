@@ -7,7 +7,7 @@
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 fractal_start / fractal_stop 启停
 ///   3. 画面叠加: 检测结果转 JSON 标注发 /flylab/annotations (分组 "fractal")
-///   4. 右栏面板: 检测摘要 JSON 发 /flylab/aruco_info (src="fractal", 10Hz)
+///   4. 右栏面板: 检测摘要 JSON 发 /flylab/algo_info (src="fractal", 10Hz)
 ///
 /// 地面站运行中同步 (全部 latched, 与 aruco_node 同一约定):
 ///   视场角 /flylab/camera_fov、码边长 /flylab/aruco_marker_length (共用
@@ -57,7 +57,7 @@ public:
     const auto config_topic =
       declare_parameter<std::string>("fractal_config_topic", "/flylab/fractal_config");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 降落节点跟踪层同步 (MAX 让位) ----------
     // 降落中每帧广播正在跟踪的层 ID: 若恰为画面最大层, 本节点不画洋红

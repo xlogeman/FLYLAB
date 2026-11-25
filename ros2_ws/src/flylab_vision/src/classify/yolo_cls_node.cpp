@@ -5,7 +5,7 @@
 /// 输出形式 (右栏面板表格 vs 目标框, 画面无叠加)。链路:
 ///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
 ///   2. 工具按钮: /flylab/vision_cmd 收 cls_start / cls_stop 启停
-///   3. 面板数据: {"src":"cls", ...} 发 /flylab/aruco_info (~30Hz 限频,
+///   3. 面板数据: {"src":"cls", ...} 发 /flylab/algo_info (~30Hz 限频,
 ///      top-k 结果按置信度降序进右栏"算法信息"表格, 画面不叠加标注)
 ///
 /// 模型默认取 share/flylab_vision/models/classify/yolo26s-cls.onnx
@@ -45,7 +45,7 @@ public:
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto labels = declare_parameter<std::string>("labels", "");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/aruco_info");
+      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     ClsConfig cfg;
