@@ -236,7 +236,7 @@ class LandingPanelMixin:
         detector = algo.get('landing_detector') if algo is not None else None
         if detector:
             cmd += ['-p', f'detector:={detector}']
-        self.land_proc.start(cmd)
+        self.land_proc.start(cmd, capture_output=True)
         # 新进程需完成 DDS 发现 + 收首帧飞控状态 (1~3s), 重发多次防吞;
         # 节点对重复 start 幂等
         QTimer.singleShot(1000, lambda: self._send_landing_start(6))

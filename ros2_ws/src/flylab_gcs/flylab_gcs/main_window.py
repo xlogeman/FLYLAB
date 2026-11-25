@@ -92,15 +92,17 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.node.set_log_sink(
             lambda level, text: self.log_line.emit(level, text))
 
-        # 托管进程 (机制见 processes.py): PX4 输出接管进日志框, 其余直通终端
+        # 托管进程 (机制见 processes.py): 输出统一接管进日志框
+        def proc_line(text):
+            self.log_line.emit('NODE', text)
         self.px4 = ManagedProcess(self.log, 'PX4 SITL',
                                   on_line=lambda text: self.log_line.emit('PX4', text))
         self.px4_model = None      # 运行中的机型 (config.PX4_MODELS 项), None=未运行
         self.link_procs = {}       # key -> ManagedProcess (有存活进程 = 链路开启中)
-        self.algo_proc = ManagedProcess(self.log, '视觉算法节点')
-        self.flight_proc = ManagedProcess(self.log, '飞行链路')   # ros2 launch 整链路
-        self.land_proc = ManagedProcess(self.log, '降落节点')
-        self.teleop_proc = ManagedProcess(self.log, '遥控节点')
+        self.algo_proc = ManagedProcess(self.log, '视觉算法节点', on_line=proc_line)
+        self.flight_proc = ManagedProcess(self.log, '飞行链路', on_line=proc_line)  # ros2 launch 整链路
+        self.land_proc = ManagedProcess(self.log, '降落节点', on_line=proc_line)
+        self.teleop_proc = ManagedProcess(self.log, '遥控节点', on_line=proc_line)
 
         # 飞行控制: 独立 RPC 会话 (与相机抓取互不拖累)
         self.veh_ctrl = VehicleController(self.log, host, config.AIRSIM_RPC_PORT)

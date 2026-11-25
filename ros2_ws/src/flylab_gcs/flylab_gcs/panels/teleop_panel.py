@@ -208,7 +208,7 @@ class TeleopPanelMixin:
             # 链路参数跟随工具栏所选链路 (mavros / uxrce)
             link = self._selected_link() or 'mavros'
             cmd = list(config.TELEOP_CMD) + ['--ros-args', '-p', f'link:={link}']
-            self.teleop_proc.start(cmd)
+            self.teleop_proc.start(cmd, capture_output=True)
             # 等节点完成 DDS 发现 + 收到飞控状态后再发接管指令 (重发多次, 节点幂等)
             QTimer.singleShot(1000, lambda: self._send_teleop_start(6))
         else:

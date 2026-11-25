@@ -64,8 +64,9 @@ class LinkPanelMixin:
         self._start_link(key, cmd, title)
 
     def _start_link(self, key, cmd, title):
-        proc = ManagedProcess(self.log, title)
-        if not proc.start(cmd):
+        proc = ManagedProcess(self.log, title,
+                              on_line=lambda text: self.log_line.emit('NODE', text))
+        if not proc.start(cmd, capture_output=True):
             self._update_link_btn_text()
             return
         self.link_procs[key] = proc

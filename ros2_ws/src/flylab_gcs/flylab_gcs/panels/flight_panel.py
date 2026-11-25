@@ -66,7 +66,7 @@ class FlightPanelMixin:
             if was is link:                  # 刚才运行的就是它 → 纯停止
                 return
         self.running_flight = link
-        self.flight_proc.start(link['cmd'])
+        self.flight_proc.start(link['cmd'], capture_output=True)
         self._update_flight_state()
 
     def _stop_flight(self):

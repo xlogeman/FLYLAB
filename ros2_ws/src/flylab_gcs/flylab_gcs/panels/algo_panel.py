@@ -88,7 +88,7 @@ class AlgoPanelMixin:
         self.running_algo = algo
         self._algo_started_at = time.monotonic()
         if algo.get('cmd'):
-            self.algo_proc.start(algo['cmd'])
+            self.algo_proc.start(algo['cmd'], capture_output=True)
         # 新进程的 DDS 发现需要约 1s, 延迟发 start; 节点对重复 start 无副作用
         delay_ms = 1000 if algo.get('cmd') else 0
         QTimer.singleShot(delay_ms, lambda: self._send_start(algo))

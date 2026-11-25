@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import QPlainTextEdit
 
 class LogPanel(QPlainTextEdit):
     _COLORS = {'WARNING': '#b8860b', 'ERROR': '#b03030', 'FATAL': '#b03030',
-               'PX4': '#4a6a8a'}
+               'PX4': '#4a6a8a', 'NODE': '#3a7a3a'}
     _FLUSH_MS = 200        # 批量上屏周期
     _MAX_PENDING = 400     # 缓冲上限 (超出丢最旧, 计数待折叠提示)
     _MAX_PER_FLUSH = 80    # 每次刷新最多上屏行数 (渲染限速)
