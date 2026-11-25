@@ -44,6 +44,15 @@ DEFAULT_CAMERAS = ['left_cam', 'front_cam', 'right_cam', 'depth_cam']
 # GIMBAL_HOLD_HZ 节流; RPC 与拉图分离, 姿态跟随重下发不占抓取往返)
 GIMBAL_LOOP_HZ = 50
 
+# 安装基准校验阈值 (连接纪元后判定相机是否被重建): 新采位姿与参照
+# (缓存基准 / 最近一次成功下发位姿) 姿态差 ≤2° 且位置差 ≤5cm 视为一致。
+# 机型热切换在 UE 侧整体重建 SimMode 并按新机型 settings 重新生成相机,
+# 安装位姿/FOV 与上一机型不同; 不校验的话旧基准会在下次下发瞬间
+# (典型为起飞时机体姿态变化令下发指纹失配) 写到新相机上, 画面突变成
+# 上一个机型的相机视角
+MOUNT_RESYNC_ANGLE_DEG = 2.0
+MOUNT_RESYNC_POS_M = 0.05
+
 
 def _wrap180(deg):
     """角度归一化到 [-180, 180)。"""
@@ -73,10 +82,16 @@ class GimbalController(threading.Thread):
         # 软件云台: 全局角度 (yaw, pitch), 作用于所有 AirSim 相机。
         # 无持久化: 每次连接 AirSim 从回中开始, 安装基准重采 (见连接处)
         self._gimbal = (0.0, 0.0)
-        self._gimbal_mount = {}    # 相机安装位姿 (连接后按需重采)
-        self._gimbal_last = {}     # 本会话各相机最近一次下发姿态
+        self._gimbal_mount = {}    # 相机安装位姿 (连接后按需重采; 连接纪元后经校验可被替换)
+        self._gimbal_last = {}     # 最近一批成功下发的机体系姿态 (切相机补发判定用)
+        # 各相机最近一次成功下发的机体系位姿 (跨批次累计): 安装基准校验的参照
+        self._gimbal_applied_all = {}
+        # 连接纪元待办的安装基准校验标记 (机型切换重建 SimMode 后相机全新生成)
+        self._resync_mounts = True
+        self._resync_retry_t = 0.0    # 校验重试退避 (MountNotReady 时 1s 重试)
         self._fov = None           # 全局视场角 (度): 所有相机共用
         # (None=尚未采纳; 连接后查询相机真实 FOV 采纳, 见 _adopt_camera_fov)
+        self._fov_user = False     # 用户手动设定过 FOV (True=重连保留用户值)
         self._fov_dirty = False       # 视场角待下发/待采纳标记
         self._fov_adopt_t = 0.0       # 最近一次 FOV 采纳尝试时刻 (失败重试退避)
         self._gimbal_anim = None   # 回中动画目标 (yaw, pitch), None=无动画
@@ -127,14 +142,20 @@ class GimbalController(threading.Thread):
             self._connected = bool(ok)
 
     def on_connected(self):
-        """连接纪元 (连接数 0->1) 通知: 云台状态复核 + FOV 重采。
+        """连接纪元 (连接数 0->1) 通知: 云台状态复核 + FOV 重采 + 基准校验。
         云台状态复核: 保留基准/角度, 复位跟随 + 限位标红, 重下发恢复视角
         (重采会污染安装基准, 见 _reset_gimbal)。FOV 置 dirty 触发
-        _apply_fov —— _fov 恒为 None (无记忆), 走查询相机真实 FOV 采纳
-        路径, 算法节点启动即同步。"""
+        _apply_fov —— 用户未动过滑杆时清空 _fov 走查询相机真实 FOV 采纳
+        路径 (机型切换重建 SimMode 后新相机 FOV 可能不同, 必须重采纳),
+        动过则保留用户值重下发; 算法节点启动即同步。
+        安装基准不直接重采 (纯断连时相机可能动过, 直接重采会污染基准),
+        置 _resync_mounts 由 _resync_mounts_if_due 校验后决定保留或替换。"""
         self._reset_gimbal()
         with self.lock:
+            if not self._fov_user:
+                self._fov = None
             self._fov_dirty = True
+            self._resync_mounts = True
 
     def stop(self):
         self.running = False
@@ -323,6 +344,7 @@ class GimbalController(threading.Thread):
             if self._fov == deg:
                 return
             self._fov = deg
+            self._fov_user = True
             self._fov_dirty = True
 
     def get_fov(self):
@@ -506,6 +528,69 @@ class GimbalController(threading.Thread):
             self._veh_yaw_prev = None
             self._user_yaw_t = None
 
+    def _pose_diff(self, a, b):
+        """两个机体系位姿 (位置 Vector3r, 四元数 Vector3r) 的差:
+        (位置差米, 姿态差度)。四元数取 |dot| 消除双覆盖符号。"""
+        pa, qa = a
+        pb, qb = b
+        dist = math.sqrt((pa.x_val - pb.x_val) ** 2 + (pa.y_val - pb.y_val) ** 2
+                         + (pa.z_val - pb.z_val) ** 2)
+        dot = abs(qa.x_val * qb.x_val + qa.y_val * qb.y_val
+                  + qa.z_val * qb.z_val + qa.w_val * qb.w_val)
+        ang = 2.0 * math.degrees(math.acos(min(1.0, dot)))
+        return dist, ang
+
+    def _resync_mounts_if_due(self, client):
+        """连接纪元后的安装基准校验 (仅云台线程调用, 须在指纹判定前执行)。
+
+        背景: 机型热切换在 UE 侧整体重建 SimMode, 相机按新机型 settings
+        全新生成 (安装位姿/FOV 可能都不同), 而本模块的基准按会话缓存。
+        重连瞬间机体静止、下发指纹仍命中, 旧基准不会立刻写坏新相机
+        (切换后画面暂时正确); 直到指纹失配 (典型为起飞时机体姿态一变)
+        才把旧机型的安装位姿写到新相机上 —— 表现为"起飞瞬间画面突变
+        成上一个机型的相机视角"。故校验必须先于指纹判定执行, 让基准
+        在起飞前就替换为新机型的安装位姿。
+
+        判定: 新采基准与参照 (缓存基准 / 最近一次成功下发位姿) 一致
+        (姿态差 ≤2° 且位置差 ≤5cm) 视为相机未被重建 (纯断连/UE 重 play,
+        含云台转过情形), 保留旧基准; 都不匹配 => 相机已被重建 => 采纳
+        新基准并失效指纹强制重下发。机体未稳 (MountNotReady) 不阻塞
+        本拍下发, 带 1s 退避置回标记下一拍重试。"""
+        with self.lock:
+            due = self._resync_mounts
+            self._resync_mounts = False
+        if not due:
+            return
+        adopted = False
+        for cam, cached in list(self._gimbal_mount.items()):
+            if cached is None:
+                continue   # 此前不可用的相机保持 None, 走原有 lazy 重试路径
+            try:
+                fresh = capture_mount(client, cam)
+            except MountNotReady:
+                with self.lock:
+                    if time.monotonic() - self._resync_retry_t >= 1.0:
+                        self._resync_mounts = True
+                        self._resync_retry_t = time.monotonic()
+                continue
+            except Exception:
+                continue   # 采集失败: 保留旧基准 (与 per-cam 采集异常同语义)
+            with self.lock:
+                last_applied = self._gimbal_applied_all.get(cam)
+            refs = [cached] + ([last_applied] if last_applied is not None else [])
+            unchanged = any(
+                dist <= MOUNT_RESYNC_POS_M and ang <= MOUNT_RESYNC_ANGLE_DEG
+                for dist, ang in (self._pose_diff(fresh, ref) for ref in refs))
+            if unchanged:
+                continue
+            self._gimbal_mount[cam] = fresh   # 相机已被重建: 采纳新基准
+            with self.lock:
+                self._gimbal_last.pop(cam, None)   # 强制该相机重下发
+            adopted = True
+        if adopted:
+            with self.lock:
+                self._gimbal_apply_key = None   # 指纹失效: 下一拍立即重下发
+
     def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur, q_b=None):
         """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。
         q_b: 预取的机体姿态四元数 (航向跟随每拍已测, 复用省一次 RPC);
@@ -523,6 +608,7 @@ class GimbalController(threading.Thread):
         仰角 = 安装仰角 + 云台俯仰, roll=0。视线钉在世界系, 方向键与机体
         姿态完全无关。"""
         try:
+            self._resync_mounts_if_due(client)
             if q_b is None:
                 q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
             # 指纹 = (机体姿态, 云台角, 当前相机), 姿态按四元数夹角容差判定
@@ -573,6 +659,9 @@ class GimbalController(threading.Thread):
                 with self.lock:
                     self._gimbal_last = applied
                     self._gimbal_apply_key = (q_b, yaw_deg, pitch_deg, cam_cur)
+                    for c, q in applied.items():
+                        # 下发位置 = 基准位置 (云台只转姿态), 记录供基准校验参照
+                        self._gimbal_applied_all[c] = (self._gimbal_mount[c][0], q)
         except Exception as e:
             # 连接级失败上抛给云台线程: 复位连接退避 1s 重连 (不在
             # 节流频率下反复失败刷屏)
