@@ -290,8 +290,8 @@ class AlgoOutputPanel(QGroupBox):
         if set_fractal_config is not None:
             self._build_fractal_combo(set_fractal_config)
         # 目标追踪俯视角度 (跟随 track 分组显隐): 反控接管中设置云台俯视
-        # 角度, 追踪节点高度环控制飞机升降收敛到该角度; 未动过时每次显示
-        # track 分组同步为云台当前俯角 (见 _update_top_visibility)
+        # 角度, 追踪节点高度环控制飞机升降收敛到该角度; 未动过时持续同步
+        # 为云台当前俯角 (见 _update_top_visibility / refresh)
         self._track_pitch_box = None
         self._track_pitch_touched = False   # 用户改过则不再自动同步
         if set_track_pitch is not None:
@@ -396,6 +396,10 @@ class AlgoOutputPanel(QGroupBox):
         """目标追踪俯视角度 (QSpinBox): 云台注视目标的俯视角 (度, 向下正),
         反控接管中修改即发布 (latched), 追踪节点高度环控制飞机升降收敛;
         未动过不发布, 节点维持悬停 (与朝向偏置同步同一约定)。
+        未动过时程序持续把显示值同步为云台当前俯角 (见 _sync_track_pitch):
+        首次点云台追踪时伺服要把云台转到注视目标的角度, 只在分组显示瞬间
+        取值会拿到"调整前"的旧角度 —— 持续跟随到云台收敛, 输入框自然停在
+        调整后的角度。
         keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
         box = QGroupBox('俯视角度 (°)')
         box.setToolTip(
@@ -423,8 +427,10 @@ class AlgoOutputPanel(QGroupBox):
 
     def _sync_track_pitch(self):
         """俯视角度同步为云台当前俯角 (限幅): 仅用户未动过时调用
-        (track 分组显示时, 见 _update_top_visibility); 云台不可用/非
-        AirSim 源跳过保持现值。setValue 在 touched 标记不变下不发布。"""
+        (refresh 轮询 + track 分组显示时, 见 _update_top_visibility);
+        云台不可用/非 AirSim 源跳过保持现值。程序同步是"跟随显示"
+        而非用户输入: blockSignals 屏蔽 valueChanged, 不触发发布、
+        不置 touched 标记 (用户动输入框才发布, 节点契约不变)。"""
         if self._get_gimbal_pitch is None:
             return
         p = self._get_gimbal_pitch()
@@ -432,7 +438,10 @@ class AlgoOutputPanel(QGroupBox):
             return
         v = int(round(max(config.TRACK_PITCH_MIN,
                           min(config.TRACK_PITCH_MAX, p))))
-        self._track_pitch_spin.setValue(v)
+        spin = self._track_pitch_spin
+        spin.blockSignals(True)
+        spin.setValue(v)
+        spin.blockSignals(False)
 
     def _build_dict_combo(self, publish):
         """ArUco 字典切换 (QComboBox): 候选取 config.ARUCO_DICTS, 选择即
@@ -580,7 +589,7 @@ class AlgoOutputPanel(QGroupBox):
         if self._track_pitch_box is not None:
             self._track_pitch_box.setVisible(track_on)
             if track_on and not self._track_pitch_touched:
-                self._sync_track_pitch()   # 默认跟云台当前俯角
+                self._sync_track_pitch()   # 默认跟云台当前俯角 (持续同步见 refresh)
         if self._top_row is not None:
             self._top_row.setVisible(
                 aruco_on or face_on or fractal_on or track_on)
@@ -590,6 +599,14 @@ class AlgoOutputPanel(QGroupBox):
         now_m = time.monotonic()
         for key, section in self._sections.items():
             section.update_entry(info.get(key), now_m)
+        # 俯视角度持续跟随云台当前俯角 (未动过且 track 分组显示时): 首次
+        # 点云台追踪, 伺服把云台转向注视目标的角度需要时间, 分组显示瞬间
+        # 同步只能拿到"调整前"的旧角度 —— 轮询里持续同步, 云台收敛后输入
+        # 框即停在调整后的角度; 用户一动输入框 (touched) 即停止跟随
+        if self._track_pitch_box is not None and \
+                self._track_pitch_box.isVisible() and \
+                not self._track_pitch_touched:
+            self._sync_track_pitch()
 
     def _add(self, key):
         # landing 分组标题随反控降落的检测器类型 (ArUco 降落 / fractal 降落)
