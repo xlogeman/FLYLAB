@@ -28,9 +28,13 @@ namespace flylab_vision
 ///     "悬停跟拍"形态; 地面站设置了俯视角度 (/flylab/track_pitch) 时再
 ///     叠加高度环: 以"视轴俯角 (gimbal_state) + 目标像素偏角"为测量,
 ///     P 律控制飞机升降收敛到设定俯视角
-///   俯冲打击 (Dive): 纯角度制导 —— 沿"视轴俯角 + 目标像素偏角"合成的
-///     目标方向定速撞击 (见 dive_velocity), 机头跟随收口方位; 目标方向
-///     缺失超过 dive_lost_timeout_sec 交还
+///   曲线打击 (Dive): 纯角度制导两相制导 —— 沿"视轴俯角 + 目标像素偏角"
+///     合成的目标方向定速撞击 (见 dive_velocity), 机头跟随收口方位;
+///   直线打击 (Straight): 全程沿视线飞, 不分相 —— 合速度 = min(V, D/sinθ)
+///     使垂直分量恒 ≤ 垂直域 D, 航迹始终贴合视线方向 (θ 在锁定时冻结,
+///     近似直线收口; 陡角自动降速是直线打击的固有代价 —— 曲线打击用
+///     拉角段绕弯换末段全速); 目标方向缺失超过 dive_lost_timeout_sec
+///     均交还
 ///
 /// 与 aruco_landing_node 同一套组件与流程 (px4_offboard_client, offboard
 /// 单写者原则 —— 接管期间偏航指令由本节点注入, 地面站遥控必须退出):
@@ -57,12 +61,14 @@ public:
   /// 地面站 config TRACK_TAKEOVER_* 一致)
   enum class Mode
   {
-    Gimbal,   // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
-    Dive      // 俯冲打击: 沿云台目标方向定速撞击 (纯角度制导)
+    Gimbal,     // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
+    Dive,       // 曲线打击: 两相制导沿视线撞击 (拉角段收敛到撞击带)
+    Straight    // 直线打击: 全程沿视线飞 (合速度 min(V, D/sinθ), 不分相)
   };
   static const char * mode_name(Mode m)
   {
-    return m == Mode::Dive ? "俯冲打击" : "云台追踪";
+    return m == Mode::Dive ? "曲线打击" :
+      m == Mode::Straight ? "直线打击" : "云台追踪";
   }
 
   explicit TrackTakeover(rclcpp::Node & node)
@@ -366,11 +372,11 @@ private:
       return;
     }
     // 已接管: 机头跟随 + 模式速度指令 (云台追踪 = 悬停/高度环升降;
-    // 俯冲打击 = 沿目标方向定速, 方向缺失超时交还), 心跳随 setpoint 持续发
+    // 曲线/直线打击 = 沿目标方向, 方向缺失超时交还), 心跳随 setpoint 持续发
     follow_->request(true);
-    if (mode_ == Mode::Dive) {
+    if (mode_ == Mode::Dive || mode_ == Mode::Straight) {
       if (!dive_velocity()) {
-        deactivate("俯冲目标方向丢失");
+        deactivate("打击目标方向丢失");
       }
       return;
     }
@@ -453,12 +459,22 @@ private:
     const double s = std::sin(t);
     const double s_max = std::min(
       1.0, dive_down_max_ms_ / dive_speed_ms_);   // sin(φ_max)
+    double v_dn, vh;
+    if (mode_ == Mode::Straight) {
+      // 直线打击: 全程沿视线, 不分相 —— 合速度 = min(V, D/sinθ) 使垂直
+      // 分量恒 ≤ 垂直域 D, 航迹始终贴合视线方向 (θ 在锁定时冻结, 纯追踪
+      // 直线收口); 陡角自动降速是直线打击的固有代价 (曲线打击用拉角段
+      // 绕弯换末段全速)。θ ≥ theta_min 钳制保证 s > 0, 合速度天然有界
+      const double v = std::min(
+        dive_speed_ms_, dive_down_max_ms_ / std::max(s, 0.01));
+      v_dn = v * s;
+      vh = v * std::cos(t);
+    } else {
     // 闸 3 —— 段切换迟滞: θ 在 φ_max 边界抖动时两相来回切, 指令在
     // V·cosθ ↔ k·D·cotθ 间阶跃 (锯齿减速); 回终端带需 θ < φ_max − 迟滞角
     const double s_exit = std::max(0.0, std::sin(
       std::max(0.0, std::asin(s_max) - dive_band_hysteresis_deg_ * M_PI / 180.0)));
     const bool in_plunge = dive_in_plunge_ ? (s > s_exit) : (s > s_max);
-    double v_dn, vh;
     if (!in_plunge) {
       // 终端撞击带: 全速沿视线 (v_dn 未触顶, 还原为 V·sinθ/V·cosθ)
       v_dn = dive_speed_ms_ * s;
@@ -467,7 +483,7 @@ private:
         dive_in_plunge_ = false;
         RCLCPP_INFO(
           node_.get_logger(),
-          "\033[32m俯冲: 视线角 %.0f° 进入撞击带 (<=%.0f°), 全速沿视线\033[0m",
+          "\033[32m曲线打击: 视线角 %.0f° 进入撞击带 (<=%.0f°), 全速沿视线\033[0m",
           t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI);
       }
     } else {
@@ -483,10 +499,11 @@ private:
         dive_in_plunge_ = true;
         RCLCPP_INFO(
           node_.get_logger(),
-          "\033[33m俯冲: 视线角 %.0f° 过陡 (>%.0f° 域限), 拉角段垂直 %.1f "
+          "\033[33m曲线打击: 视线角 %.0f° 过陡 (>%.0f° 域限), 拉角段垂直 %.1f "
           "压满张开视线角\033[0m",
           t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI, v_dn);
       }
+    }
     }
     // 闸 4 —— 水平指令限加速度: 指令大幅摆动时实际速度收敛到摆动均值 →
     // 航迹角 ≈ 视线角, 拉角段"视线张开"机制失效自激; 限斜率后指令本身

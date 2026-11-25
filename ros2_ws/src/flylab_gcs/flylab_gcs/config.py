@@ -237,9 +237,10 @@ TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
 # 目标追踪反控模式 (菜单三态; 随 track_takeover_start 以模式后缀下发
 # 节点, 如 "track_takeover_start dive", 同 landing_mode 的传参约定)。
-# 云台追踪/俯冲打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
+# 云台追踪/曲线/直线打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
 TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 云台追踪: 悬停跟拍 (现役)
-TRACK_TAKEOVER_DIVE = 'dive'              # 俯冲打击: 沿目标方向定速撞击
+TRACK_TAKEOVER_DIVE = 'curve_dive'        # 曲线打击: 两相制导定速撞击 (现役)
+TRACK_TAKEOVER_STRAIGHT = 'straight_dive'  # 直线打击: 全程沿视线不分相 (现役)
 TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随: 预留
 # 反控节点状态回传 (engaged=接管成功 / idle=已交还 / failed=接管失败),
 # 地面站据此联动菜单项 (同降落/遥控状态回传模式)
