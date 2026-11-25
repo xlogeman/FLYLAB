@@ -161,6 +161,19 @@ public:
       "dive_plunge_gain", 0.7);   // 拉角段水平收敛比 (须 <1, 见 dive_velocity)
     dive_lost_timeout_sec_ = node.declare_parameter<double>(
       "dive_lost_timeout_sec", 1.0);
+    // 拉角段稳定四闸 (2026-11-25 02_57_39 俯冲自激振荡修复): 该机气动可达
+    // 下降速度仅 ~2.8m/s (俯冲入段推力即贴 THR_MIN=0.12, ulog 实测), 撞击带
+    // φ_max≈13°, 拉角段就是主要工作段 —— 指令反演 cotθ 对 θ 测量抖动极敏感,
+    // 需钳制/滤波/迟滞/限斜率, 防 θ→0 指令发散 (曾输出 62~477m/s) 与 θ 穿零
+    // 变负误判"目标在头顶"输出急刹+爬升
+    dive_theta_min_deg_ = node.declare_parameter<double>(
+      "dive_theta_min_deg", 3.0);   // 视线俯角下限钳制 (度)
+    dive_theta_filter_tc_ = node.declare_parameter<double>(
+      "dive_theta_filter_tc", 0.4); // 视线角一阶低通时间常数 (s, 0=不过滤)
+    dive_band_hysteresis_deg_ = node.declare_parameter<double>(
+      "dive_band_hysteresis_deg", 3.0);   // 撞击带段切换迟滞角 (度)
+    dive_vh_accel_ms2_ = node.declare_parameter<double>(
+      "dive_vh_accel_ms2", 3.0);    // 水平指令限加速度 (m/s²)
     // 俯视角度目标 (latched): 度, 向下正; 未动过不发布 = NaN 不启用
     // (维持悬停)。接管中修改立即生效, 未接管先设置则接管时生效
     const auto pitch_target_topic = node.declare_parameter<std::string>(
@@ -203,8 +216,9 @@ public:
       });
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------
+    dt_ = 1.0 / std::max(1.0, control_hz);
     timer_ = node.create_wall_timer(
-      std::chrono::duration<double>(1.0 / std::max(1.0, control_hz)),
+      std::chrono::duration<double>(dt_),
       [this] {tick();});
   }
 
@@ -291,13 +305,18 @@ public:
   }
 
 private:
-  /// 俯冲方向状态复位 (调用方持锁): 丢失超时窗口从复位时刻重新起算
+  /// 俯冲方向状态复位 (调用方持锁): 丢失超时窗口从复位时刻重新起算;
+  /// 滤波/迟滞/限斜率状态一并复位 (重新激活时飞机近悬停, 水平指令从 0
+  /// 起坡是安全方向)
   void reset_dive_locked()
   {
-    dive_theta_deg_ = std::numeric_limits<double>::quiet_NaN();
-    dive_az_deg_ = std::numeric_limits<double>::quiet_NaN();
+    dive_theta_raw_deg_ = std::numeric_limits<double>::quiet_NaN();
+    dive_az_raw_deg_ = std::numeric_limits<double>::quiet_NaN();
+    dive_theta_f_rad_ = std::numeric_limits<double>::quiet_NaN();
+    dive_az_f_rad_ = std::numeric_limits<double>::quiet_NaN();
     dive_los_t_ = std::chrono::steady_clock::now();
     dive_in_plunge_ = false;
+    dive_vh_cmd_ms_ = 0.0;
   }
 
   void tick()
@@ -378,6 +397,14 @@ private:
   ///        跟随, θ 恒定不收敛); 拉角段总速 √(D²+(kDcotθ)²) 随 θ 张开
   ///        单调升, 终端切回 V。若视线中途从浅变陡越过 φ_max (垂直
   ///        滞后所致), 入拉角段有一次性小减速, 属垂直域物理边界。
+  ///   3. 拉角段稳定四闸 (02_57_39 自激振荡修复): 该机气动可达下降速度仅
+  ///      ~2.8m/s (俯冲入段推力即贴 THR_MIN, ulog 实测), φ_max≈13°, 拉角段
+  ///      就是主要工作段。实测教训: θ 测量抖动 (像素偏角 + 机体俯仰补偿
+  ///      ±20°) 经 cotθ 反演放大成水平指令翻打 (2.8↔12m/s @2Hz), 飞控跟
+  ///      不上、收敛到摆动均值 → 航迹角≈视线角 → "视线张开"机制失效自激,
+  ///      最终 θ 穿零变负误判目标在头顶, 输出急刹+爬升 (vh 5.9→1.0, vz
+  ///      翻正爬升)。对策 = 视线角下限钳制 + 一阶低通 (闸 1/2), 段切换
+  ///      迟滞 (闸 3), 水平指令限加速度 (闸 4); 拉角段水平钳到 ≤V·cosφ_max。
   /// 发送走机体系分量: sendVelocityFRD 实现只按当前航向旋水平分量、
   /// 垂直分量直通世界系, 垂直闭环不含机体俯仰; 水平方位由机头跟随
   /// 收口 (视线方位 ≈ 机头方位)。θ 浅→深自然过渡, 平冲渐变俯冲。
@@ -385,36 +412,54 @@ private:
   /// (单帧漏检不刹车), 超时返回 false 由调用方交还 (不盲飞)。
   bool dive_velocity()
   {
-    double t = 0.0, az = 0.0;
+    double t_raw = 0.0, az_raw = 0.0;
     {
       std::lock_guard<std::mutex> lk(mutex_);
       double th = 0.0, a = 0.0;
       if (measure_locked(&th, &a)) {
-        dive_theta_deg_ = th;
-        dive_az_deg_ = a;
+        dive_theta_raw_deg_ = th;
+        dive_az_raw_deg_ = a;
         dive_los_t_ = std::chrono::steady_clock::now();
       } else if (std::chrono::steady_clock::now() - dive_los_t_ >
                  std::chrono::duration<double>(dive_lost_timeout_sec_))
       {
         return false;
       }
-      t = dive_theta_deg_ * M_PI / 180.0;
-      az = dive_az_deg_ * M_PI / 180.0;
+      t_raw = dive_theta_raw_deg_ * M_PI / 180.0;
+      az_raw = dive_az_raw_deg_ * M_PI / 180.0;
     }
     // 机体俯仰补偿 → 世界系俯角 (下正)
     const auto att = px4_->attitudeNED();
     if (att.valid) {
-      t += std::asin(
+      t_raw += std::asin(
         std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0));
     }
+    // 闸 1/2 —— 视线角下限钳制 + 一阶低通: 俯冲目标物理上总在下方, θ 抖到
+    // 0 附近会使 cotθ 指令发散, 穿零变负则误判"目标在头顶"输出急刹+爬升;
+    // 低通抑制像素偏角/俯仰补偿噪声。方位一并低通 (拉角段方位抖动同样喂
+    // 振荡; 代价是接近段方位响应略滞后, tc 可调, 0=不过滤)
+    t_raw = std::max(t_raw, dive_theta_min_deg_ * M_PI / 180.0);
+    const double alpha = dive_theta_filter_tc_ > 0.0 ?
+      dt_ / (dive_theta_filter_tc_ + dt_) : 1.0;
+    dive_theta_f_rad_ = std::isnan(dive_theta_f_rad_) ? t_raw :
+      dive_theta_f_rad_ + alpha * (t_raw - dive_theta_f_rad_);
+    dive_az_f_rad_ = std::isnan(dive_az_f_rad_) ? az_raw :
+      dive_az_f_rad_ + alpha * (az_raw - dive_az_f_rad_);
+    const double t = dive_theta_f_rad_;
+    const double az = dive_az_f_rad_;
     // 两相制导: 视线角在撞击带内 (sinθ ≤ D/V) 全速沿视线; 过陡进拉角段
     // (垂直压满域, 水平按 plunge_gain·D·cotθ 收敛, 视线角张开到 φ_max
     // 自动切回终端带)
     const double s = std::sin(t);
     const double s_max = std::min(
       1.0, dive_down_max_ms_ / dive_speed_ms_);   // sin(φ_max)
+    // 闸 3 —— 段切换迟滞: θ 在 φ_max 边界抖动时两相来回切, 指令在
+    // V·cosθ ↔ k·D·cotθ 间阶跃 (锯齿减速); 回终端带需 θ < φ_max − 迟滞角
+    const double s_exit = std::max(0.0, std::sin(
+      std::max(0.0, std::asin(s_max) - dive_band_hysteresis_deg_ * M_PI / 180.0)));
+    const bool in_plunge = dive_in_plunge_ ? (s > s_exit) : (s > s_max);
     double v_dn, vh;
-    if (s <= s_max) {
+    if (!in_plunge) {
       // 终端撞击带: 全速沿视线 (v_dn 未触顶, 还原为 V·sinθ/V·cosθ)
       v_dn = dive_speed_ms_ * s;
       vh = v_dn * std::cos(t) / std::max(s, 0.01);
@@ -422,13 +467,18 @@ private:
         dive_in_plunge_ = false;
         RCLCPP_INFO(
           node_.get_logger(),
-          "\033[32m俯冲: 视线角 %.0f° 进入撞击带 (≤%.0f°), 全速沿视线\033[0m",
+          "\033[32m俯冲: 视线角 %.0f° 进入撞击带 (<=%.0f°), 全速沿视线\033[0m",
           t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI);
       }
     } else {
       // 拉角段: 垂直压满 D, 水平 < 视线跟随值 → 视线角张开 (推导见上)
       v_dn = dive_down_max_ms_;
       vh = dive_plunge_gain_ * v_dn * std::cos(t) / std::max(s, 0.01);
+      // 闸 1 兜底 —— cotθ 发散钳制: θ 小时上式 → ∞ (02_57_39 曾输出
+      // 62~477m/s 被飞控钳成 14 引发急刹), 钳到带边界视线跟随值
+      // V·cosφ_max —— 拉角段水平本就不该超过它
+      vh = std::min(vh,
+        dive_speed_ms_ * std::sqrt(std::max(0.0, 1.0 - s_max * s_max)));
       if (!dive_in_plunge_) {
         dive_in_plunge_ = true;
         RCLCPP_INFO(
@@ -438,6 +488,13 @@ private:
           t * 180.0 / M_PI, std::asin(s_max) * 180.0 / M_PI, v_dn);
       }
     }
+    // 闸 4 —— 水平指令限加速度: 指令大幅摆动时实际速度收敛到摆动均值 →
+    // 航迹角 ≈ 视线角, 拉角段"视线张开"机制失效自激; 限斜率后指令本身
+    // 平滑, 实际速度贴指令走, 视线角单调张开收敛
+    const double dv_max = dive_vh_accel_ms2_ * dt_;
+    dive_vh_cmd_ms_ =
+      std::clamp(vh, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+    vh = dive_vh_cmd_ms_;
     // 方位快闭环: 水平速度方向直接指向视线方位 (视轴方位 + 像素偏角,
     // sendVelocityFRD 按当前航向旋水平分量 → right 分量即横向修正)。
     // 不再单靠"云台伺服→机头跟随"慢链路收方位 —— 接近段视线方位角速度
@@ -583,12 +640,22 @@ private:
   double dive_down_max_ms_ = 2.5;      // 垂直分量限速 (m/s, 须 ≤ MPC_Z_VEL_
                                        // MAX_DN; 撞击带 φ_max = asin(D/V))
   double dive_plunge_gain_ = 0.7;      // 拉角段水平收敛比 (<1 = 视线角张开)
-  bool dive_in_plunge_ = false;        // 当前在拉角段 (日志切换用)
+  bool dive_in_plunge_ = false;        // 当前在拉角段 (迟滞 + 日志切换用)
   double dive_lost_timeout_sec_ = 1.0; // 目标方向缺失容忍 (超时交还)
-  double dive_theta_deg_ =
-    std::numeric_limits<double>::quiet_NaN();  // 最近有效目标方向 (度, 下正)
-  double dive_az_deg_ =
-    std::numeric_limits<double>::quiet_NaN();  // 最近有效目标方位 (度, 右正)
+  double dive_theta_min_deg_ = 3.0;    // 视线俯角下限钳制 (度)
+  double dive_theta_filter_tc_ = 0.4;  // 视线角低通时间常数 (s, 0=关)
+  double dive_band_hysteresis_deg_ = 3.0;  // 撞击带段切换迟滞角 (度)
+  double dive_vh_accel_ms2_ = 3.0;     // 水平指令限加速度 (m/s²)
+  double dt_ = 0.05;                   // tick 周期 (s, 构造时按 takeover_hz 定)
+  double dive_theta_raw_deg_ =
+    std::numeric_limits<double>::quiet_NaN();  // 最近有效原始测量 (度, 下正)
+  double dive_az_raw_deg_ =
+    std::numeric_limits<double>::quiet_NaN();  // 最近有效原始测量 (度, 右正)
+  double dive_theta_f_rad_ =
+    std::numeric_limits<double>::quiet_NaN();  // 滤波后视线俯角 (rad, 下正)
+  double dive_az_f_rad_ =
+    std::numeric_limits<double>::quiet_NaN();  // 滤波后视线方位 (rad, 右正)
+  double dive_vh_cmd_ms_ = 0.0;        // 水平指令斜率状态 (m/s)
   std::chrono::steady_clock::time_point dive_los_t_;  // 最近有效方向时刻
 };
 
