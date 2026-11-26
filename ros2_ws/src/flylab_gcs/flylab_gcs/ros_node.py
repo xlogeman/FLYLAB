@@ -514,8 +514,10 @@ class GroundStationNode(Node):
         继续显示会误导; 新标注随算法节点输出自动回填。"""
         self.anno_groups.clear()
         self.anno_fps = 0.0
+        # 标注最近到达时刻归零: get_algo_fps() 立即判断流 (HUD 解算行
+        # 隐藏), 不留旧飞机的"新鲜"帧率
+        self._anno_last_rx = 0.0
         self._depth_map = None
-        self._anno_last_rx = now
 
     # ---------- 供界面调用 ----------
 

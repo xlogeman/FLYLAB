@@ -397,7 +397,7 @@ class AlgoOutputPanel(QGroupBox):
         反控接管中修改即发布 (latched), 追踪节点高度环控制飞机升降收敛;
         未动过不发布, 节点维持悬停 (与朝向偏置同步同一约定)。
         未动过时程序持续把显示值同步为云台当前俯角 (见 _sync_track_pitch):
-        首次点云台追踪时伺服要把云台转到注视目标的角度, 只在分组显示瞬间
+        首次点悬停跟拍时伺服要把云台转到注视目标的角度, 只在分组显示瞬间
         取值会拿到"调整前"的旧角度 —— 持续跟随到云台收敛, 输入框自然停在
         调整后的角度。
         keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
@@ -600,7 +600,7 @@ class AlgoOutputPanel(QGroupBox):
         for key, section in self._sections.items():
             section.update_entry(info.get(key), now_m)
         # 俯视角度持续跟随云台当前俯角 (未动过且 track 分组显示时): 首次
-        # 点云台追踪, 伺服把云台转向注视目标的角度需要时间, 分组显示瞬间
+        # 点悬停跟拍, 伺服把云台转向注视目标的角度需要时间, 分组显示瞬间
         # 同步只能拿到"调整前"的旧角度 —— 轮询里持续同步, 云台收敛后输入
         # 框即停在调整后的角度; 用户一动输入框 (touched) 即停止跟随
         if self._track_pitch_box is not None and \

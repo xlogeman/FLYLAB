@@ -237,8 +237,8 @@ TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
 # 目标追踪反控模式 (菜单三态; 随 track_takeover_start 以模式后缀下发
 # 节点, 如 "track_takeover_start dive", 同 landing_mode 的传参约定)。
-# 云台追踪/曲线/直线打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
-TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 云台追踪: 悬停跟拍 (现役)
+# 悬停跟拍/曲线/直线打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
+TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 悬停跟拍 (现役)
 TRACK_TAKEOVER_DIVE = 'curve_dive'        # 曲线打击: 两相制导定速撞击 (现役)
 TRACK_TAKEOVER_STRAIGHT = 'straight_dive'  # 直线打击: 全程沿视线不分相 (现役)
 TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随: 预留
@@ -439,7 +439,7 @@ ALGORITHMS = [
                  '--ros-args', '-p', 'device:=cuda'],
          'start': 'track_start', 'stop': 'track_stop',
          # enables_takeover: 支持目标追踪反控 (接管控制→视觉反控子菜单的
-         # 追踪三态: 云台追踪/俯冲打击/机体跟随, 接管 offboard 悬停跟拍
+         # 追踪三态: 悬停跟拍/俯冲打击/机体跟随, 接管 offboard 悬停跟拍
          # + 云台伺服保持目标居中)
          'enables_takeover': True,
          'panel': 'track'},   # 右栏面板: 追踪状态卡片 (框选在画面完成)
