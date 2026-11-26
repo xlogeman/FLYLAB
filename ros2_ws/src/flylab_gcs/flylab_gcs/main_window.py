@@ -49,6 +49,7 @@ from .panels.landing_panel import LandingPanelMixin
 from .panels.link_panel import LinkPanelMixin
 from .panels.px4_panel import Px4PanelMixin
 from .panels.teleop_panel import TeleopPanelMixin
+from .panels.track_takeover_panel import TrackTakeoverPanelMixin
 from .panels.vehicle_panel import VehiclePanelMixin
 from .processes import ManagedProcess
 from .telemetry_bar import TelemetryBar
@@ -57,8 +58,8 @@ from .vehicle_control import VehicleController
 
 
 class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
-                 AlgoPanelMixin, FlightPanelMixin, LandingPanelMixin,
-                 TeleopPanelMixin, QMainWindow):
+                 AlgoPanelMixin, FlightPanelMixin, TrackTakeoverPanelMixin,
+                 LandingPanelMixin, TeleopPanelMixin, QMainWindow):
     """主窗口: 组装各功能域面板 (mixin 提供) + 33ms 主轮询调度,
     功能域方法通过 self.* 访问主窗口共享状态。"""
 
@@ -286,19 +287,15 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._check_px4_alive()      # PX4 进程异常退出则复位按钮
         self._check_link_alive()     # 桥进程异常退出则复位按钮
         # 飞行控制按钮: 需 PX4 已启动 + RPC 已连通, 且未被遥控/视觉反控/
-        # 目标追踪反控接管 (offboard 期间飞控命令会打断接管); 飞行中未被
+        # 目标追踪反控接管 (offboard 期间飞控命令会打断接管; 互斥判断
+        # 单一出处 = TrackTakeoverPanelMixin.offboard_busy); 飞行中未被
         # 接管时点亮
-        takeover_on = self.gimbal_act.isChecked()
         veh_ok = (self.px4.is_running() and self.veh_ctrl.is_connected()
-                  and not self.teleop_act.isChecked()
-                  and not self.landing_act.isChecked()
-                  and not takeover_on)
+                  and not self.offboard_busy())
         if self.veh_btn.isEnabled() != veh_ok:
             self.veh_btn.setEnabled(veh_ok)
-        self._set_btn_on(self.veh_btn, veh_ok and self.veh_ctrl.is_flying()
-                         and not self.teleop_act.isChecked()
-                         and not self.landing_act.isChecked()
-                         and not takeover_on)
+        self._set_btn_on(self.veh_btn,
+                         veh_ok and self.veh_ctrl.is_flying())
         self._check_landing_status()  # 降落结果反馈 (成功/中止 → 菜单项弹起)
         self._check_teleop_status()   # 遥控状态 (接管成功/交还/失败 → 菜单项与摇杆联动)
         self._check_takeover_status()  # 目标追踪反控状态 (接管/交还/失败 → 菜单项联动)

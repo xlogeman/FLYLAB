@@ -3,14 +3,14 @@
 
 数据来源 (AirSim RPC / ROS 话题 / 算法结果) 由各功能模块决定，
 把处理好的 BGR numpy 数组喂给 show_frame() 即可。
+模型标注叠加 (overlay.py schema) 的图元渲染在 overlay_renderer.py,
+本控件经 set_annotations 喂入、_redraw 时调 OverlayRenderer.draw()。
 """
-import base64
-
-import cv2
-import numpy as np
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter, QPolygonF
+from PyQt5.QtCore import QPoint, QRect, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QImage, QPen, QPixmap, QPainter
 from PyQt5.QtWidgets import QLabel, QToolTip
+
+from .overlay_renderer import OverlayRenderer
 
 
 class VideoLabel(QLabel):
@@ -45,6 +45,7 @@ class VideoLabel(QLabel):
         self._sel_cur = None
         self._pan_start = None    # 变焦拖动平移起点 (QPoint, widget 坐标)
         self._annotations = []    # 模型输出标注 (overlay.py schema)
+        self._overlay = OverlayRenderer()   # 标注图元渲染器 (含解码缓存)
         self._hud = None          # 画面左上角 HUD 文字 (如图像帧率)
         self._hud_algo = None     # HUD 第二行 (算法输出帧率)
         self._depth_provider = None   # fn(x, y, w, h) -> 米|None (悬停读数)
@@ -253,7 +254,8 @@ class VideoLabel(QLabel):
             painter.drawRect(QRect(self._sel_start, self._sel_cur)
                              .normalized().translated(-ox, -oy))
         if self._annotations:
-            self._draw_annotations(painter, scaled)
+            self._overlay.draw(
+                painter, self._annotations, self._img_size, scaled.width())
         if self._hud or self._hud_algo:
             self._draw_hud(painter)
         painter.end()
@@ -284,146 +286,3 @@ class VideoLabel(QLabel):
             return
         self._annotations = annos
         self._redraw()
-
-    def _decode_image_anno(self, anno):
-        """image 图元: base64 -> QImage, 同一份 data 只解码一次 (缓存 1 条)。
-        支持带透明通道的 PNG (语义分割叠加) 与普通 JPEG (深度伪彩画中画)。"""
-        data = anno.get('data', '')
-        if not data:
-            return None
-        cached_data, cached_img = getattr(self, '_img_anno_cache', ('', None))
-        if data == cached_data:
-            return cached_img
-        try:
-            buf = np.frombuffer(base64.b64decode(data), np.uint8)
-            mat = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
-            if mat is None:
-                return None
-            if mat.ndim == 3 and mat.shape[2] == 4:
-                # BGRA -> RGBA (Qt Format_RGBA8888 逐字节对应), 保留透明度
-                rgba = cv2.cvtColor(mat, cv2.COLOR_BGRA2RGBA)
-                h, w = rgba.shape[:2]
-                img = QImage(rgba.data, w, h, w * 4,
-                             QImage.Format_RGBA8888).copy()
-            else:
-                bgr = mat if (mat.ndim == 3 and mat.shape[2] == 3) \
-                    else cv2.cvtColor(mat, cv2.COLOR_GRAY2BGR)
-                h, w = bgr.shape[:2]
-                img = QImage(bgr.data, w, h, w * 3, QImage.Format_BGR888).copy()
-        except Exception:
-            return None
-        self._img_anno_cache = (data, img)
-        return img
-
-    def _draw_annotations(self, painter, scaled):
-        """把原图坐标的标注画到缩放后的显示 pixmap 上
-        (pixmap 即缩放后的图像本身, 无需再加居中偏移)。"""
-        w, h = self._img_size
-        if w == 0 or h == 0:
-            return
-        scale = scaled.width() / w
-        lw = max(1, round(1.5 * scale))            # point/polyline/text 线宽
-        lw_box = max(2, round(2.5 * scale))        # bbox 目标框: 加粗一档更醒目
-        for a in self._annotations:
-            c = QColor(*a.get('color', [0, 255, 0]))
-            label = a.get('label', '')
-            if a['type'] == 'bbox':
-                x, y, bw, bh = a['box']
-                r = QRectF(x * scale, y * scale,
-                           bw * scale, bh * scale)
-                painter.setPen(QPen(c, lw_box))
-                painter.drawRect(r)
-                if label:
-                    # 类别名+置信度放框内左上角 (半透明黑底); 框太矮贴底部,
-                    # 横向越界向左收
-                    fm = painter.fontMetrics()
-                    tw = fm.horizontalAdvance(label)
-                    pad = 2
-                    tx = int(r.left()) + pad
-                    ty = int(r.top()) + fm.ascent() + pad
-                    if bh * scale < fm.height() + 2 * pad:
-                        ty = int(r.bottom()) - pad
-                    if tx + tw + 2 * pad > scaled.width():
-                        tx = scaled.width() - tw - 2 * pad
-                    painter.fillRect(
-                        QRect(tx - pad, ty - fm.ascent() - pad,
-                              tw + 2 * pad, fm.height() + 2 * pad),
-                        QColor(0, 0, 0, 150))
-                    painter.setPen(QPen(c))
-                    painter.drawText(tx, ty, label)
-            elif a['type'] == 'point':
-                px, py = a['point']
-                painter.setPen(QPen(c, lw))
-                painter.drawEllipse(
-                    QPointF(px * scale, py * scale), lw * 2, lw * 2)
-                if label:
-                    painter.setPen(QPen(c))
-                    painter.drawText(
-                        int(px * scale) + 6, int(py * scale) - 4, label)
-            elif a['type'] == 'polyline':
-                pts = a['points']
-                if len(pts) < 2:
-                    continue
-                qpts = [QPointF(px * scale, py * scale) for px, py in pts]
-                painter.setPen(QPen(c, lw))
-                if a.get('close') and a.get('fill'):
-                    # 闭合多边形填充为半透明色块 (实例分割掩码), 轮廓仍描边。
-                    # save/restore 防止 brush 泄漏到后续图元
-                    painter.save()
-                    fc = QColor(c)
-                    fc.setAlphaF(a.get('fill_alpha', 0.45))
-                    painter.setBrush(fc)
-                    painter.drawPolygon(QPolygonF(qpts))
-                    painter.restore()
-                else:
-                    painter.drawPolyline(QPolygonF(qpts))
-                    if a.get('close'):
-                        painter.drawLine(qpts[-1], qpts[0])
-            elif a['type'] == 'image':
-                img = self._decode_image_anno(a)
-                if img is None:
-                    continue
-                iw, ih = img.width(), img.height()
-                # 绘制宽度: w 为原图像素, 省略按图像原生尺寸;
-                # 高度: 显式 h 优先 (目标区域与图像纵横比不一致时), 否则按纵横比
-                dw = a.get('w') or iw
-                dh = a.get('h') or ih * dw / iw
-                x, y = a['pos']
-                painter.save()
-                alpha = a.get('alpha', 1.0)
-                if alpha < 1.0:
-                    painter.setOpacity(alpha)
-                painter.drawImage(
-                    QRectF(x * scale, y * scale, dw * scale, dh * scale), img)
-                painter.restore()
-            elif a['type'] == 'text':
-                tx, ty = a['pos']
-                text = a.get('text', '')
-                if not text:
-                    continue
-                painter.save()
-                f = painter.font()
-                f.setBold(True)
-                if a.get('px'):
-                    # 指定像素高 (原图像素) 乘缩放, 字号与码框屏幕等比
-                    f.setPixelSize(max(4, int(a['px'] * scale)))
-                else:
-                    # 缺省: 基准字号 + 偏移
-                    f.setPointSize(f.pointSize() + a.get('size', 1))
-                painter.setFont(f)
-                fm = painter.fontMetrics()
-                tw = fm.horizontalAdvance(text)
-                x = int(tx * scale)
-                y = int(ty * scale)
-                # align=right 时 pos.x 为文字右边缘 (C++ 侧不知字体宽度)
-                if a.get('align') == 'right':
-                    x -= tw
-                # 半透明黑底条保证对比度
-                pad = 3
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(0, 0, 0, 150))
-                painter.drawRect(x - pad, y - fm.ascent() - pad,
-                                 tw + 2 * pad, fm.height() + 2 * pad)
-                painter.setPen(QPen(c))
-                painter.drawText(x, y, text)
-                painter.restore()
