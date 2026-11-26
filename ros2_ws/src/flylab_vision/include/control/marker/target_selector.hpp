@@ -7,7 +7,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "aruco/aruco_detector.hpp"
+#include "marker/aruco_detector.hpp"
 
 namespace flylab_vision
 {

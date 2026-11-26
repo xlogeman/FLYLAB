@@ -51,7 +51,7 @@ ALGORITHMS = [
          'enables_landing': True,
          'landing_modes': [('image', '图像空间'), ('pose3d', '3D 姿态')],
          # 降落节点检测器类型: 启动反控时经 -p detector:= 传给
-         # aruco_landing_node (aruco 条目不声明, 默认 aruco)
+         # marker_landing_node (aruco 条目不声明, 默认 aruco)
          'landing_detector': 'fractal'},
     ]},
     {'name': '目标检测', 'items': [

@@ -28,14 +28,14 @@ ANNOTATION_TOPIC = '/flylab/annotations'
 
 # ---------- 相机姿态 (ArUco 降落云台泛化) ----------
 # 当前显示相机相对机体的姿态四元数 (x/y/z/w)，相机 NED 体约定相对机体 FRD。
-# 地面站 10Hz 发布；aruco_landing_node 据此把图像误差旋到机体系，适配任意云台形态。
+# 地面站 10Hz 发布；marker_landing_node 据此把图像误差旋到机体系，适配任意云台形态。
 # 非 AirSim 源不发布 —— 节点超时后回退"垂直向下 + 图像上边朝机头"刚性假设。
 GIMBAL_STATE_TOPIC = '/flylab/gimbal_state'
 
 # ---------- 航向跟随的算法通道 (视觉反控算法控制云台 + 机头跟随) ----------
 # offboard 单写者原则: 反控节点独占 setpoint 流时, 跟随指令必须由算法
 # 节点自己注入 (sendVelocityFRDYawRate), GCS 不再经 teleop 发偏航量。
-# 地面站只提供师资与云台控制权, 三个话题 (aruco_landing 已接入):
+# 地面站只提供师资与云台控制权, 三个话题 (marker_landing 已接入):
 #   gimbal_cmd    算法 → 云台 [yaw_rate, pitch_rate] (°/s), 兼作 follow 心跳
 #   gimbal_follow 算法请求相机侧反卷 (世界锁定 + 误差收敛回中), std_msgs/Bool
 #   gimbal_yaw_err 地面站广播反卷后的偏航误差 (度, 右+; NaN=未跟随),
@@ -53,7 +53,7 @@ CAMERA_FOV_TOPIC = '/flylab/camera_fov'
 # ---------- latched 运行时参数同步话题 (界面值域见 ui_ranges, 控件声明
 # 见 latched_sync.LATCHED_PARAMS; 共同约定: 后启动的节点一接入即拿到
 # 当前值, 界面 "未动过不发布") ----------
-# ArUco 码边长: 运行中同步 aruco_node / aruco_landing_node 的
+# ArUco 码边长: 运行中同步 aruco_node / marker_landing_node 的
 # marker_length (位姿解算尺度)
 ARUCO_MARKER_LENGTH_TOPIC = '/flylab/aruco_marker_length'
 # ArUco 字典: 运行中同步 dict_name (下一帧检测生效)
@@ -64,7 +64,7 @@ FRACTAL_CONFIG_TOPIC = '/flylab/fractal_config'
 FACE_TASK_TOPIC = '/flylab/face_task'
 # 人脸任务张数: FaceXFormer 批量跑置信度前 N 张脸 (0 = 全部)
 FACE_TOPK_TOPIC = '/flylab/face_topk'
-# 降落航向偏置: 运行中修改 aruco_landing_node 解锁航向按新朝向重新对齐
+# 降落航向偏置: 运行中修改 marker_landing_node 解锁航向按新朝向重新对齐
 LANDING_YAW_OFFSET_TOPIC = '/flylab/landing_yaw_offset'
 
 # ---------- ArUco 降落 ----------

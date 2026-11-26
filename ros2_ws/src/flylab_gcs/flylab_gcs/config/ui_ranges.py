@@ -57,7 +57,7 @@ FACE_TOPKS = {
 FACE_TOPK_DEFAULT = '1'
 
 # ---------- 降落航向偏置 (数字框) ----------
-# aruco_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的
+# marker_landing_node 机头相对码 0° 方向 (OpenCV 角点 0→1, 码图案 x 轴) 的
 # 落点朝向偏置 (度, 右正)。运行中修改会解锁航向、按新朝向重新对齐。
 LANDING_YAW_OFFSET_MIN = 0         # 度 (下限; 左转用大值表示, 如左 90° = 270)
 LANDING_YAW_OFFSET_MAX = 360       # 度 (上限)

@@ -20,7 +20,7 @@
 
 内置分组:
   aruco    —— aruco_node 最大码摘要
-  landing  —— aruco_landing_node 降落状态 (视觉反控按钮按下时显示)
+  landing  —— marker_landing_node 降落状态 (视觉反控按钮按下时显示)
   depth    —— yolo_depth_node 深度估计 (伪彩深度图 + 摘要)
   semantic —— yolo_semantic_node 语义分割 (配色类别图 + 类别图例)
   seg      —— yolo_segment_node 实例分割 (前 3 实例并列表格, 按置信度降序)
@@ -93,7 +93,7 @@ def _tvec_text(data):
 
 
 def _landing_fields(data):
-    """aruco_landing_node 降落状态 -> {字段名: 文本|None}。"""
+    """marker_landing_node 降落状态 -> {字段名: 文本|None}。"""
     state = data.get('state', 'IDLE')
     out = {
         '码号': None,

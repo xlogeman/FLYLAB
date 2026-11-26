@@ -6,11 +6,11 @@ from .gimbal import TELEOP_YAW_RATE_DEG_S
 from .paths import ARUCO_PARAMS_FILE
 
 # ---------- ArUco 降落 (主窗口独立按钮) ----------
-# 点击拉起 aruco_landing_node（接管 offboard → 视觉对齐调速下降 → 切 PX4
+# 点击拉起 marker_landing_node（接管 offboard → 视觉对齐调速下降 → 切 PX4
 # AUTO.LAND），再点发 landing_stop 取消。与算法下拉框互不影响。
 # 参数来自 flylab_vision/configs/aruco.yaml（--params-file 携带, -p 可临时覆盖）。
 # 前提: 通信链路在跑 + 已解锁升空 + 运行 enables_landing 的算法
-LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'aruco_landing_node',
+LANDING_CMD = ['ros2', 'run', 'flylab_vision', 'marker_landing_node',
                '--ros-args', '--params-file', ARUCO_PARAMS_FILE]
 LANDING_START_CMD = 'landing_start'
 LANDING_STOP_CMD = 'landing_stop'
@@ -21,7 +21,7 @@ LANDING_STOP_CMD = 'landing_stop'
 #   图像空间 = 现有逻辑 (cx/cy/面积图像伺服, 不依赖 3D 位姿)
 #   3D 姿态  = 以码的实际距离 (solvePnP 位姿, 经云台姿态旋到机体系) 米级闭环
 #              降落 —— 前提是位姿尺度可信 (码边长准确或已标定)
-# 模式经 -p landing_mode:=<mode> 传给 aruco_landing_node。其他算法将来可在
+# 模式经 -p landing_mode:=<mode> 传给 marker_landing_node。其他算法将来可在
 # ALGORITHMS 注册各自的反控形态。
 LANDING_MODE_IMAGE = 'image'
 LANDING_MODE_POSE3D = 'pose3d'
@@ -55,7 +55,7 @@ TELEOP_CMD = ['ros2', 'run', 'flylab_vision', 'teleop_node',
               '-p', f'yaw_rate_deg:={TELEOP_YAW_RATE_DEG_S}']  # 与 gimbal.TELEOP_YAW_RATE_DEG_S 同源
 
 # ---------- 通信链路 (地面站一键拉起) ----------
-# uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888, 供 tracker:=uxrce / aruco_landing 链路
+# uXRCE-DDS: PX4 ↔ ROS2 直连桥, UDP 8888, 供 tracker:=uxrce / marker_landing 链路
 UXRCE_CMD = ['MicroXRCEAgent', 'udp4', '-p', '8888']
 # MAVROS: 14542 专属实例 (14580 会被 AirSim 抢占, 详见 README)
 MAVROS_CMD = ['ros2', 'run', 'mavros', 'mavros_node', '--ros-args',

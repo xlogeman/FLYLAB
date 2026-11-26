@@ -21,7 +21,7 @@ namespace flylab_vision
 
 /// 云台视觉伺服 (目标追踪 -> 软云台, 让追踪目标保持在画面中央)。
 ///
-/// 通道约定与 aruco_landing_node 的算法云台通道一致 (flylab_gcs/config.py):
+/// 通道约定与 marker_landing_node 的算法云台通道一致 (flylab_gcs/config.py):
 /// 发布 /flylab/gimbal_cmd [yaw_rate, pitch_rate] (°/s), 地面站软云台按
 /// 速率持续步进 (保持型指令 —— 停止/丢失/断流必须显式清零, 否则云台
 /// 会按最后速率一直转, 见 set_enabled / lost_zero / tick 的兜底)。

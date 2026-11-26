@@ -1,5 +1,5 @@
 // Copyright 2026 flylab
-#include "aruco/aruco_detector.hpp"
+#include "marker/aruco_detector.hpp"
 
 #include <cmath>
 #include <iomanip>

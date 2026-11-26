@@ -41,7 +41,7 @@
 ///       指令 /flylab/vision_cmd; 叠加 /flylab/annotations; 状态 /flylab/landing_status
 ///
 /// 使用前提: 已解锁升空, 相机画面垂直向下看到 ArUco 码。
-/// 运行: ros2 run flylab_vision aruco_landing_node
+/// 运行: ros2 run flylab_vision marker_landing_node
 ///       参数走配置文件 configs/aruco.yaml (--params-file 携带, 地面站默认带上),
 ///       也可 -p 覆盖单项: -p vel_gain:=1.0 -p target_id:=92
 
@@ -64,11 +64,12 @@
 
 #include <opencv2/core.hpp>
 
-#include "aruco/aruco_detector.hpp"
-#include "aruco/fractal_detector.hpp"
-#include "control/aruco/landing_math.hpp"
-#include "control/aruco/target_selector.hpp"
-#include "control/aruco/yaw_aligner.hpp"
+#include "marker/aruco_detector.hpp"
+#include "marker/fractal_detector.hpp"
+#include "control/marker/landing_math.hpp"
+#include "control/marker/marker_link.hpp"
+#include "control/marker/target_selector.hpp"
+#include "control/marker/yaw_aligner.hpp"
 #include "common/image_utils.hpp"
 #include "common/gcs_topics.hpp"
 #include "control/common/gimbal_follow.hpp"
@@ -81,7 +82,7 @@ namespace
 {
 constexpr const char kCmdStart[] = "landing_start";
 constexpr const char kCmdStop[] = "landing_stop";
-constexpr const char kAnnoAlgo[] = "aruco_landing";     // 检测结果叠加分组
+constexpr const char kAnnoAlgo[] = "marker_landing";     // 检测结果叠加分组
 constexpr const char kStatusTracking[] = "tracking";     // 接管 offboard, 视觉降落中
 constexpr const char kStatusLanding[] = "landing";       // 已切 AUTO.LAND
 constexpr const char kStatusLanded[] = "landed";         // 降落成功 (飞机上锁)
@@ -116,7 +117,7 @@ class ArucoLandingNode : public rclcpp::Node
 {
 public:
   ArucoLandingNode()
-  : Node("aruco_landing_node")
+  : Node("marker_landing_node")
   {
     // ---------- 参数 ----------
     const auto image_topic = declare_parameter<std::string>(
@@ -246,7 +247,7 @@ public:
       "follow_err_topic", topics::GIMBAL_YAW_ERR_TOPIC);
 
     // ---------- 目标选择 / 朝向对齐 / 趋势角子系统 (逻辑拆分, 参数在此装配) ----------
-    // 逻辑见 include/control/aruco/target_selector.hpp 与 yaw_aligner.hpp
+    // 逻辑见 include/control/marker/target_selector.hpp 与 yaw_aligner.hpp
     selector_ = std::make_unique<TargetSelector>(get_logger(),
       TargetSelector::Params{target_id_, target_fallback_, reacquire_sec_});
     yaw_aligner_ = std::make_unique<YawAligner>(get_logger(), get_clock(),
@@ -308,47 +309,58 @@ public:
         gimbal_ever_ = true;  // 标记数据源存在过 (中断时悬停告警区分诊断用)
       });
 
-    // ---------- 地面站码边长同步 ----------
-    // 场景含多种尺寸码时, 地面站右栏滑杆运行中同步 marker_length:
-    // 影响位姿尺度 (面板"实际宽度/距离"换算), 降落控制只用图像空间量
-    // 不受影响。latched 话题, 后启动的节点一接入即收到最近值。
-    const auto marker_len_topic = declare_parameter<std::string>(
-      "marker_length_topic", topics::ARUCO_MARKER_LENGTH_TOPIC);
-    marker_length_ = marker_length;
-    marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
-      marker_len_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_marker_length(*msg);});
-
-    // ---------- 地面站字典同步 ----------
-    // 地面站右栏下拉切换 ArUco 字典即发布 (latched, 后启动的节点一接入即收到
-    // 最近值); 运行中换字典后锁定目标码可能不在新字典里, 重选目标并复位
-    // 朝向滤波按新字典重新对齐。话题名可用参数覆盖。
-    const auto dict_topic = declare_parameter<std::string>(
-      "dict_topic", topics::ARUCO_DICT_TOPIC);
-    dict_name_ = dict_name;
-    dict_sub_ = create_subscription<std_msgs::msg::String>(
-      dict_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::String::SharedPtr msg) {on_dict(*msg);});
-
-    // ---------- 地面站分形配置同步 (仅 fractal 模式消费) ----------
-    // 同字典同步同一约定 (latched); 运行中换配置重建检测器, 码图案集合变了
-    // 朝向基准失效, 复位按新码重新对齐。aruco 模式下消息被忽略。
-    const auto fractal_cfg_topic = declare_parameter<std::string>(
-      "fractal_config_topic", topics::FRACTAL_CONFIG_TOPIC);
-    fractal_cfg_name_ = fractal_config;
-    fractal_cfg_sub_ = create_subscription<std_msgs::msg::String>(
-      fractal_cfg_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::String::SharedPtr msg) {on_fractal_config(*msg);});
-
-    // ---------- 地面站视场角同步 ----------
-    // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
-    // latched 话题, 节点后启动也能收到最近一次发布的值。话题名可用参数覆盖。
-    const auto fov_topic =
-      declare_parameter<std::string>("fov_topic", topics::CAMERA_FOV_TOPIC);
-    fov_deg_ = fov_deg;
-    fov_sub_ = create_subscription<std_msgs::msg::Float64>(
-      fov_topic, rclcpp::QoS(1).reliable().transient_local(),
-      [this](const std_msgs::msg::Float64::SharedPtr msg) {on_fov(*msg);});
+    // ---------- 地面站运行时参数同步 (码边长/FOV/字典/分形配置, 三节点共用组件) ----------
+    // 四路 latched 通道的订阅/QoS/门控/去重统一在 MarkerParamSync, 这里
+    // 只写"值变化如何应用": 分形模式下字典消息忽略 (配置走分形通道);
+    // 字典/分形配置变化后码集合可能改变, 复位目标选择与朝向对齐按新码
+    // 重新锁定。码边长影响位姿尺度 (面板换算), 降落控制只用图像空间量
+    // 不受影响; FOV 未标定时实时跟随 (已标定拒跟)
+    sync_ = std::make_unique<MarkerParamSync>(*this,
+      MarkerParamSync::Hooks{
+        [this](double v) {detSetMarkerLength(v); return true;},
+        [this](double v) {
+          if (detCalibrated()) {
+            return false;   // 已标定 (真实内参) 不跟随
+          }
+          detSetFov(v);
+          return true;
+        },
+        [this](const std::string & name) {
+          if (fractal_mode_) {
+            return false;   // fractal 模式不吃 ArUco 字典 (配置走分形通道)
+          }
+          try {
+            detector_->set_dictionary(name);
+          } catch (const std::exception & e) {
+            RCLCPP_WARN(
+              get_logger(), "忽略无效字典 '%s': %s", name.c_str(), e.what());
+            return false;
+          }
+          // 锁定目标码在新字典下可能不存在: 丢弃锁定重新选目标, 并复位
+          // 朝向滤波/计数/锁定 (码 ID 集合变了, 朝向基准失效)
+          selector_->reset();
+          yaw_aligner_->reset();
+          return true;
+        },
+        [this](const std::string & name) {
+          if (!fractal_mode_) {
+            return false;   // 非 fractal 模式忽略 (配置下拉只对 fractal 显示)
+          }
+          FractalDetectorConfig cfg = fractal_det_->config();
+          cfg.config_name = name;
+          try {
+            fractal_det_ = std::make_unique<FractalDetector>(cfg);
+          } catch (const std::exception & e) {
+            RCLCPP_WARN(
+              get_logger(), "忽略无效分形配置 '%s': %s",
+              name.c_str(), e.what());
+            return false;
+          }
+          // 码图案集合变了: 朝向基准失效, 复位按新码重新对齐
+          yaw_aligner_->reset();
+          return true;
+        }},
+      marker_length, fov_deg, dict_name, fractal_config);
 
     // ---------- 跟踪码 ID 广播 ----------
     // 每帧发布当前锁定/回退跟踪的码 ID (无则 -1): 检测节点 (aruco_node)
@@ -518,16 +530,12 @@ private:
     return true;
   }
 
-  /// 码的实际物理宽度 (米): w_px × Z / fx (针孔模型), 无位姿返回 -1。
-  /// fx 与检测器同源: 有标定用标定 K, 否则按当前同步 FOV 估算
+  /// 码的实际物理宽度 (米) —— 换算见 marker_link.hpp physical_width
+  /// (fx 与检测器同源: 有标定用标定 K, 否则按当前同步 FOV 估算)
   double physicalWidth(const Detection & d) const
   {
-    if (!d.has_pose || img_w_ <= 0.0) {
-      return -1.0;
-    }
-    const double fx = detCalibrated() ? detFx() :
-      img_w_ / (2.0 * std::tan(fov_deg_ * CV_PI / 360.0));
-    return d.bbox_wh.x * d.tvec[2] / fx;
+    return physical_width(
+      img_w_, detCalibrated(), detFx(), sync_->fov_deg(), d);
   }
 
   // ---------------- 检测器分支 (detector 参数: aruco / fractal 双模) ----------------
@@ -610,73 +618,6 @@ private:
     gimbal_pub_t_ = now();
   }
 
-  // ---------------- 地面站码边长同步 ----------------
-  void on_marker_length(const std_msgs::msg::Float64 & msg)
-  {
-    // 非法值/值未变化跳过 (滑杆拖动重发布降噪)
-    if (msg.data <= 0.0 || msg.data == marker_length_) {
-      return;
-    }
-    marker_length_ = msg.data;
-    detSetMarkerLength(msg.data);
-    RCLCPP_INFO(
-      get_logger(), "码边长同步: %.2fm (位姿尺度随之更新, 来自地面站)",
-      msg.data);
-  }
-
-  // ---------------- 地面站字典同步 ----------------
-  void on_dict(const std_msgs::msg::String & msg)
-  {
-    // fractal 模式不吃 ArUco 字典 (分形配置走 on_fractal_config)
-    if (fractal_mode_) {
-      return;
-    }
-    // 非法值/值未变化跳过 (下拉重复选择降噪)
-    if (msg.data.empty() || msg.data == dict_name_) {
-      return;
-    }
-    try {
-      detector_->set_dictionary(msg.data);
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(
-        get_logger(), "忽略无效字典 '%s': %s", msg.data.c_str(), e.what());
-      return;
-    }
-    dict_name_ = msg.data;
-    RCLCPP_INFO(
-      get_logger(), "字典同步: %s (下一帧检测生效, 来自地面站)",
-      dict_name_.c_str());
-    // 锁定目标码在新字典下可能不存在: 丢弃锁定重新选目标, 并复位
-    // 朝向滤波/计数/锁定 (码 ID 集合变了, 朝向基准失效)
-    selector_->reset();
-    yaw_aligner_->reset();
-  }
-
-  // ---------------- 地面站分形配置同步 (fractal 模式) ----------------
-  void on_fractal_config(const std_msgs::msg::String & msg)
-  {
-    // 非法值/值未变化跳过; 非 fractal 模式忽略 (配置下拉只对 fractal 显示)
-    if (!fractal_mode_ || msg.data.empty() || msg.data == fractal_cfg_name_) {
-      return;
-    }
-    FractalDetectorConfig cfg = fractal_det_->config();
-    cfg.config_name = msg.data;
-    try {
-      auto det = std::make_unique<FractalDetector>(cfg);
-      fractal_det_ = std::move(det);
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(
-        get_logger(), "忽略无效分形配置 '%s': %s", msg.data.c_str(), e.what());
-      return;
-    }
-    fractal_cfg_name_ = msg.data;
-    RCLCPP_INFO(
-      get_logger(), "分形配置同步: %s (下一帧检测生效, 来自地面站)",
-      fractal_cfg_name_.c_str());
-    // 码图案集合变了: 朝向基准失效, 复位按新码重新对齐
-    yaw_aligner_->reset();
-  }
-
   // ---------------- 地面站降落朝向偏置同步 ----------------
   void on_yaw_offset(const std_msgs::msg::Float64 & msg)
   {
@@ -687,17 +628,6 @@ private:
     yaw_offset_deg_ = msg.data;
     // 偏置变化即重新对齐: 解锁航向、清滤波与计数 (IDLE 中仅存值)
     yaw_aligner_->setOffset(msg.data);
-  }
-
-  // ---------------- 地面站视场角同步 ----------------
-  void on_fov(const std_msgs::msg::Float64 & msg)
-  {
-    // 已标定 (真实内参) 或非法值不跟随; 值未变化跳过 (滑杆拖动/重发布降噪)
-    if (detCalibrated() || msg.data <= 0.0 || msg.data == fov_deg_) {
-      return;
-    }
-    fov_deg_ = msg.data;
-    detSetFov(msg.data);
   }
 
   // ---------------- 图像: 检测 (仅在降落流程中工作) ----------------
@@ -967,7 +897,7 @@ private:
     // 下降会放大误差, 门控自动收小停降回去对齐, 自平衡
 
     // ---------------- 朝向对齐 (全程并行: 云台 → 码 0° 方向 + 偏置, 机头跟随) ----------------
-    // 状态机/滤波/锁定/门控在 YawAligner (include/control/aruco/yaw_aligner.hpp);
+    // 状态机/滤波/锁定/门控在 YawAligner (include/control/marker/yaw_aligner.hpp);
     // 这里只提供测量输入: 云台方位 = 画面上方 (0,0,-1) 经云台姿态旋到机
     // 体系取水平方位 (与码方位同一姿态链, 不假设相机垂直向下), 码方位见
     // markerYawDeg()。跟随请求/误差收发经 GimbalFollow 组件 (gimbal_follow.hpp)
@@ -1230,7 +1160,7 @@ private:
   std::unique_ptr<ArucoDetector> detector_;        // aruco 模式检测器
   std::unique_ptr<FractalDetector> fractal_det_;   // fractal 模式检测器
   bool fractal_mode_ = false;                      // detector 参数选择的模式
-  std::string fractal_cfg_name_;   // 当前生效分形配置 (同步去重用)
+  std::unique_ptr<MarkerParamSync> sync_;  // 地面站参数同步 (共用组件, 通道见 ctor)
   int last_tgt_id_ = -1;           // 最近一拍对齐目标 ID (面板 tracked_id 显示)
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr anno_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;  // 降落状态回传
@@ -1246,13 +1176,6 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr fov_sub_;
-  double fov_deg_ = 60.0;   // 当前生效的 FOV (视场角同步去重用)
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr marker_len_sub_;
-  double marker_length_ = 0.2;  // 当前生效的码边长 (同步去重用)
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr dict_sub_;
-  std::string dict_name_;       // 当前生效的字典 (同步去重用)
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fractal_cfg_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // 泛化云台映射: 最近一次相机机体系姿态 (相机 NED 体约定) + 到达时刻

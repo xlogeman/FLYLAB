@@ -44,7 +44,7 @@ namespace flylab_vision
 ///     保持 L = d·cos(p), 调整观察角度时飞机沿半径球面滑动到新观察点
 ///     (俯角未设 = 保持当前角度只锁半径), 摆脱贴视线尾随形态
 ///
-/// 与 aruco_landing_node 同一套组件与流程 (px4_offboard_client, offboard
+/// 与 marker_landing_node 同一套组件与流程 (px4_offboard_client, offboard
 /// 单写者原则 —— 接管期间偏航指令由本节点注入, 地面站遥控必须退出):
 ///   激活: takeoverReset → 定时 tick 跑接管状态机 (心跳预热 → 周期请求 →
 ///         确认), ENGAGED 后持续 sendVelocityFRDYawRate 维持 offboard
@@ -54,7 +54,7 @@ namespace flylab_vision
 ///   交还: requestLoiter 切回 AUTO.LOITER; 上锁 / OFFBOARD 被外部切换 /
 ///         图像断流 / 接管超时 自动交还并回 idle
 /// 机头跟随: 经 GimbalFollow 组件 (control/common/gimbal_follow.hpp, 通道
-/// 约定同 aruco_landing) 请求相机侧反卷 + 订阅误差, 按误差 P 律注入偏航
+/// 约定同 marker_landing) 请求相机侧反卷 + 订阅误差, 按误差 P 律注入偏航
 /// 角速率; 可经 /flylab/track_follow
 /// (latched Bool, 地面站云台面板"跟随"按钮) 开关 —— 关闭时机头保持
 /// 航向仅注入零偏航, 云台伺服 (相机侧反卷) 不受影响, 目标仍保持画面
@@ -131,7 +131,7 @@ public:
       throw std::invalid_argument("link must be mavros or uxrce");
     }
 
-    // ---------- 地面站通道 (状态回传 / 机头跟随, 约定同 aruco_landing) ----------
+    // ---------- 地面站通道 (状态回传 / 机头跟随, 约定同 marker_landing) ----------
     const auto status_topic = node.declare_parameter<std::string>(
       "status_topic", topics::TRACK_STATUS_TOPIC);
     status_pub_ =

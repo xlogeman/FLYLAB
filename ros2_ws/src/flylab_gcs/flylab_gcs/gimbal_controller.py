@@ -372,7 +372,7 @@ class GimbalController(threading.Thread):
 
         语义: 相机 NED 体约定 (x 视轴, y 图右, z 图下) 相对机体 FRD 的旋转,
         取最近一次实际下发的机体相对姿态, 云台未动过时回退安装基准。
-        供 aruco_landing 做图像方向 -> 机体系的泛化映射。"""
+        供 marker_landing 做图像方向 -> 机体系的泛化映射。"""
         with self.lock:
             if not self._airsim_src:
                 return None

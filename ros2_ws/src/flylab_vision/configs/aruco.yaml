@@ -3,14 +3,14 @@
 # 用法: 节点启动时加 --ros-args --params-file <本文件路径>
 #   - 地面站已在 flylab_gcs/config.py 中默认携带本文件 (ArUco检测按钮 + 降落按钮)
 #   - 命令行 -p 的优先级高于本文件, 可临时覆盖单项, 如:
-#     ros2 run flylab_vision aruco_landing_node --ros-args --params-file <本文件> \
+#     ros2 run flylab_vision marker_landing_node --ros-args --params-file <本文件> \
 #         -p dict_name:=DICT_6X6_250 -p target_id:=92
 #
-# /**: 通配所有节点名 (aruco_detector / aruco_landing_node / fractal_detector),
+# /**: 通配所有节点名 (aruco_detector / marker_landing_node / fractal_detector),
 #      各节点只取自己声明的参数, 其余自动忽略, 因此三个节点可共用本文件。
 /**:
   ros__parameters:
-    # ---------- 检测参数 (aruco_node / aruco_landing_node 共用) ----------
+    # ---------- 检测参数 (aruco_node / marker_landing_node 共用) ----------
     image_topic: /flylab/display/image_raw   # 算法图像输入 (默认地面站转发帧)
     dict_name: DICT_4X4_1000                 # 字典; Prometheus 6x6 码用 DICT_6X6_250
     dict_topic: /flylab/aruco_dict           # 地面站"ArUco 字典"下拉运行中同步 (latched)
@@ -25,7 +25,7 @@
     # 复用上方检测参数 (marker_length = 外层码物理边长)
     fractal_config: FRACTAL_5L_6             # 内置配置 FRACTAL_2L_6~5L_6, 或 fractal_create 生成的 yml 路径
 
-    # ---------- 降落参数 (仅 aruco_landing_node, 检测节点忽略) ----------
+    # ---------- 降落参数 (仅 marker_landing_node, 检测节点忽略) ----------
     cmd_topic: /flylab/vision_cmd            # 启停指令话题
     status_topic: /flylab/landing_status     # 状态回传话题 (tracking/landing/landed/idle)
     link: mavros                             # PX4 执行链路: mavros | uxrce

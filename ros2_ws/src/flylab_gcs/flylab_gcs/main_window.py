@@ -135,7 +135,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 深度估计悬停读数: 鼠标放在画面上显示该处深度 (气泡随数据
         # 新鲜度自动出现/隐藏, 深度节点停止后自动失效)
         self.camera_tab.video.set_depth_provider(self.node.get_depth_at)
-        # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
+        # 相机机体系姿态发布节流 (10Hz, 供 marker_landing 云台泛化映射)
         self._cam_ori_last = 0.0
         # 视场角同步: 变化即发布 + 2s 周期重发兜底 (策略见
         # latched_sync.LatchedKeepalive —— latched 只在匹配瞬间投递,
@@ -301,7 +301,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self._check_takeover_status()  # 目标追踪反控状态 (接管/交还/失败 → 菜单项联动)
         self._update_takeover_gates()   # 降落(视觉反控)/遥控互斥门控
         self._log_forward_stats()   # 转发断流告警 (2s 一次, 计数在转发线程)
-        # 相机机体系姿态 (10Hz): 供 aruco_landing 做云台泛化的方向映射;
+        # 相机机体系姿态 (10Hz): 供 marker_landing 做云台泛化的方向映射;
         # 非 AirSim 源 get_cam_orientation() 返回 None, 不发布
         now_mono = time.monotonic()
         if now_mono - self._cam_ori_last >= 0.1:

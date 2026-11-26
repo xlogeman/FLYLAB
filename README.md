@@ -135,10 +135,10 @@ usbipd attach --busid 1-8 --wsl U-22.04-fuck
 ```
 flylab_vision/
 ├── include/common/               # DisplayVisionNode 基类 + 公共工具
-├── include/aruco/                # ArUco 检测 + IPPE_SQUARE 位姿
+├── include/marker/                # ArUco 检测 + IPPE_SQUARE 位姿
 ├── include/yolo/                 # 七个 YOLO 任务库接口（pimpl 隔离 onnxruntime）
 ├── include/control/              # PX4 执行层：offboard client 双链路（MAVROS / uXRCE）
-├── src/aruco/                    # aruco_node（检测展示）+ aruco_landing_node（降落状态机）
+├── src/marker/                    # aruco_node（检测展示）+ marker_landing_node（降落状态机）
 ├── src/yolo/<task>/              # 算法库 + 展示节点成对放置
 ├── thirdparty/onnxruntime/       # 预编译推理库（系统 OpenCV 4.5 DNN 不支持 yolo26）
 └── models/<task>/                # 预训练权重

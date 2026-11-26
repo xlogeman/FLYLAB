@@ -1,5 +1,5 @@
 // Copyright 2026 flylab
-#include "aruco/fractal_detector.hpp"
+#include "marker/fractal_detector.hpp"
 
 #include <algorithm>
 #include <cmath>

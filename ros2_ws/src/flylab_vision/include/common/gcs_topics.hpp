@@ -44,7 +44,7 @@ constexpr const char * TRACK_DIST_TOPIC = "/flylab/track_dist";                 
 // ---------- ArUco 降落 ----------
 constexpr const char * LANDING_STATUS_TOPIC = "/flylab/landing_status";     // 降落状态回传 (tracking/landing/landed/idle)
 // 历史遗留: 追踪码 ID 广播话题, 地面站现经 algo_info JSON 的 tracked_id
-// 字段消费, 本话题暂无订阅方 (aruco/fractal/landing 三节点仍在发布)
+// 字段消费, 本话题暂无订阅方 (marker/fractal/landing 三节点仍在发布)
 constexpr const char * LANDING_TRACKED_ID_TOPIC = "/flylab/landing_tracked_id";
 
 // ---------- 目标追踪反控 ----------

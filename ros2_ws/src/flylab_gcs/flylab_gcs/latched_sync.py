@@ -90,7 +90,7 @@ class LatchedParam:
 
 LATCHED_PARAMS = [
     # ArUco 码边长: 场景含多种尺寸码时运行中同步 aruco_node /
-    # aruco_landing_node 的 marker_length (位姿解算尺度); 未拖动过
+    # marker_landing_node 的 marker_length (位姿解算尺度); 未拖动过
     # 不发布, 节点用 aruco.yaml 的值
     LatchedParam(
         'marker_length', config.ARUCO_MARKER_LENGTH_TOPIC, Float64,
@@ -105,7 +105,7 @@ LATCHED_PARAMS = [
         groups=[('aruco', None), ('fractal', None),
                 ('landing', 'aruco'), ('landing', 'fractal')]),
     # 降落朝向偏置: 机头相对码 0° 方向的落点朝向 (度, 右正), 运行中
-    # 修改 aruco_landing_node 解锁航向按新朝向重新对齐; 未动过不发布
+    # 修改 marker_landing_node 解锁航向按新朝向重新对齐; 未动过不发布
     LatchedParam(
         'landing_yaw_offset', config.LANDING_YAW_OFFSET_TOPIC, Float64,
         kind='spin', title='朝向偏置 (°)',

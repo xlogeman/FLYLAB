@@ -10,7 +10,7 @@
 
 #include <aruco.h>  // thirdparty/aruco-3.1.12 (UCO aruco, GPLv3)
 
-#include "aruco/aruco_detector.hpp"  // Detection / load_calib 复用
+#include "marker/aruco_detector.hpp"  // Detection / load_calib 复用
 
 namespace flylab_vision
 {

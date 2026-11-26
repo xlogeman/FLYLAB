@@ -63,10 +63,10 @@ function(flylab_node target src)
 endfunction()
 
 # ---------- 核心算法库 (无 ROS 依赖) ----------
-flylab_algo(aruco_detector src/aruco/aruco_detector.cpp)
+flylab_algo(aruco_detector src/marker/aruco_detector.cpp)
 # 分形码检测: 包装上游 aruco::FractalDetector, 输出复用 Detection;
 # SYSTEM PUBLIC 让上游头文件的告警静默, 下游节点经传递拿到 include 路径
-flylab_algo(fractal_detector src/aruco/fractal_detector.cpp ${ARUCO3_LIB})
+flylab_algo(fractal_detector src/marker/fractal_detector.cpp ${ARUCO3_LIB})
 target_include_directories(fractal_detector SYSTEM PUBLIC ${ARUCO3_ROOT}/src)
 
 # 任务一个子目录: src/<task>/ (命名与 models/<task>/ 对齐, 同一任务可挂
@@ -95,8 +95,8 @@ flylab_algo(scrfd_detector src/face/scrfd_detector.cpp ${ORT_LIB})
 flylab_algo(facexformer src/face/facexformer.cpp ${ORT_LIB})
 
 # ---------- ROS2 展示节点 (地面站视觉工具链路) ----------
-flylab_node(aruco_node src/aruco/aruco_node.cpp aruco_detector)
-flylab_node(fractal_node src/aruco/fractal_node.cpp fractal_detector aruco_detector)
+flylab_node(aruco_node src/marker/aruco_node.cpp aruco_detector)
+flylab_node(fractal_node src/marker/fractal_node.cpp fractal_detector aruco_detector)
 flylab_node(yolo_detector_node src/detect/yolo_detector_node.cpp yolo_detector)
 flylab_node(yolo_cls_node src/classify/yolo_cls_node.cpp yolo_classifier)
 flylab_node(yolo_depth_node src/depth/yolo_depth_node.cpp yolo_depth)
@@ -115,10 +115,10 @@ flylab_node(face_detect_node src/face/face_detect_node.cpp scrfd_detector facexf
 
 # ---------- ROS2 节点: ArUco 视觉降落 (业务节点, 执行层见 include/control/) ----------
 # 不走 flylab_node 模板: 控制链路依赖与展示型节点不同
-add_executable(aruco_landing_node src/aruco/aruco_landing_node.cpp)
-target_link_libraries(aruco_landing_node aruco_detector fractal_detector vision_common)
+add_executable(marker_landing_node src/marker/marker_landing_node.cpp)
+target_link_libraries(marker_landing_node aruco_detector fractal_detector vision_common)
 ament_target_dependencies(
-  aruco_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
+  marker_landing_node rclcpp sensor_msgs std_msgs px4_msgs geometry_msgs mavros_msgs)
 
 # ---------- ROS2 节点: 手动遥控 (方向键 → offboard 速度+偏航角速率) ----------
 add_executable(teleop_node src/teleop/teleop_node.cpp)
@@ -153,7 +153,7 @@ install(DIRECTORY ${ARUCO3_ROOT}/build/
 
 install(TARGETS vision_common
   aruco_detector fractal_detector yolo_detector yolo_classifier yolo_depth yolo_obb yolo_pose yolo_segment yolo_semantic yolo_tracker ortrack wilor scrfd_detector facexformer
-  aruco_node fractal_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node aruco_landing_node teleop_node
+  aruco_node fractal_node yolo_detector_node yolo_cls_node yolo_depth_node yolo_obb_node yolo_pose_node yolo_segment_node yolo_semantic_node yolo_track_node ortrack_node wilor_node face_detect_node marker_landing_node teleop_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
