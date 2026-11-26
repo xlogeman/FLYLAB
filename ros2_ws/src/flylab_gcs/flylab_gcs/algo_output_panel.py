@@ -23,8 +23,9 @@ import time
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QFormLayout, \
-    QGroupBox, QLabel, QSlider, QSpinBox, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, \
+    QHBoxLayout, QFormLayout, QGroupBox, QLabel, QSlider, QSpinBox, \
+    QSizePolicy, QWidget
 
 from . import config
 from .panel_sections import HIDE_ROW, SECTIONS, landing_spec
@@ -248,6 +249,7 @@ class AlgoOutputPanel(QGroupBox):
                  set_landing_yaw=None, set_aruco_dict=None,
                  set_face_task=None, set_face_topk=None,
                  set_fractal_config=None, set_track_pitch=None,
+                 set_track_dist=None,
                  get_gimbal_pitch=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.algo_info ({src: {data, t}})
@@ -296,6 +298,11 @@ class AlgoOutputPanel(QGroupBox):
         self._track_pitch_touched = False   # 用户改过则不再自动同步
         if set_track_pitch is not None:
             self._build_track_pitch_spin(set_track_pitch)
+        # 目标追踪跟随距离 (跟随 track 分组显隐): 机体跟随-水平时距离环
+        # 保持的水平距离, 修改即发布 (无自动同步, 节点默认 = 参数默认值)
+        self._track_dist_box = None
+        if set_track_dist is not None:
+            self._build_track_dist_spin(set_track_dist)
         # track 分组激活期间画面框选常开 (主窗口控制), 拖出矩形松开即
         # 自动开始追踪, 停止靠工具栏"停止算法"
         # 顶部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
@@ -306,7 +313,8 @@ class AlgoOutputPanel(QGroupBox):
                 self._dict_box is not None or self._face_task_box is not None or \
                 self._face_topk_box is not None or \
                 self._fractal_box is not None or \
-                self._track_pitch_box is not None:
+                self._track_pitch_box is not None or \
+                self._track_dist_box is not None:
             top = QWidget()
             row = QHBoxLayout(top)
             row.setContentsMargins(0, 0, 0, 0)
@@ -325,6 +333,8 @@ class AlgoOutputPanel(QGroupBox):
                 row.addWidget(self._fractal_box, 1)
             if self._track_pitch_box is not None:
                 row.addWidget(self._track_pitch_box, 1)
+            if self._track_dist_box is not None:
+                row.addWidget(self._track_dist_box, 1)
         self._top_row = top
         self._update_top_visibility([])   # 初始无分组, 整行隐藏
 
@@ -424,6 +434,34 @@ class AlgoOutputPanel(QGroupBox):
         lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
         self._track_pitch_box = box
         self._track_pitch_spin = spin
+
+    def _build_track_dist_spin(self, publish):
+        """目标追踪跟随距离 (QDoubleSpinBox, 米): 机体跟随-水平时距离环
+        保持的水平距离, 反控接管中修改即发布 (latched), 追踪节点距离环
+        控制飞机水平收放收敛; 未动过不发布, 节点用参数默认值
+        bodyfollow_dist_m (与俯视角度同步同一约定, 无自动跟随显示)。
+        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
+        box = QGroupBox('跟随距离 (m)')
+        box.setToolTip(
+            '机体跟随 (水平跟随) 时飞机保持与目标的水平距离 (米):\n'
+            '设置后飞机自动前进/后退, 直到距离收敛到该值;\n'
+            '未设置时用节点默认值 10m。运行中修改立即生效')
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        spin = QDoubleSpinBox()
+        spin.setRange(config.TRACK_DIST_MIN, config.TRACK_DIST_MAX)
+        spin.setSingleStep(config.TRACK_DIST_STEP)
+        spin.setDecimals(1)
+        spin.setSuffix('m')
+        spin.setKeyboardTracking(False)
+        spin.setFixedWidth(86)
+        # 初始显示默认值不发 (未动过不发布, 节点用参数默认值;
+        # setValue 放在 connect 之前, 不触发 valueChanged)
+        spin.setValue(config.TRACK_DIST_DEFAULT)
+        spin.valueChanged.connect(publish)
+        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
+        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
+        self._track_dist_box = box
 
     def _sync_track_pitch(self):
         """俯视角度同步为云台当前俯角 (限幅): 仅用户未动过时调用
@@ -590,6 +628,8 @@ class AlgoOutputPanel(QGroupBox):
             self._track_pitch_box.setVisible(track_on)
             if track_on and not self._track_pitch_touched:
                 self._sync_track_pitch()   # 默认跟云台当前俯角 (持续同步见 refresh)
+        if self._track_dist_box is not None:
+            self._track_dist_box.setVisible(track_on)
         if self._top_row is not None:
             self._top_row.setVisible(
                 aruco_on or face_on or fractal_on or track_on)

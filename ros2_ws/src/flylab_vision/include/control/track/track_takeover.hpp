@@ -186,7 +186,8 @@ public:
     // 机体跟随 (水平跟随: 水平距离 P 律 + 视线方位快闭环; 视线滤波/
     // 限加速度/丢失超时复用俯冲状态)
     bodyfollow_dist_m_ = node.declare_parameter<double>(
-      "bodyfollow_dist_m", 10.0);   // 保持水平距离 (m)
+      "bodyfollow_dist_m", 10.0);   // 保持水平距离默认值 (m, 运行中经
+                                    // /flylab/track_dist 同步覆盖)
     bodyfollow_kp_ = node.declare_parameter<double>(
       "bodyfollow_kp", 0.5);        // 距离环 P 增益 (m/s 每 m)
     bodyfollow_speed_max_ms_ = node.declare_parameter<double>(
@@ -212,6 +213,26 @@ public:
         std::lock_guard<std::mutex> lk(mutex_);
         if (v != pitch_target_) {
           pitch_target_ = v;
+        }
+      });
+    // 跟随距离目标 (latched, 地面站"跟随距离"输入框): 米, 机体跟随-水平
+    // 时距离环保持的水平距离; 未动过不发布 = 用 bodyfollow_dist_m 参数
+    // 默认值 (与俯视角度同步同一约定)。接管中修改立即生效
+    const auto dist_target_topic = node.declare_parameter<std::string>(
+      "dist_target_topic", "/flylab/track_dist");
+    dist_target_sub_ = node.create_subscription<std_msgs::msg::Float64>(
+      dist_target_topic,
+      rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {
+        const double v = msg->data;
+        if (v < 3.0 || v > 100.0) {
+          return;   // 越界拒绝, 保持原值 (地面站侧同样限幅)
+        }
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (v != bodyfollow_dist_m_) {
+          bodyfollow_dist_m_ = v;
+          RCLCPP_INFO(
+            node_.get_logger(), "跟随距离目标: %.1f m", v);
         }
       });
     // 云台姿态 (地面站实际下发的相机机体系位姿, 10Hz): 视轴转到机体 FRD
@@ -582,12 +603,11 @@ private:
   /// 跟随目标水平移动。水平速度 = 水平距离误差 P 律 (死区回差 + 中心
   /// 减速抑摆, 同 alt_vz 手法) + 接近段制动距离限幅 (按剩余误差平方根
   /// 提前减速, 防冲过设定距离后倒退拉回的极限环), 方向 = 视线方位快闭环
-  /// (同 dive_velocity
-  /// —— 视轴方位 + 像素偏角, sendVelocityFRD 按航向旋水平分量); 垂直
-  /// 维持高度环 alt_vz (俯视角度收敛后两环解耦: 高度保持视线角 θ, 水平
-  /// 收放水平距离)。测量复用俯冲视线状态 (低通/限加速度共用, activate
-  /// 切模式时统一复位)。丢失三段式 (跟随与打击语义不同: 打击丢目标 =
-  /// 任务终止, 跟随丢目标 = 等追踪器重捕获, 不因单次 LOST 弹出交还):
+  /// (同 dive_velocity: 视轴方位 + 像素偏角, sendVelocityFRD 按航向旋
+  /// 水平分量); 垂直维持高度环 alt_vz (俯视角度收敛后两环解耦: 高度保持
+  /// 视线角 θ, 水平收放水平距离)。测量复用俯冲视线状态 (低通/限加速度
+  /// 共用, activate 切模式时统一复位)。丢失三段式 (跟随与打击语义不同:
+  /// 打击丢目标 = 任务终止, 跟随丢目标 = 等追踪器重捕获):
   ///   1. < dive_lost_timeout_sec: 沿最近滤波值惯性跟随 (单帧漏检不刹车)
   ///   2. < bodyfollow_lost_timeout_sec: 原地跟随 (水平速度经限加速度
   ///      收到 0, 高度环/机头跟随维持, 等追踪器重捕获 —— 机体不动则目标
@@ -599,7 +619,7 @@ private:
   /// θ ≥ 3° 才可信 (视线近水平反演发散, 视为缺失)
   bool bodyfollow_velocity()
   {
-    double az_raw = 0.0, dist_raw = 0.0;
+    double az_raw = 0.0, dist_raw = 0.0, dist_target = 0.0;
     bool fresh = false, stale = false;
     {
       std::lock_guard<std::mutex> lk(mutex_);
@@ -618,7 +638,6 @@ private:
         }
         const auto pos = px4_->localPosition();
         if (pos.z_valid && pos.z < 0.0f && th >= 3.0) {
-          dive_theta_raw_deg_ = th;
           dive_az_raw_deg_ = a;
           bodyfollow_dist_raw_m_ =
             -static_cast<double>(pos.z) / std::tan(th * M_PI / 180.0);
@@ -638,6 +657,7 @@ private:
       }
       az_raw = dive_az_raw_deg_;
       dist_raw = bodyfollow_dist_raw_m_;
+      dist_target = bodyfollow_dist_m_;
     }
     // 低通 (同 dive 闸 2): 像素偏角噪声经 1/tanθ 反演放大进距离测量,
     // 方位抖动同样进水平方向; tc 可调, 0 = 不过滤
@@ -653,8 +673,7 @@ private:
       px4_->sendVelocityFRDYawRate(0.0, 0.0, alt_vz(), follow_yaw_rate());
       return true;
     }
-    // 丢失长窗内 stale = 原地跟随: 水平速度指令经限加速度平滑归零并保持
-    // (斜率状态同步衰减, 重捕获后距离环从 0 附近起坡, 无速度跳变),
+    // 原地跟随 (函数头三段式第 2 段): 斜率状态同步衰减平滑刹停,
     // 高度环/机头跟随维持, 等追踪器重捕获
     if (stale) {
       const double dv_max = dive_vh_accel_ms2_ * dt_;
@@ -667,7 +686,7 @@ private:
     // 距离环 P 律: err > 0 = 目标比设定远 → 前进接近, err < 0 = 太近 →
     // 倒退拉开; 死区回差 + 中心减速段防测量噪声在零附近推速度抖动
     double vh = 0.0;
-    const double err = bodyfollow_dist_f_m_ - bodyfollow_dist_m_;
+    const double err = bodyfollow_dist_f_m_ - dist_target;
     const double abs_err = std::fabs(err);
     if (bodyfollow_in_deadband_) {
       if (abs_err < bodyfollow_deadband_m_ * 1.5) {
@@ -807,6 +826,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_switch_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr pitch_target_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr dist_target_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Quaternion>::SharedPtr gimbal_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   mutable std::mutex mutex_;   // 高度环测量/目标 (帧上下文与 ROS 回调并发)

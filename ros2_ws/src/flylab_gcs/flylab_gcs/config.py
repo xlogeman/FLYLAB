@@ -259,6 +259,14 @@ TRACK_PITCH_MIN = 5        # 度 (下限)
 TRACK_PITCH_MAX = 85       # 度 (上限; 云台俯仰限位 ±90 内)
 TRACK_PITCH_STEP = 1       # 度 (上下箭头单步)
 TRACK_PITCH_DEFAULT = 30   # 度 (初始显示值)
+# 目标追踪跟随距离同步 (机体跟随-水平, 算法信息"跟随距离"输入框): latched
+# Float64 发给追踪节点 (米)。机体跟随时距离环控制飞机水平收放保持该水平
+# 距离; 未动过不发布 = 节点用参数默认值 (bodyfollow_dist_m, 同俯视角度约定)
+TRACK_DIST_TOPIC = '/flylab/track_dist'
+TRACK_DIST_MIN = 3.0       # 米 (下限; 太近反控风险高)
+TRACK_DIST_MAX = 100.0     # 米 (上限)
+TRACK_DIST_STEP = 0.1      # 米 (上下箭头单步)
+TRACK_DIST_DEFAULT = 10.0  # 米 (初始显示值, 与 track_takeover 参数默认一致)
 
 # ---------- PX4 SITL (地面站一键启停) ----------
 # 经 scripts/run-px4.sh 启动，target 与 PX4_SYS_AUTOSTART 严格对应（见 README §6）

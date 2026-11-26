@@ -179,6 +179,7 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             set_face_topk=self.node.publish_face_topk,
             set_fractal_config=self.node.publish_fractal_config,
             set_track_pitch=self.node.publish_track_pitch,
+            set_track_dist=self.node.publish_track_dist,
             get_gimbal_pitch=self.camera_tab.grabber.get_gimbal_down_deg)
         self.camera_tab.add_side_widget(self.algo_panel)
 
