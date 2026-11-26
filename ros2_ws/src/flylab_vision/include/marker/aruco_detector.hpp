@@ -57,8 +57,10 @@ public:
   /// 是否使用了真实标定 (false 时内参为估算值, 位姿仅供参考)
   bool calibrated() const {return !config_.K.empty();}
 
-  /// 焦距 fx (像素, 标定 K 的 (0,0); 仅 calibrated() 为 true 时有效)
-  double fx() const {return config_.K.at<double>(0, 0);}
+  /// 焦距 fx (像素, 标定 K 的 (0,0))。未标定返回 0 —— 实参求值方
+  /// (physical_width 调用点) 不看 calibrated 标志, fx() 自身必须安全;
+  /// 0 值仅作为占位, 所有调用点都在 calibrated()==true 时才使用该值
+  double fx() const {return config_.K.empty() ? 0.0 : config_.K.at<double>(0, 0);}
 
   /// 运行中更新 FOV (度): 地面站视场角调整后同步过来, 下一帧即用新内参。
   /// 仅无标定 (K 为空, 按 FOV 估算) 时有意义, 已标定调用无效果

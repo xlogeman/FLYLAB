@@ -423,9 +423,11 @@ class GroundStationNode(Node):
             return
         algo, items = parsed
         self.anno_groups[algo] = items
-        # 输出帧率: 每 0.5s 结算一次滑动窗口
+        # 输出帧率: 每 0.5s 结算一次滑动窗口; 同时记最近到达时刻
+        # (get_algo_fps 据此判流, 超过 1s 无消息 HUD 解算行隐藏)
         self._anno_count += 1
         now = time.monotonic()
+        self._anno_last_rx = now
         if now - self._anno_t >= 0.5:
             self.anno_fps = self._anno_count / (now - self._anno_t)
             self._anno_count = 0

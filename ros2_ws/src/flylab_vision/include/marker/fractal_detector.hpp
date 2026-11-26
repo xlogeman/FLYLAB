@@ -46,8 +46,10 @@ public:
   /// 是否使用真实标定 (false 时内参为估算值, 位姿仅供参考)
   bool calibrated() const {return !config_.K.empty();}
 
-  /// 焦距 fx (像素, 标定 K 的 (0,0); 仅 calibrated() 为 true 时有效)
-  double fx() const {return config_.K.at<double>(0, 0);}
+  /// 焦距 fx (像素, 标定 K 的 (0,0))。未标定返回 0 占位 —— 调用点
+  /// (physical_width 实参求值) 不看 calibrated 标志, fx() 自身必须安全;
+  /// 所有调用点都在 calibrated()==true 时才使用该值
+  double fx() const {return config_.K.empty() ? 0.0 : config_.K.at<double>(0, 0);}
 
   /// 运行中更新 FOV (度): 下一帧生效; 仅无标定时有意义
   void set_fov(double fov_deg) {config_.fov_deg = fov_deg;}
