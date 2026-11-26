@@ -15,6 +15,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/image_utils.hpp"
+#include "common/gcs_topics.hpp"
 
 namespace flylab_vision
 {
@@ -57,11 +58,11 @@ public:
   {
     // ---------- 通用参数 ----------
     image_topic_ = declare_parameter<std::string>(
-      "image_topic", "/flylab/display/image_raw");
+      "image_topic", topics::DISPLAY_IMAGE_TOPIC);
     const auto cmd_topic =
-      declare_parameter<std::string>("cmd_topic", "/flylab/vision_cmd");
+      declare_parameter<std::string>("cmd_topic", topics::CMD_TOPIC);
     const auto anno_topic =
-      declare_parameter<std::string>("annotation_topic", "/flylab/annotations");
+      declare_parameter<std::string>("annotation_topic", topics::ANNOTATION_TOPIC);
 
     // ---------- 通信 ----------
     // base64 大图标注体积大 (几十 KB), 队列限深防积压旧标注

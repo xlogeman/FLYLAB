@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "obb/yolo_obb.hpp"
 
 namespace flylab_vision
@@ -47,7 +48,7 @@ public:
     // 逗号分隔的类别名过滤器, 空 = 全部 15 类
     const auto classes = declare_parameter<std::string>("classes", "");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloObbConfig cfg;

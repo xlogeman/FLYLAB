@@ -11,6 +11,7 @@
 
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include "common/gcs_topics.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -127,19 +128,19 @@ public:
 
     // ---------- 地面站通道 (状态回传 / 机头跟随, 约定同 aruco_landing) ----------
     const auto status_topic = node.declare_parameter<std::string>(
-      "status_topic", "/flylab/track_status");
+      "status_topic", topics::TRACK_STATUS_TOPIC);
     status_pub_ =
       node.create_publisher<std_msgs::msg::String>(status_topic, 10);
     // 机头跟随通道 (复用组件: 请求 0.5s 保活 + 误差 latched 订阅)
     const auto follow_req_topic = node.declare_parameter<std::string>(
-      "follow_req_topic", "/flylab/gimbal_follow");
+      "follow_req_topic", topics::GIMBAL_FOLLOW_REQ_TOPIC);
     const auto follow_err_topic = node.declare_parameter<std::string>(
-      "follow_err_topic", "/flylab/gimbal_yaw_err");
+      "follow_err_topic", topics::GIMBAL_YAW_ERR_TOPIC);
     follow_ = std::make_unique<GimbalFollow>(node, follow_req_topic, follow_err_topic);
     // 机头跟随开关 (地面站云台面板"跟随"按钮, latched): 默认开 —— 与
     // 地面站未发布时的旧行为一致; 关闭仅停偏航注入, 云台伺服照常
     const auto follow_switch_topic = node.declare_parameter<std::string>(
-      "follow_switch_topic", "/flylab/track_follow");
+      "follow_switch_topic", topics::TRACK_FOLLOW_TOPIC);
     follow_switch_sub_ = node.create_subscription<std_msgs::msg::Bool>(
       follow_switch_topic,
       rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
@@ -209,7 +210,7 @@ public:
     // 俯视角度目标 (latched): 度, 向下正; 未动过不发布 = NaN 不启用
     // (维持悬停)。接管中修改立即生效, 未接管先设置则接管时生效
     const auto pitch_target_topic = node.declare_parameter<std::string>(
-      "pitch_target_topic", "/flylab/track_pitch");
+      "pitch_target_topic", topics::TRACK_PITCH_TOPIC);
     pitch_target_sub_ = node.create_subscription<std_msgs::msg::Float64>(
       pitch_target_topic,
       rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
@@ -229,7 +230,7 @@ public:
     // bodyfollow_dist_m 参数默认值 (与俯视角度同步同一约定)。接管中
     // 修改立即生效
     const auto dist_target_topic = node.declare_parameter<std::string>(
-      "dist_target_topic", "/flylab/track_dist");
+      "dist_target_topic", topics::TRACK_DIST_TOPIC);
     dist_target_sub_ = node.create_subscription<std_msgs::msg::Float64>(
       dist_target_topic,
       rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
@@ -248,7 +249,7 @@ public:
     // 云台姿态 (地面站实际下发的相机机体系位姿, 10Hz): 视轴转到机体 FRD
     // 取俯角作测量基础 (悬停机体俯仰近 0, 残差由死区 + 像素偏角吸收)
     const auto gimbal_state_topic = node.declare_parameter<std::string>(
-      "gimbal_state_topic", "/flylab/gimbal_state");
+      "gimbal_state_topic", topics::GIMBAL_STATE_TOPIC);
     gimbal_sub_ = node.create_subscription<geometry_msgs::msg::Quaternion>(
       gimbal_state_topic, 10,
       [this](const geometry_msgs::msg::Quaternion::SharedPtr msg) {

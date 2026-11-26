@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "pose/yolo_pose.hpp"
 
 namespace flylab_vision
@@ -46,7 +47,7 @@ public:
     const auto kpt_conf = declare_parameter<double>("kpt_conf", 0.5);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloPoseConfig cfg;

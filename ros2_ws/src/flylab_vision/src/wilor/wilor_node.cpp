@@ -24,6 +24,7 @@
 #include <string>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "wilor/wilor.hpp"
 
 namespace flylab_vision
@@ -46,7 +47,7 @@ public:
     const auto det_stride = declare_parameter<int>("det_stride", 1);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     WilorConfig cfg;

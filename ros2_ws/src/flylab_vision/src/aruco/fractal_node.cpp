@@ -31,6 +31,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "aruco/fractal_detector.hpp"
 
 namespace flylab_vision
@@ -51,20 +52,20 @@ public:
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
     const auto calib_path = declare_parameter<std::string>("calib", "");
     const auto fov_topic =
-      declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
+      declare_parameter<std::string>("fov_topic", topics::CAMERA_FOV_TOPIC);
     const auto marker_len_topic = declare_parameter<std::string>(
-      "marker_length_topic", "/flylab/aruco_marker_length");
+      "marker_length_topic", topics::ARUCO_MARKER_LENGTH_TOPIC);
     const auto config_topic =
-      declare_parameter<std::string>("fractal_config_topic", "/flylab/fractal_config");
+      declare_parameter<std::string>("fractal_config_topic", topics::FRACTAL_CONFIG_TOPIC);
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 降落节点跟踪层同步 (MAX 让位) ----------
     // 降落中每帧广播正在跟踪的层 ID: 若恰为画面最大层, 本节点不画洋红
     // MAX, 该层由降落节点橙色 TRACK 独占, 避免两组标注叠在同一层上;
     // 广播停发 (降落结束/节点退出) 超时后自动恢复 MAX (与 aruco_node 同款)
     const auto tracked_id_topic = declare_parameter<std::string>(
-      "tracked_id_topic", "/flylab/landing_tracked_id");
+      "tracked_id_topic", topics::LANDING_TRACKED_ID_TOPIC);
     tracked_id_sub_ = create_subscription<std_msgs::msg::Int32>(
       tracked_id_topic, 10,
       [this](const std_msgs::msg::Int32::SharedPtr msg) {

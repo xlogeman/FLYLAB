@@ -36,6 +36,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "depth/yolo_depth.hpp"
 
 namespace flylab_vision
@@ -68,7 +69,7 @@ public:
     // 深度图话题 (悬停读数用): map_scale 降采样比例 (0/1 = 全分辨率,
     // 0.5 = 长宽各半, 4 倍体积收益; 最近邻缩放值不被邻域混合)
     const auto map_topic = declare_parameter<std::string>(
-      "map_topic", "/flylab/depth_map");
+      "map_topic", topics::DEPTH_MAP_TOPIC);
     map_scale_ = declare_parameter<double>("map_scale", 0.5);
     if (map_scale_ <= 0.0 || map_scale_ > 1.0) {
       map_scale_ = 1.0;
@@ -98,7 +99,7 @@ public:
     // ---------- 地面站右栏"算法信息"面板数据 ----------
     // 与 ArUco 检测同一话题, 面板按 src 分组 ("depth"), 话题名可用参数覆盖
     const auto info_topic = declare_parameter<std::string>(
-      "info_topic", "/flylab/algo_info");
+      "info_topic", topics::ALGO_INFO_TOPIC);
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     log_ready("YOLO 深度估计");

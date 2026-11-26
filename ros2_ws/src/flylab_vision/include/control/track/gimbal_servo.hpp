@@ -12,6 +12,7 @@
 
 #include <opencv2/core.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include "common/gcs_topics.hpp"
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 
@@ -57,9 +58,9 @@ public:
     const auto fov_default = node.declare_parameter<double>(
       "servo_fov_deg", 90.0);
     const auto cmd_topic = node.declare_parameter<std::string>(
-      "gimbal_cmd_topic", "/flylab/gimbal_cmd");
+      "gimbal_cmd_topic", topics::GIMBAL_CMD_TOPIC);
     const auto fov_topic = node.declare_parameter<std::string>(
-      "camera_fov_topic", "/flylab/camera_fov");
+      "camera_fov_topic", topics::CAMERA_FOV_TOPIC);
 
     kp_ = kp;
     kd_ = kd;

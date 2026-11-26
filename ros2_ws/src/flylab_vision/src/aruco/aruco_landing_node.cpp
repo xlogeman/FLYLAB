@@ -70,6 +70,7 @@
 #include "control/aruco/target_selector.hpp"
 #include "control/aruco/yaw_aligner.hpp"
 #include "common/image_utils.hpp"
+#include "common/gcs_topics.hpp"
 #include "control/common/gimbal_follow.hpp"
 #include "control/px4_offboard_client.hpp"
 
@@ -119,12 +120,12 @@ public:
   {
     // ---------- 参数 ----------
     const auto image_topic = declare_parameter<std::string>(
-      "image_topic", "/flylab/display/image_raw");
-    const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/flylab/vision_cmd");
+      "image_topic", topics::DISPLAY_IMAGE_TOPIC);
+    const auto cmd_topic = declare_parameter<std::string>("cmd_topic", topics::CMD_TOPIC);
     const auto anno_topic =
-      declare_parameter<std::string>("annotation_topic", "/flylab/annotations");
+      declare_parameter<std::string>("annotation_topic", topics::ANNOTATION_TOPIC);
     const auto status_topic =
-      declare_parameter<std::string>("status_topic", "/flylab/landing_status");
+      declare_parameter<std::string>("status_topic", topics::LANDING_STATUS_TOPIC);
     const auto dict_name = declare_parameter<std::string>("dict_name", "DICT_4X4_1000");
     const auto marker_length = declare_parameter<double>("marker_length", 0.2);
     const auto fov_deg = declare_parameter<double>("fov_deg", 60.0);
@@ -149,7 +150,7 @@ public:
     // 云台姿态话题 (相机 NED 体约定: x 视轴 y 图右 z 图下, 相对机体 FRD)。
     // 水平控制用它把图像误差旋到机体系; 无数据/断流则悬停等待。
     const auto gimbal_topic =
-      declare_parameter<std::string>("gimbal_topic", "/flylab/gimbal_state");
+      declare_parameter<std::string>("gimbal_topic", topics::GIMBAL_STATE_TOPIC);
     gimbal_timeout_sec_ = declare_parameter<double>("gimbal_timeout_sec", 0.5);
 
     target_id_ = declare_parameter<int>("target_id", 41);        // 指定精准落点码 ID, 不可见时回退最大码;
@@ -222,12 +223,12 @@ public:
     const int min_yaw_frames = declare_parameter<int>("min_yaw_frames", 5);
     const double yaw_timeout_sec = declare_parameter<double>("yaw_timeout_sec", 30.0);
     const auto yaw_offset_topic = declare_parameter<std::string>(
-      "yaw_offset_topic", "/flylab/landing_yaw_offset");
+      "yaw_offset_topic", topics::LANDING_YAW_OFFSET_TOPIC);
 
     // 算法云台通道 (地面站软云台): 朝向对齐经 [yaw_rate, pitch_rate] (°/s)
     // 速率指令驱动, 复用摇杆速率通道与限位; 正偏航 = 视线方位右转
     const auto gimbal_cmd_topic = declare_parameter<std::string>(
-      "gimbal_cmd_topic", "/flylab/gimbal_cmd");
+      "gimbal_cmd_topic", topics::GIMBAL_CMD_TOPIC);
 
     // 机头跟随云台 (offboard 单写者原则: 偏航指令由本节点注入, 地面站只做
     // 相机侧反卷与误差广播): 对齐中请求 /flylab/gimbal_follow 开反卷
@@ -240,9 +241,9 @@ public:
       declare_parameter<double>("follow_rate_max_deg", 30.0);
     follow_fresh_sec_ = declare_parameter<double>("follow_fresh_sec", 1.5);
     const auto follow_req_topic = declare_parameter<std::string>(
-      "follow_req_topic", "/flylab/gimbal_follow");
+      "follow_req_topic", topics::GIMBAL_FOLLOW_REQ_TOPIC);
     const auto follow_err_topic = declare_parameter<std::string>(
-      "follow_err_topic", "/flylab/gimbal_yaw_err");
+      "follow_err_topic", topics::GIMBAL_YAW_ERR_TOPIC);
 
     // ---------- 目标选择 / 朝向对齐 / 趋势角子系统 (逻辑拆分, 参数在此装配) ----------
     // 逻辑见 include/control/aruco/target_selector.hpp 与 yaw_aligner.hpp
@@ -312,7 +313,7 @@ public:
     // 影响位姿尺度 (面板"实际宽度/距离"换算), 降落控制只用图像空间量
     // 不受影响。latched 话题, 后启动的节点一接入即收到最近值。
     const auto marker_len_topic = declare_parameter<std::string>(
-      "marker_length_topic", "/flylab/aruco_marker_length");
+      "marker_length_topic", topics::ARUCO_MARKER_LENGTH_TOPIC);
     marker_length_ = marker_length;
     marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
       marker_len_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -323,7 +324,7 @@ public:
     // 最近值); 运行中换字典后锁定目标码可能不在新字典里, 重选目标并复位
     // 朝向滤波按新字典重新对齐。话题名可用参数覆盖。
     const auto dict_topic = declare_parameter<std::string>(
-      "dict_topic", "/flylab/aruco_dict");
+      "dict_topic", topics::ARUCO_DICT_TOPIC);
     dict_name_ = dict_name;
     dict_sub_ = create_subscription<std_msgs::msg::String>(
       dict_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -333,7 +334,7 @@ public:
     // 同字典同步同一约定 (latched); 运行中换配置重建检测器, 码图案集合变了
     // 朝向基准失效, 复位按新码重新对齐。aruco 模式下消息被忽略。
     const auto fractal_cfg_topic = declare_parameter<std::string>(
-      "fractal_config_topic", "/flylab/fractal_config");
+      "fractal_config_topic", topics::FRACTAL_CONFIG_TOPIC);
     fractal_cfg_name_ = fractal_config;
     fractal_cfg_sub_ = create_subscription<std_msgs::msg::String>(
       fractal_cfg_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -343,7 +344,7 @@ public:
     // 未标定时内参按 FOV 估算 (位姿轴叠加显示), 地面站调整视场滑杆实时跟随;
     // latched 话题, 节点后启动也能收到最近一次发布的值。话题名可用参数覆盖。
     const auto fov_topic =
-      declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
+      declare_parameter<std::string>("fov_topic", topics::CAMERA_FOV_TOPIC);
     fov_deg_ = fov_deg;
     fov_sub_ = create_subscription<std_msgs::msg::Float64>(
       fov_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -354,7 +355,7 @@ public:
     // 据此让位 —— 跟踪码恰为画面最大码时不再叠画洋红 MAX, 由本节点橙色
     // TRACK 独占该码的可视化; 广播停发后检测节点超时自行恢复 MAX
     const auto tracked_id_topic = declare_parameter<std::string>(
-      "tracked_id_topic", "/flylab/landing_tracked_id");
+      "tracked_id_topic", topics::LANDING_TRACKED_ID_TOPIC);
     tracked_id_pub_ = create_publisher<std_msgs::msg::Int32>(
       tracked_id_topic, 10);
 
@@ -380,7 +381,7 @@ public:
     // ---------- 右栏"算法输出"面板数据 ----------
     // 降落状态结构化摘要 (10Hz 限频), 地面站右栏面板显示
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     // ---------- 控制主循环 (固定频率, 不随图像帧率波动) ----------

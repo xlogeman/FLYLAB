@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "control/track/gimbal_servo.hpp"
 #include "control/track/track_takeover.hpp"
 #include "detect/yolo_detector.hpp"
@@ -69,11 +70,11 @@ public:
     const auto iou_gate = declare_parameter<double>("iou_gate", 0.10);
     const auto max_scan = declare_parameter<int>("max_scan", 15);
     const auto roi_topic =
-      declare_parameter<std::string>("roi_topic", "/flylab/track_roi");
+      declare_parameter<std::string>("roi_topic", topics::TRACK_ROI_TOPIC);
     const auto ctl_topic =
-      declare_parameter<std::string>("ctl_topic", "/flylab/vision_cmd");
+      declare_parameter<std::string>("ctl_topic", topics::CMD_TOPIC);
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloConfig cfg;

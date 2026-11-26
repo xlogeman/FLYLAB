@@ -21,6 +21,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "face/facexformer.hpp"
 #include "face/scrfd_detector.hpp"
 
@@ -129,7 +130,7 @@ public:
     const auto iou = declare_parameter<double>("iou", 0.4);
     const auto device = declare_parameter<std::string>("device", "cpu");
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
     const auto facex_model = declare_parameter<std::string>(
       "facex_model", default_model_path("face", "facexformer.onnx"));
     const auto task_name =
@@ -137,9 +138,9 @@ public:
     margin_ = declare_parameter<double>("facex_margin", 50.0);
     const auto topk = declare_parameter<int>("facex_topk", 1);
     const auto topk_topic =
-      declare_parameter<std::string>("face_topk_topic", "/flylab/face_topk");
+      declare_parameter<std::string>("face_topk_topic", topics::FACE_TOPK_TOPIC);
     const auto task_topic =
-      declare_parameter<std::string>("face_task_topic", "/flylab/face_task");
+      declare_parameter<std::string>("face_task_topic", topics::FACE_TASK_TOPIC);
     topk_ = std::max<int64_t>(0, topk);   // 0 = 全部检出脸
 
     // ---------- SCRFD 检测 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------

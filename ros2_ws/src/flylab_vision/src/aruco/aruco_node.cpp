@@ -24,6 +24,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "aruco/aruco_detector.hpp"
 
 namespace flylab_vision
@@ -61,7 +62,7 @@ public:
     // 地面站调整视场滑杆即发布当前 FOV (latched, 后启动也能收到最近值);
     // 未标定时按 FOV 估算内参, 实时跟随。话题名可用参数覆盖。
     const auto fov_topic =
-      declare_parameter<std::string>("fov_topic", "/flylab/camera_fov");
+      declare_parameter<std::string>("fov_topic", topics::CAMERA_FOV_TOPIC);
     fov_deg_ = fov_deg;
     fov_sub_ = create_subscription<std_msgs::msg::Float64>(
       fov_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -72,7 +73,7 @@ public:
     // (影响位姿解算尺度/距离显示, 检测不受影响); latched 话题,
     // 后启动的节点一接入即收到最近值。话题名可用参数覆盖。
     const auto marker_len_topic = declare_parameter<std::string>(
-      "marker_length_topic", "/flylab/aruco_marker_length");
+      "marker_length_topic", topics::ARUCO_MARKER_LENGTH_TOPIC);
     marker_length_ = marker_length;
     marker_len_sub_ = create_subscription<std_msgs::msg::Float64>(
       marker_len_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -82,7 +83,7 @@ public:
     // 地面站右栏下拉切换 ArUco 字典即发布 (latched, 后启动的节点一接入即收到
     // 最近值); 运行中换字典下一帧生效。话题名可用参数覆盖。
     const auto dict_topic = declare_parameter<std::string>(
-      "dict_topic", "/flylab/aruco_dict");
+      "dict_topic", topics::ARUCO_DICT_TOPIC);
     dict_name_ = dict_name;
     dict_sub_ = create_subscription<std_msgs::msg::String>(
       dict_topic, rclcpp::QoS(1).reliable().transient_local(),
@@ -93,7 +94,7 @@ public:
     // MAX, 该码由降落节点橙色 TRACK 独占, 避免两组标注叠在同一码上;
     // 广播停发 (降落结束/节点退出) 超时后自动恢复 MAX
     const auto tracked_id_topic = declare_parameter<std::string>(
-      "tracked_id_topic", "/flylab/landing_tracked_id");
+      "tracked_id_topic", topics::LANDING_TRACKED_ID_TOPIC);
     tracked_id_sub_ = create_subscription<std_msgs::msg::Int32>(
       tracked_id_topic, 10,
       [this](const std_msgs::msg::Int32::SharedPtr msg) {
@@ -105,7 +106,7 @@ public:
     // 结构化检测摘要 (最大码 id/占比/偏移/距离), 地面站右栏面板显示;
     // 10Hz 限频, 话题名可用参数覆盖
     const auto info_topic =
-      declare_parameter<std::string>("info_topic", "/flylab/algo_info");
+      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     // 就绪日志带字典/边长信息, 不用基类 log_ready

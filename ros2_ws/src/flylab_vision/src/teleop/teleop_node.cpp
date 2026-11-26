@@ -24,6 +24,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "control/px4_offboard_client.hpp"
+#include "common/gcs_topics.hpp"
 
 namespace flylab_vision
 {
@@ -45,11 +46,11 @@ public:
   TeleopNode()
   : Node("teleop_node")
   {
-    const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/flylab/vision_cmd");
+    const auto cmd_topic = declare_parameter<std::string>("cmd_topic", topics::CMD_TOPIC);
     const auto twist_topic =
-      declare_parameter<std::string>("teleop_cmd_topic", "/flylab/teleop_cmd");
+      declare_parameter<std::string>("teleop_cmd_topic", topics::TELEOP_CMD_TOPIC);
     const auto status_topic =
-      declare_parameter<std::string>("status_topic", "/flylab/teleop_status");
+      declare_parameter<std::string>("status_topic", topics::TELEOP_STATUS_TOPIC);
     link_ = declare_parameter<std::string>("link", "mavros");
     v_xy_ = declare_parameter<double>("v_xy", 5.0);                   // 平移速度上限 (m/s)
     v_z_ = declare_parameter<double>("v_z", 2.0);                     // 升降速度上限 (m/s)

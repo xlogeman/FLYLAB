@@ -30,6 +30,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "common/display_vision_node.hpp"
+#include "common/gcs_topics.hpp"
 #include "semantic/yolo_semantic.hpp"
 
 namespace flylab_vision
@@ -94,7 +95,7 @@ public:
     // ---------- 地面站右栏"算法信息"面板数据 ----------
     // 与 ArUco 检测同一话题, 面板按 src 分组 ("semantic"), 话题名可用参数覆盖
     const auto info_topic = declare_parameter<std::string>(
-      "info_topic", "/flylab/algo_info");
+      "info_topic", topics::ALGO_INFO_TOPIC);
     info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
 
     log_ready("YOLO 语义分割");
