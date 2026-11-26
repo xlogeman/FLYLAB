@@ -18,6 +18,7 @@
 
 #include "control/common/gimbal_follow.hpp"
 #include "control/px4_offboard_client.hpp"
+#include "control/track/guidance_math.hpp"
 
 namespace flylab_vision
 {
@@ -59,6 +60,10 @@ namespace flylab_vision
 /// 航向仅注入零偏航, 云台伺服 (相机侧反卷) 不受影响, 目标仍保持画面
 /// 中央, 云台偏航被 ±45° 限位收口。
 /// 状态回传 /flylab/track_status (engaged/idle/failed), 地面站据此联动按钮。
+/// 控制原语 (抑摆 P 律/一阶低通/限加速度/机体俯仰补偿) 抽在
+/// control/track/guidance_math.hpp, 机头跟随/高度环/跟随距离环三环共用;
+/// 按模式拆类的方案不可行 —— dive 与 bodyfollow 共用滤波/限加速度/
+/// 丢失计时状态 (activate 切模式统一复位), 制导律装配留在本类。
 ///
 /// 线程约定: activate/deactivate 在指令回调 (默认组), tick 在定时器
 /// (默认组) —— 同组串行, 状态无需加锁。
@@ -520,23 +525,21 @@ private:
       t_raw = dive_theta_raw_deg_ * M_PI / 180.0;
       az_raw = dive_az_raw_deg_ * M_PI / 180.0;
     }
-    // 机体俯仰补偿 → 世界系俯角 (下正)
+    // 机体俯仰补偿 → 世界系俯角 (下正, body_pitch_rad)
     const auto att = px4_->attitudeNED();
     if (att.valid) {
-      t_raw += std::asin(
-        std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0));
+      t_raw += body_pitch_rad(att.x, att.y, att.z, att.w);
     }
-    // 闸 1/2 —— 视线角下限钳制 + 一阶低通: 俯冲目标物理上总在下方, θ 抖到
-    // 0 附近会使 cotθ 指令发散, 穿零变负则误判"目标在头顶"输出急刹+爬升;
-    // 低通抑制像素偏角/俯仰补偿噪声。方位一并低通 (拉角段方位抖动同样喂
-    // 振荡; 代价是接近段方位响应略滞后, tc 可调, 0=不过滤)
+    // 闸 1/2 —— 视线角下限钳制 + 一阶低通 (lowpass_step): 俯冲目标物理上
+    // 总在下方, θ 抖到 0 附近会使 cotθ 指令发散, 穿零变负则误判"目标在
+    // 头顶"输出急刹+爬升; 低通抑制像素偏角/俯仰补偿噪声。方位一并低通
+    // (拉角段方位抖动同样喂振荡; 代价是接近段方位响应略滞后, tc 可调,
+    // 0=不过滤)
     t_raw = std::max(t_raw, dive_theta_min_deg_ * M_PI / 180.0);
-    const double alpha = dive_theta_filter_tc_ > 0.0 ?
-      dt_ / (dive_theta_filter_tc_ + dt_) : 1.0;
-    dive_theta_f_rad_ = std::isnan(dive_theta_f_rad_) ? t_raw :
-      dive_theta_f_rad_ + alpha * (t_raw - dive_theta_f_rad_);
-    dive_az_f_rad_ = std::isnan(dive_az_f_rad_) ? az_raw :
-      dive_az_f_rad_ + alpha * (az_raw - dive_az_f_rad_);
+    dive_theta_f_rad_ = lowpass_step(
+      dive_theta_f_rad_, t_raw, dive_theta_filter_tc_, dt_);
+    dive_az_f_rad_ = lowpass_step(
+      dive_az_f_rad_, az_raw, dive_theta_filter_tc_, dt_);
     const double t = dive_theta_f_rad_;
     const double az = dive_az_f_rad_;
     // 两相制导: 视线角在撞击带内 (sinθ ≤ D/V) 全速沿视线; 过陡进拉角段
@@ -591,12 +594,11 @@ private:
       }
     }
     }
-    // 闸 4 —— 水平指令限加速度: 指令大幅摆动时实际速度收敛到摆动均值 →
-    // 航迹角 ≈ 视线角, 拉角段"视线张开"机制失效自激; 限斜率后指令本身
-    // 平滑, 实际速度贴指令走, 视线角单调张开收敛
-    const double dv_max = dive_vh_accel_ms2_ * dt_;
+    // 闸 4 —— 水平指令限加速度 (accel_limit_step): 指令大幅摆动时实际
+    // 速度收敛到摆动均值 → 航迹角 ≈ 视线角, 拉角段"视线张开"机制失效
+    // 自激; 限斜率后指令本身平滑, 实际速度贴指令走, 视线角单调张开收敛
     dive_vh_cmd_ms_ =
-      std::clamp(vh, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+      accel_limit_step(dive_vh_cmd_ms_, vh, dive_vh_accel_ms2_, dt_);
     vh = dive_vh_cmd_ms_;
     // 方位快闭环: 水平速度方向直接指向视线方位 (视轴方位 + 像素偏角,
     // sendVelocityFRD 按当前航向旋水平分量 → right 分量即横向修正)。
@@ -651,16 +653,14 @@ private:
       std::lock_guard<std::mutex> lk(mutex_);
       double th = 0.0, a = 0.0;
       if (measure_locked(&th, &a)) {
-        // 机体俯仰补偿 (同 dive_velocity 的教训): 测量是机体相对量,
-        // 前飞时机体前倾使相对俯角浅于真实视线角 → h/tanθ 把距离高估
-        // (θ=30° 前倾 12° 时高估 ~1.8 倍) → 距离环误判"目标还远"继续
-        // 加速 → 前倾更大 → 正反馈撞上目标。补偿成世界系视线角后距离
-        // 才可信 (悬停时补偿 ≈ 0)
+        // 机体俯仰补偿 (body_pitch_rad, 同 dive_velocity 的教训): 测量是
+        // 机体相对量, 前飞时机体前倾使相对俯角浅于真实视线角 → h/tanθ
+        // 把距离高估 (θ=30° 前倾 12° 时高估 ~1.8 倍) → 距离环误判"目标
+        // 还远"继续加速 → 前倾更大 → 正反馈撞上目标。补偿成世界系视线
+        // 角后距离才可信 (悬停时补偿 ≈ 0)
         const auto att = px4_->attitudeNED();
         if (att.valid) {
-          th += std::asin(
-            std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0)) *
-            180.0 / M_PI;
+          th += body_pitch_rad(att.x, att.y, att.z, att.w) * 180.0 / M_PI;
         }
         const auto pos = px4_->localPosition();
         if (pos.z_valid && pos.z < 0.0f && th >= 3.0) {
@@ -691,23 +691,21 @@ private:
       dist_target = bodyfollow_dist_m_;
       pitch_target = pitch_target_;   // 直线跟随观察角 (度, 下正, NaN=未设)
     }
-    // 低通 (同 dive 闸 2): 像素偏角噪声经 1/tanθ 反演放大进距离测量,
-    // 方位抖动同样进水平方向; tc 可调, 0 = 不过滤
-    const double alpha = dive_theta_filter_tc_ > 0.0 ?
-      dt_ / (dive_theta_filter_tc_ + dt_) : 1.0;
+    // 低通 (同 dive 闸 2, lowpass_step): 像素偏角噪声经 1/tanθ 反演放大
+    // 进距离测量, 方位抖动同样进水平方向; tc 可调, 0 = 不过滤
     const double az_f = az_raw * M_PI / 180.0;
-    dive_az_f_rad_ = std::isnan(dive_az_f_rad_) ? az_f :
-      dive_az_f_rad_ + alpha * (az_f - dive_az_f_rad_);
+    dive_az_f_rad_ = lowpass_step(
+      dive_az_f_rad_, az_f, dive_theta_filter_tc_, dt_);
     if (slant) {
       // 直线跟随: 世界系视线俯角一并低通 (观察角兜底折算的方向输入;
       // 状态复用俯冲 dive_theta_f_rad_, activate 切模式统一复位; raw
       // 与方位/距离一样取最近有效值 —— 惯性跟随段方向不突变)
       const double tr = dive_theta_raw_deg_ * M_PI / 180.0;
-      dive_theta_f_rad_ = std::isnan(dive_theta_f_rad_) ? tr :
-        dive_theta_f_rad_ + alpha * (tr - dive_theta_f_rad_);
+      dive_theta_f_rad_ = lowpass_step(
+        dive_theta_f_rad_, tr, dive_theta_filter_tc_, dt_);
     }
-    bodyfollow_dist_f_m_ = std::isnan(bodyfollow_dist_f_m_) ? dist_raw :
-      bodyfollow_dist_f_m_ + alpha * (dist_raw - bodyfollow_dist_f_m_);
+    bodyfollow_dist_f_m_ = lowpass_step(
+      bodyfollow_dist_f_m_, dist_raw, dive_theta_filter_tc_, dt_);
     if (std::isnan(bodyfollow_dist_f_m_) || std::isnan(dive_az_f_rad_)) {
       // 尚无有效测量 (未框选目标/丢失窗口内首拍): 悬停保持, 不盲飞
       px4_->sendVelocityFRDYawRate(0.0, 0.0, alt_vz(), follow_yaw_rate());
@@ -716,9 +714,8 @@ private:
     // 原地跟随 (函数头三段式第 2 段): 斜率状态同步衰减平滑刹停,
     // 高度环/机头跟随维持, 等追踪器重捕获
     if (stale) {
-      const double dv_max = dive_vh_accel_ms2_ * dt_;
-      dive_vh_cmd_ms_ = std::clamp(
-        0.0, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+      dive_vh_cmd_ms_ =
+        accel_limit_step(dive_vh_cmd_ms_, 0.0, dive_vh_accel_ms2_, dt_);
       px4_->sendVelocityFRDYawRate(
         0.0, 0.0, alt_vz(), follow_yaw_rate());
       return true;
@@ -738,42 +735,28 @@ private:
         dist_target_eff = dist_target * std::cos(ang);
       }
     }
-    double vh = 0.0;
     const double err = bodyfollow_dist_f_m_ - dist_target_eff;
-    const double abs_err = std::fabs(err);
-    if (bodyfollow_in_deadband_) {
-      if (abs_err < bodyfollow_deadband_m_ * 1.5) {
-        vh = 0.0;
-      } else {
-        bodyfollow_in_deadband_ = false;
-      }
-    } else if (abs_err <= bodyfollow_deadband_m_) {
-      bodyfollow_in_deadband_ = true;
+    // 距离环 P 律 (抑摆手法同 follow_yaw_rate, guidance_math.hpp)
+    double vh = hysteresis_p_law(
+      err, bodyfollow_kp_, bodyfollow_deadband_m_, bodyfollow_slow_m_,
+      bodyfollow_speed_max_ms_, bodyfollow_in_deadband_);
+    // 制动距离限幅 (接近段, err > 0): 允许速度 ≤ √(2·a·(err − 余量)),
+    // 即按剩余误差平方根提前减速, 到设定距离前自然减到停 —— 否则全速
+    // 冲进死区后动量+滤波滞后刹不住, 冲过头再触发倒退拉回, 往复成
+    // 极限环。余量含低通滞后补偿: 测量滞后 ≈ 当前指令速度 × tc, 一并
+    // 扣掉 (用斜率状态当前值作速度估计)。后退方向 (err < 0) 远离目标
+    // 无撞风险, 不加限幅; 死区内 vh = 0 不受影响
+    if (err > 0.0) {
+      const double margin = bodyfollow_deadband_m_ +
+        dive_vh_cmd_ms_ * dive_theta_filter_tc_;
+      const double brake = std::sqrt(std::max(
+        0.0, 2.0 * dive_vh_accel_ms2_ * (err - margin)));
+      vh = std::min(vh, brake);
     }
-    if (!bodyfollow_in_deadband_) {
-      const double u = std::min(1.0, abs_err / bodyfollow_slow_m_);
-      vh = std::clamp(
-        bodyfollow_kp_ * err * u,
-        -bodyfollow_speed_max_ms_, bodyfollow_speed_max_ms_);
-      // 制动距离限幅 (接近段, err > 0): 允许速度 ≤ √(2·a·(err − 余量)),
-      // 即按剩余误差平方根提前减速, 到设定距离前自然减到停 —— 否则全速
-      // 冲进死区后动量+滤波滞后刹不住, 冲过头再触发倒退拉回, 往复成
-      // 极限环。余量含低通滞后补偿: 测量滞后 ≈ 当前指令速度 × tc, 一并
-      // 扣掉 (用斜率状态当前值作速度估计)。后退方向 (err < 0) 远离目标
-      // 无撞风险, 不加限幅
-      if (err > 0.0) {
-        const double margin = bodyfollow_deadband_m_ +
-          dive_vh_cmd_ms_ * dive_theta_filter_tc_;
-        const double brake = std::sqrt(std::max(
-          0.0, 2.0 * dive_vh_accel_ms2_ * (err - margin)));
-        vh = std::min(vh, brake);
-      }
-    }
-    // 限加速度 (同 dive 闸 4, 复用斜率状态): 测量缺失/恢复切换与距离环
-    // 输出的指令阶跃平滑, 实际速度贴指令走
-    const double dv_max = dive_vh_accel_ms2_ * dt_;
+    // 限加速度 (同 dive 闸 4, accel_limit_step, 复用斜率状态): 测量缺失/
+    // 恢复切换与距离环输出的指令阶跃平滑, 实际速度贴指令走
     dive_vh_cmd_ms_ =
-      std::clamp(vh, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+      accel_limit_step(dive_vh_cmd_ms_, vh, dive_vh_accel_ms2_, dt_);
     vh = dive_vh_cmd_ms_;
     // 方位快闭环 (同 dive_velocity): 水平速度直接指向视线方位, 机头
     // 跟随仍运行把 nose 拉回视线; ±45° 限幅 = 云台方位限位。
@@ -801,19 +784,10 @@ private:
     if (!nose_follow_ || std::isnan(err)) {
       return 0.0;
     }
-    const double abs_err = std::fabs(err);
-    if (in_deadband_) {
-      if (abs_err < follow_deadband_deg_ * 1.5) {
-        return 0.0;
-      }
-      in_deadband_ = false;
-    } else if (abs_err <= follow_deadband_deg_) {
-      in_deadband_ = true;
-      return 0.0;
-    }
-    const double u = std::min(1.0, abs_err / follow_slow_deg_);
-    const double rate_deg = std::clamp(
-      follow_kp_ * err * u, -follow_rate_max_, follow_rate_max_);
+    // 抑摆手法 (死区回差 + 中心减速) 见 control/track/guidance_math.hpp
+    const double rate_deg = hysteresis_p_law(
+      err, follow_kp_, follow_deadband_deg_, follow_slow_deg_,
+      follow_rate_max_, in_deadband_);
     return rate_deg * M_PI / 180.0;
   }
 
@@ -833,20 +807,11 @@ private:
     if (!measure_locked(&meas)) {
       return 0.0;   // 测量缺失: 云台姿态断流 / 目标丢失
     }
+    // 抑摆手法同 follow_yaw_rate (guidance_math.hpp)
     const double err = pitch_target_ - meas;
-    const double abs_err = std::fabs(err);
-    if (alt_in_deadband_) {
-      if (abs_err < alt_deadband_deg_ * 1.5) {
-        return 0.0;
-      }
-      alt_in_deadband_ = false;
-    } else if (abs_err <= alt_deadband_deg_) {
-      alt_in_deadband_ = true;
-      return 0.0;
-    }
-    const double u = std::min(1.0, abs_err / alt_slow_deg_);
-    return -std::clamp(
-      alt_kp_ * err * u, -alt_rate_max_, alt_rate_max_);
+    return -hysteresis_p_law(
+      err, alt_kp_, alt_deadband_deg_, alt_slow_deg_, alt_rate_max_,
+      alt_in_deadband_);
   }
 
   /// 目标方向测量合成 (须已持锁): 俯角 = 视轴俯角 + 像素俯仰偏角 (下+),
