@@ -1,60 +1,38 @@
 // Copyright 2026 flylab
-/// YOLO 单目标追踪 ROS2 节点 —— 接入地面站视觉工具体系 (基类 common/display_vision_node.hpp)。
+/// YOLO 单目标追踪 ROS2 节点 —— 接入地面站视觉工具体系。
 ///
-/// 链路 (话题名与 flylab_gcs/config.py 保持一致, 均可用参数覆盖):
-///   1. 图像输入: 订阅地面站"当前显示的帧" /flylab/display/image_raw
-///   2. 工具按钮: /flylab/vision_cmd 收 track_start / track_stop 启停
-///   3. 框选目标: /flylab/track_roi (latched) 收地面站画面拖拽框选的
-///      矩形 {"roi":[x,y,w,h]} (显示帧像素), 松开即自动开始
-///   4. 开始: /flylab/vision_cmd 收 track_begin (松开框选自动发送);
-///      追踪中重新框选即换目标 (复位后重新锁定), 停止靠 track_stop
-///   5. 画面叠加: 检测/目标框转 JSON 标注发 /flylab/annotations (组名 "track")
-///   6. 面板数据: {"src":"track", ...} 发 /flylab/algo_info (~30Hz 限频)
-///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start[/stop]
-///      (可带模式后缀 " dive_curve"=曲线打击 / " dive_straight"=直线打击 /
-///      " bodyfollow_horiz"=机体跟随-水平 / " bodyfollow_slant"=机体跟随-直线,
-///      不带=云台追踪悬停跟拍); 接管 offboard
-///      拿到飞机控制权 (悬停跟拍/曲线打击/直线打击/水平跟随/直线跟随 +
-///      机头跟随, 见 control/track/track_takeover.hpp),
-///      同时云台
-///      伺服按追踪框相对画面中心的偏移发 /flylab/gimbal_cmd 反控软云台,
-///      让目标保持在画面中央 (control/track/gimbal_servo.hpp)
+/// 公共脚手架 (ROI 框选 / 启停指令 / 反控接管 / 面板数据 / 清屏) 见
+/// common/track_node_base.hpp, 本文件只保留 检测+ReID 方案的差异部分。
 ///
-/// 流程: 启动后逐帧检测 (未追踪时显示全部检测 + 框选区域) → 地面站框选
-/// 目标 → track_begin 锁定: 框选区内 IoU 最大的检测裁块出 ReID 外观向量
-/// (区内无检测时直接用框选区域兜底, 检测器漏检的目标也能跟) → 之后逐帧
-/// 在检测候选里按余弦相似度续跟, 低于阈值报丢失 (保持最后已知位置)。
+/// 方案: yolo26s 逐帧检测出候选, 框选区内 IoU 最大的检测裁块提 512 维
+/// ReID 外观向量 (区内无检测时直接用框选区域兜底, 漏检目标也能跟),
+/// 之后逐帧在候选里按余弦相似度续跟, 低于阈值报丢失 (保持最后已知
+/// 位置); 未追踪时显示全部检测 + 框选区域供用户核对。
 ///
 /// 模型: 检测 models/detect/yolo26s.onnx + 外观 models/track/yolo26s-reid.onnx
-/// (CMakeLists 安装, 可用 model / reid_model 参数覆盖)。
+/// (CMakeLists 安装, 可用 model / reid_model 参数覆盖);
+/// device:=cuda 时 CUDA EP 注册失败自动回退 CPU。
 ///
 /// 运行:
 ///   ros2 run flylab_vision yolo_track_node
 ///   ros2 run flylab_vision yolo_track_node --ros-args
 ///       -p model:=/path/to/xx.onnx -p device:=cuda -p match_thres:=0.35
-#include <chrono>
-#include <cmath>
-#include <iomanip>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
-#include "common/display_vision_node.hpp"
-#include "common/gcs_topics.hpp"
-#include "control/track/gimbal_servo.hpp"
-#include "control/track/track_takeover.hpp"
+#include "common/track_node_base.hpp"
 #include "detect/yolo_detector.hpp"
 #include "track/yolo_tracker.hpp"
 
 namespace flylab_vision
 {
 
-class YoloTrackNode final : public DisplayVisionNode
+class YoloTrackNode final : public TrackNodeBase
 {
 public:
   YoloTrackNode()
-  : DisplayVisionNode("yolo_track_node",
+  : TrackNodeBase("yolo_track_node",
       {"track_start", "track_stop", "track", "追踪"})
   {
     // ---------- 参数 ----------
@@ -69,12 +47,6 @@ public:
     const auto match_thres = declare_parameter<double>("match_thres", 0.30);
     const auto iou_gate = declare_parameter<double>("iou_gate", 0.10);
     const auto max_scan = declare_parameter<int>("max_scan", 15);
-    const auto roi_topic =
-      declare_parameter<std::string>("roi_topic", topics::TRACK_ROI_TOPIC);
-    const auto ctl_topic =
-      declare_parameter<std::string>("ctl_topic", topics::CMD_TOPIC);
-    const auto info_topic =
-      declare_parameter<std::string>("info_topic", topics::ALGO_INFO_TOPIC);
 
     // ---------- 模型 (启动即加载, 失败抛异常直接终止暴露配置问题) ----------
     YoloConfig cfg;
@@ -109,168 +81,21 @@ public:
         tracker_->cuda_error().c_str());
     }
 
-    // ---------- 通信 (基类之外: ROI 框选 / 开始取消指令 / 面板数据) ----------
-    // latched: 地面站先框选后启动节点也能拿到当前框选区域
-    roi_sub_ = create_subscription<std_msgs::msg::String>(
-      roi_topic, rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
-      [this](const std_msgs::msg::String::SharedPtr msg) {on_roi(*msg);});
-    ctl_sub_ = create_subscription<std_msgs::msg::String>(
-      ctl_topic, 10,
-      [this](const std_msgs::msg::String::SharedPtr msg) {on_ctl(*msg);});
-    info_pub_ = create_publisher<std_msgs::msg::String>(info_topic, 10);
-    servo_ = std::make_unique<GimbalServo>(*this);
-    takeover_ = std::make_unique<TrackTakeover>(*this);
-
     log_ready("目标追踪");
   }
 
 protected:
-  std::string process(const cv::Mat & bgr, int /*frame_width*/) override
+  bool is_tracking() const override {return tracking_;}
+
+  void stop_tracking() override
   {
-    takeover_->notify_frame();   // 反控图像断流看门狗喂狗
-    // begin 请求在帧上下文里处理: 锁定需要当前帧来裁外观块;
-    // 追踪中带新框选的 begin 视为换目标 (复位后重新锁定)
-    if (begin_req_) {
-      begin_req_ = false;
-      if (has_roi_) {
-        if (tracking_) {
-          tracking_ = false;
-          tracker_->reset();
-        }
-        begin_tracking(bgr);
-      }
-    }
-    const auto dets = detector_->detect(bgr);
-    last_count_ = dets.size();
-    std::string json;
-    if (tracking_) {
-      const auto st = tracker_->update(bgr, dets);
-      track_state_ = st.has ? "TRACK" : "LOST";
-      last_sim_ = st.sim;
-      if (st.has) {
-        track_box_ = st.box;
-        last_name_ = st.name;
-        last_conf_ = st.conf;
-      }
-      // 云台伺服: 目标在跟 -> 按框中心偏移驱动云台; 丢失 -> 清零速率
-      servo_->update(st.box, bgr, st.has);
-      // 反控测量: 视轴角 + 目标像素偏角 (俯仰/方位, 丢失 = NaN 停控)
-      takeover_->notify_target(
-        servo_->angle_y_deg(), servo_->angle_x_deg(), st.has);
-      json = track_annotations(st);
-    } else {
-      // 未追踪: 显示全部检测 + 框选区域, 供用户核对框选
-      track_state_ = has_roi_ ? "SELECTED" : "IDLE";
-      servo_->update(cv::Rect2f(), bgr, false);   // 无目标: 伺服清零
-      takeover_->notify_target(servo_->angle_y_deg(), servo_->angle_x_deg(), false);
-      json = browse_annotations(dets);
-    }
-    publish_info(static_cast<int>(dets.size()));
-    return json;
+    tracking_ = false;
+    tracker_->reset();
   }
 
-  std::string clear_json() const override
-  {
-    return "{\"algo\":\"" + std::string(algo_group()) + "\",\"items\":[]}";
-  }
-
-  void log_first_infer(long ms) override
-  {
-    RCLCPP_INFO(
-      get_logger(), "首帧推理耗时 %ldms, 检出 %zu 个目标", ms, last_count_);
-  }
-
-private:
-  void on_roi(const std_msgs::msg::String & msg)
-  {
-    // {"reset":true} 清除框选 (追踪算法停止时地面站发, latched 话题上的
-    // 旧 ROI 不再投递给重连的节点)
-    if (msg.data.find("\"reset\"") != std::string::npos) {
-      if (has_roi_) {
-        has_roi_ = false;
-        roi_ = cv::Rect2f();
-        if (!tracking_) {   // 追踪中不降状态 (状态由 process 按帧刷新)
-          track_state_ = "IDLE";
-          publish_info(0, true);
-        }
-        RCLCPP_INFO(get_logger(), "框选区域已清除");
-      }
-      return;
-    }
-    // {"roi":[x,y,w,h]} (显示帧像素, 与转发帧同一坐标系); 手写提取数字
-    // 数组, 不引 JSON 依赖 (schema 由地面站保证)
-    const auto pos = msg.data.find("\"roi\"");
-    if (pos == std::string::npos) {
-      return;
-    }
-    size_t i = msg.data.find('[', pos);
-    if (i == std::string::npos) {
-      return;
-    }
-    ++i;   // 进入数组
-    double v[4] = {0, 0, 0, 0};
-    int n = 0;
-    while (n < 4 && i < msg.data.size()) {
-      const size_t end = msg.data.find_first_of(",]", i);
-      if (end == std::string::npos) {
-        return;
-      }
-      try {
-        v[n++] = std::stod(msg.data.substr(i, end - i));
-      } catch (const std::exception &) {
-        return;
-      }
-      if (msg.data[end] == ']') {
-        break;
-      }
-      i = end + 1;
-    }
-    if (n != 4 || v[2] < 1.0 || v[3] < 1.0) {
-      RCLCPP_WARN(get_logger(), "框选区域无效: %s", msg.data.c_str());
-      return;
-    }
-    roi_ = cv::Rect2f(
-      static_cast<float>(v[0]), static_cast<float>(v[1]),
-      static_cast<float>(v[2]), static_cast<float>(v[3]));
-    has_roi_ = true;
-    // 松开即开始: 帧上下文里锁定 (不依赖后续 begin; 追踪中即换目标)
-    begin_req_ = true;
-    RCLCPP_INFO(
-      get_logger(), "收到目标框选区域: (%.0f, %.0f, %.0fx%.0f)",
-      roi_.x, roi_.y, roi_.width, roi_.height);
-    publish_info(0, true);
-  }
-
-  void on_ctl(const std_msgs::msg::String & msg)
-  {
-    if (msg.data == "track_begin") {
-      // 帧上下文里锁定 (需要裁外观块); 追踪中收到且带新框选即换目标
-      begin_req_ = true;
-    } else if (msg.data.rfind("track_takeover_start", 0) == 0) {
-      // 目标追踪反控 (接管控制菜单): 可带模式后缀 "track_takeover_start
-      // dive_curve"=曲线打击 / " dive_straight"=直线打击 / " bodyfollow_horiz"=
-      // 机体跟随-水平 (保持水平距离) / " bodyfollow_slant"=机体跟随-直线
-      // (斜距半径+俯角观察角球面跟随), 不带 = 云台追踪 (悬停跟拍); 五串互不包含,
-      // 顺序无关; 先开亦可, 框选锁定目标后伺服自动介入; 已接管时为模式切换
-      servo_->set_enabled(true);
-      takeover_->activate(
-        msg.data.find("bodyfollow_slant") != std::string::npos ?
-        TrackTakeover::Mode::BodyfollowSlant :
-        msg.data.find("bodyfollow_horiz") != std::string::npos ?
-        TrackTakeover::Mode::BodyfollowHoriz :
-        msg.data.find("dive_straight") != std::string::npos ?
-        TrackTakeover::Mode::DiveStraight :
-        msg.data.find("dive_curve") != std::string::npos ?
-        TrackTakeover::Mode::DiveCurve : TrackTakeover::Mode::Gimbal);
-    } else if (msg.data == "track_takeover_stop") {
-      servo_->set_enabled(false);
-      takeover_->deactivate("地面站取消");
-    }
-  }
-
-  /// 开始追踪 (调用方保证 has_roi_): 框选区内 IoU 最大的检测作目标
-  /// 裁块出外观向量; 区内无检测时直接用框选区域兜底 (漏检目标也能跟)
-  void begin_tracking(const cv::Mat & bgr)
+  /// 框选区内 IoU 最大的检测作目标裁块出外观向量; 区内无检测时直接
+  /// 用框选区域兜底 (漏检目标也能跟)
+  void begin_tracking(const cv::Mat & bgr) override
   {
     const auto dets = detector_->detect(bgr);
     const YoloDetection * best = nullptr;
@@ -293,43 +118,69 @@ private:
     } else {
       ok = tracker_->set_target(bgr, roi_);
       if (ok) {
-        RCLCPP_INFO(
-          get_logger(), "框选区内无检测, 以框选区域外观直接锁定");
+        RCLCPP_INFO(get_logger(), "框选区内无检测, 以框选区域外观直接锁定");
       }
     }
     if (ok) {
       tracking_ = true;
-      // ROI 已消费: 进入追踪即销毁框选区域 (画面黄框随之消失, 未追踪
-      // 状态才画黄框); 停止算法后再框选重新开始
-      has_roi_ = false;
-      roi_ = cv::Rect2f();
+      clear_roi();
       track_state_ = "TRACK";
-      publish_info(0, true);
+      publish_info(true);
     } else {
       RCLCPP_WARN(get_logger(), "开始追踪失败: 框选区域无效或过小");
     }
   }
 
-  /// 追踪中标注: 只画目标框 (锁定青色 / 丢失红色), 画面干净聚焦目标
-  std::string track_annotations(const TrackState & st) const
+  void append_info_fields(std::ostringstream & os, bool force) override
   {
-    std::ostringstream os;
-    os << "{\"algo\":\"" << algo_group() << "\",\"items\":[";
-    os << "{\"type\":\"bbox\",\"box\":[" << num(st.box.x) << ","
-       << num(st.box.y) << "," << num(st.box.width) << ","
-       << num(st.box.height) << "],";
-    if (st.has) {
-      // 框上标签 = 类别名 + 检测置信度 (无前缀, 相似度只在右下面板看)
-      os << "\"label\":\"" << st.name << " " << num(st.conf, 2) << "\","
-         << "\"color\":[0,255,255]}";
-    } else {
-      os << "\"label\":\"目标丢失\","
-         << "\"color\":[255,0,0]}";
-    }
-    os << "]}";
-    return os.str();
+    os << "\"cls\":\"" << last_name_ << "\","
+       << "\"conf\":" << num(last_conf_, 2) << ","
+       << "\"sim\":" << num(last_sim_, 2) << ","
+       // force 上屏 = 状态切换 (非逐帧), 检出行归零
+       << "\"count\":" << (force ? 0 : static_cast<int>(last_count_));
   }
 
+  void log_first_infer(long ms) override
+  {
+    RCLCPP_INFO(
+      get_logger(), "首帧推理耗时 %ldms, 检出 %zu 个目标", ms, last_count_);
+  }
+
+  std::string process(const cv::Mat & bgr, int /*frame_width*/) override
+  {
+    takeover_->notify_frame();   // 反控图像断流看门狗喂狗
+    consume_begin(bgr);          // begin 帧上下文处理: 锁定需当前帧裁外观块
+    const auto dets = detector_->detect(bgr);
+    last_count_ = dets.size();
+    std::string json;
+    if (tracking_) {
+      const auto st = tracker_->update(bgr, dets);
+      track_state_ = st.has ? "TRACK" : "LOST";
+      last_sim_ = st.sim;
+      if (st.has) {
+        track_box_ = st.box;
+        last_name_ = st.name;
+        last_conf_ = st.conf;
+      }
+      // 云台伺服 (丢失清零速率) + 反控测量
+      servo_follow(st.box, bgr, st.has);
+      // 框上标签 = 类别名 + 检测置信度 (无前缀, 相似度只在右下面板看)
+      json = st.has ?
+        target_box_json(
+        st.box, std::string(st.name) + " " + num(st.conf, 2), false) :
+        target_box_json(st.box, "目标丢失", true);
+      publish_info();
+    } else {
+      // 未追踪: 显示全部检测 + 框选区域, 供用户核对框选
+      track_state_ = has_roi_ ? "SELECTED" : "IDLE";
+      servo_follow(cv::Rect2f(), bgr, false);
+      json = browse_annotations(dets);
+      publish_info();
+    }
+    return json;
+  }
+
+private:
   /// 未追踪标注: 全部检测 (类别色) + 框选区域 (黄色折线框)
   std::string browse_annotations(const std::vector<YoloDetection> & dets) const
   {
@@ -337,88 +188,21 @@ private:
     if (!has_roi_) {
       return base;
     }
-    std::ostringstream os;
-    os << "{\"type\":\"polyline\",\"close\":true,\"color\":[255,255,0],"
-       << "\"points\":[[" << num(roi_.x) << "," << num(roi_.y) << "],"
-       << "[" << num(roi_.x + roi_.width) << "," << num(roi_.y) << "],"
-       << "[" << num(roi_.x + roi_.width) << "," << num(roi_.y + roi_.height) << "],"
-       << "[" << num(roi_.x) << "," << num(roi_.y + roi_.height) << "]]}";
     // items 空时无逗号 (to_annotations_json 输出 "items":[] 或 "...item]")
-    const std::string item = os.str();
-    const std::string tail = base.substr(base.size() - 3);
-    const bool empty_items = tail == "[]}";
+    const std::string item = roi_polyline_item();
+    const bool empty_items = base.substr(base.size() - 3) == "[]}";
     base.insert(base.size() - 2, (empty_items ? "" : ",") + item);
     return base;
   }
 
-  /// 面板数据 {"src":"track", ...}: ~30Hz 限频 (对齐地面站 33ms 轮询,
-  /// 值不变时面板端自动去重), force=True 状态切换立即发
-  void publish_info(int count, bool force = false)
-  {
-    const auto now = std::chrono::steady_clock::now();
-    if (!force && now - info_last_ < std::chrono::milliseconds(33)) {
-      return;
-    }
-    info_last_ = now;
-    std::ostringstream os;
-    os << "{\"src\":\"" << algo_group() << "\","
-       << "\"state\":\"" << track_state_ << "\","
-       << "\"cls\":\"" << last_name_ << "\","
-       << "\"conf\":" << num(last_conf_, 2) << ","
-       << "\"sim\":" << num(last_sim_, 2) << ","
-       << "\"w\":" << num(track_box_.width, 0) << ","
-       << "\"h\":" << num(track_box_.height, 0) << ","
-       << "\"count\":" << count << ","
-       << "\"follow\":" << (servo_->enabled() ? 1 : 0);
-    // 当前俯角测量 (度, 下正; 缺失 = null 面板隐藏"俯角"行)
-    const double pitch_meas = takeover_->measure_down_deg();
-    if (std::isnan(pitch_meas)) {
-      os << ",\"pitch\":null";
-    } else {
-      os << ",\"pitch\":" << num(pitch_meas);
-    }
-    // 当前目标距离 (米; 斜距 dist + 水平距 dist_h, 缺失 = null 面板隐藏行)
-    double dist_h = 0.0;
-    const double dist_meas = takeover_->measure_distance(&dist_h);
-    if (std::isnan(dist_meas)) {
-      os << ",\"dist\":null,\"dist_h\":null}";
-    } else {
-      os << ",\"dist\":" << num(dist_meas)
-         << ",\"dist_h\":" << num(dist_h) << "}";
-    }
-    std_msgs::msg::String out;
-    out.data = os.str();
-    info_pub_->publish(out);
-  }
-
-  static std::string num(double v, int prec = 1)
-  {
-    std::ostringstream os;
-    os << std::fixed << std::setprecision(prec) << v;
-    return os.str();
-  }
-
   std::unique_ptr<YoloDetector> detector_;
   std::unique_ptr<YoloTracker> tracker_;
-  std::unique_ptr<GimbalServo> servo_;       // 云台伺服 (目标保持画面中央)
-  std::unique_ptr<TrackTakeover> takeover_;  // 反控接管层 (offboard 悬停跟拍)
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr roi_sub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ctl_sub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr info_pub_;
-  // 追踪状态 (proc_group_ 单线程访问; on_roi/on_ctl 在 ROS 回调线程处理,
-  // begin 经 begin_req_ 落到帧上下文, 与 ortrack_node 同一约定)
-  cv::Rect2f roi_;
-  bool has_roi_ = false;
   bool tracking_ = false;
-  bool begin_req_ = false;
-  std::string track_state_ = "IDLE";
   // 面板数据快照 (追踪标注路径里随 TrackState 更新)
-  cv::Rect2f track_box_;
   std::string last_name_;
   float last_conf_ = 0.f;
   float last_sim_ = 0.f;
   size_t last_count_ = 0;
-  std::chrono::steady_clock::time_point info_last_;
 };
 
 }  // namespace flylab_vision
