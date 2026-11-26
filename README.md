@@ -90,7 +90,7 @@ usbipd attach --busid 1-8 --wsl U-22.04-fuck
 
 | 模块 | 说明 |
 |---|---|
-| `config.py` | 全局配置：话题/端口/命令/算法注册表，改这里 |
+| `config/` | 全局配置包：`topics`(话题) / `commands`(命令) / `gimbal`(云台控制律) / `ui_ranges`(控件值域) / `registry`(算法/链路/机型注册表)，按域改对应子模块 |
 | `main_window.py` | 主窗口：工具栏 + 右栏面板组装 + 33ms 轮询与按钮门控 |
 | `ros_node.py` | ROS 节点 + 日志分流上屏 |
 | `camera_grabber.py` | 视频源抓取线程（AirSim RPC / 摄像头 / 视频文件）+ 数字变焦 |

@@ -4,7 +4,7 @@
 用法：
   ros2 run flylab_gcs ground_station
 
-界面结构 / 模块清单见 main_window.py，全局配置见 config.py，
+界面结构 / 模块清单见 main_window.py，全局配置见 config/ 包，
 标注叠加 schema 见 overlay.py。
 """
 import os

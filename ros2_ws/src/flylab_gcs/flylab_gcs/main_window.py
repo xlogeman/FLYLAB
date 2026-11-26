@@ -2,7 +2,7 @@
 """地面站主窗口 —— 界面组装与调度中枢。
 
 模块分层 (细节见各文件):
-  config.py           全局配置 (话题/端口/机型/算法注册表, 改这里)
+  config/             全局配置包 (话题/命令/云台/值域/算法注册表按域拆分, 改对应子模块)
   ros_node.py         ROS 节点 (订阅/发布 + TeeLogger 日志分流)
   camera_grabber.py   视频源抓取线程 (AirSim RPC/本机摄像头/文件)
   gimbal_controller.py 云台控制器 (云台/FOV/航向跟随状态机 + 独立 RPC 线程)
