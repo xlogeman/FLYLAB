@@ -13,12 +13,12 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Quaternion, Twist
 from rclpy.node import Node
-from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
-                       ReliabilityPolicy)
+from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy)
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float64, Float64MultiArray, String
 
 from . import config
+from .latched_sync import LATCHED_QOS, LatchedPublisher
 from .overlay import parse_message
 
 
@@ -189,103 +189,16 @@ class GroundStationNode(Node):
         self.gimbal_pub = self.create_publisher(
             Quaternion, config.GIMBAL_STATE_TOPIC, 30)
 
-        # 视场角同步发布器 (latched 约定见 config.CAMERA_FOV_TOPIC)
-        self.fov_pub = self.create_publisher(
-            Float64, config.CAMERA_FOV_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
+        # latched 参数同步管道 (声明表见 latched_sync.LATCHED_PARAMS):
+        # 码边长/朝向偏置/字典/分形/人脸任务/追踪俯角距离/FOV/机头跟随
+        # 开关统一按声明创建发布器, publish_param(key, v) 编码发布;
+        # 各参数 "未动过不发布" 约定见 latched_sync 模块注释
+        self._latched = LatchedPublisher(self)
 
-        # ArUco 码边长同步发布器 (latched 约定见 config.ARUCO_MARKER_LENGTH_TOPIC)
-        self.marker_len_pub = self.create_publisher(
-            Float64, config.ARUCO_MARKER_LENGTH_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 降落朝向偏置同步发布器 (latched 约定见 config.LANDING_YAW_OFFSET_TOPIC)
-        self.landing_yaw_pub = self.create_publisher(
-            Float64, config.LANDING_YAW_OFFSET_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # ArUco 字典同步发布器 (latched 约定见 config.ARUCO_DICT_TOPIC)
-        self.aruco_dict_pub = self.create_publisher(
-            String, config.ARUCO_DICT_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # fractal 分形配置同步发布器 (latched 约定见 config.FRACTAL_CONFIG_TOPIC)
-        self.fractal_config_pub = self.create_publisher(
-            String, config.FRACTAL_CONFIG_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 人脸下游任务同步发布器 (latched 约定见 config.FACE_TASK_TOPIC):
-        # 后启动的 face_detect_node 一接入即拿到当前任务
-        self.face_task_pub = self.create_publisher(
-            String, config.FACE_TASK_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 人脸任务张数发布器 (latched 约定见 config.FACE_TOPK_TOPIC):
-        # 后启动的 face_detect_node 一接入即拿到当前张数
-        self.face_topk_pub = self.create_publisher(
-            String, config.FACE_TOPK_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 目标追踪 ROI 发布器 (latched 约定见 config.TRACK_ROI_TOPIC):
-        # 界面框选目标后把矩形发给追踪节点 (yolo_track/ortrack), 后启动
-        # 的节点一接入即拿到当前框选区域
+        # 目标追踪 ROI (框选/清除两种 JSON 载荷, 非声明表参数): 独立
+        # 发布器, 同样遵守 latched 约定 (后启动节点一接入拿到当前框选)
         self.track_roi_pub = self.create_publisher(
-            String, config.TRACK_ROI_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 目标追踪反控机头跟随开关 (latched 约定见 config.TRACK_FOLLOW_TOPIC):
-        # 云台面板"跟随"按钮在反控中的点击经此下发追踪节点, 后启动的
-        # 节点一接入即拿到当前开关
-        self.track_follow_pub = self.create_publisher(
-            Bool, config.TRACK_FOLLOW_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 目标追踪俯视角度发布器 (latched 约定见 config.TRACK_PITCH_TOPIC):
-        # 算法信息"俯视角度"输入框的值经此下发追踪节点高度环, 后启动的
-        # 节点一接入即拿到当前角度
-        self.track_pitch_pub = self.create_publisher(
-            Float64, config.TRACK_PITCH_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
-
-        # 目标追踪跟随距离发布器 (latched 约定见 config.TRACK_DIST_TOPIC):
-        # 算法信息"跟随距离"输入框的值经此下发追踪节点机体跟随距离环,
-        # 后启动的节点一接入即拿到当前距离
-        self.track_dist_pub = self.create_publisher(
-            Float64, config.TRACK_DIST_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
+            String, config.TRACK_ROI_TOPIC, LATCHED_QOS)
 
         # 算法输出帧率统计 (标注消息到达频率, 供画面 HUD 显示)
         self._anno_count = 0
@@ -346,11 +259,7 @@ class GroundStationNode(Node):
         # sendVelocityFRDYawRate 即完成跟随接入, 后启动的节点一接入即
         # 拿到当前值
         self.gimbal_yaw_err_pub = self.create_publisher(
-            Float64, config.GIMBAL_YAW_ERR_TOPIC,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST, depth=1))
+            Float64, config.GIMBAL_YAW_ERR_TOPIC, LATCHED_QOS)
         self._yaw_err_last = float('nan')
         self._yaw_err_was_none = True
         self._yaw_err_pub_t = 0.0   # 最近发布时刻 (保活节流)
@@ -376,12 +285,16 @@ class GroundStationNode(Node):
         """返回 (最新反控状态, 事件序号); 序号变化 = 有新状态事件。"""
         return self._track_status, self._track_status_seq
 
+    def publish_param(self, key, value):
+        """按 latched 声明表发布参数 (key 见 latched_sync.LATCHED_PARAMS):
+        算法信息面板/云台滑杆等界面控件统一的参数下发入口, 话题与编码
+        由声明表决定。"""
+        self._latched.publish(key, value)
+
     def publish_track_follow(self, on):
         """发布目标追踪反控机头跟随开关 (latched): True=机头跟随视线,
         False=机头保持航向仅转云台。仅目标追踪反控中由跟随按钮调用。"""
-        m = Bool()
-        m.data = bool(on)
-        self.track_follow_pub.publish(m)
+        self._latched.publish('track_follow', bool(on))
 
     def _teleop_status_cb(self, msg):
         self._teleop_status = msg.data.strip()
@@ -576,54 +489,10 @@ class GroundStationNode(Node):
     def publish_camera_fov(self, deg):
         """发布当前相机视场角 (度) 供算法节点同步估算内参。
         deg 为 None (尚未连上 AirSim / 非 AirSim 源) 时不发布 —— 连上后
-        抓取线程已采纳相机真实 FOV, 节点启动即能同步。"""
-        if deg is None:
-            return
-        msg = Float64()
-        msg.data = float(deg)
-        self.fov_pub.publish(msg)
-
-    def publish_marker_length(self, length_m):
-        """发布 ArUco 码边长 (米) 供 aruco_node / aruco_landing_node
-        运行中同步 marker_length (位姿解算尺度)。"""
-        msg = Float64()
-        msg.data = float(length_m)
-        self.marker_len_pub.publish(msg)
-
-    def publish_landing_yaw_offset(self, deg):
-        """发布降落朝向偏置 (度): 机头相对码 0° 方向的落点朝向, 供
-        aruco_landing_node 运行中同步 (修改后节点解锁航向重新对齐)。"""
-        msg = Float64()
-        msg.data = float(deg)
-        self.landing_yaw_pub.publish(msg)
-
-    def publish_aruco_dict(self, name):
-        """发布 ArUco 字典名, 供 aruco_node / aruco_landing_node 运行中
-        同步 dict_name (下一帧检测生效)。"""
-        msg = String()
-        msg.data = str(name)
-        self.aruco_dict_pub.publish(msg)
-
-    def publish_fractal_config(self, name):
-        """发布分形配置名, 供 fractal_node 运行中同步 fractal_config
-        (重建检测器, 下一帧检测生效)。"""
-        msg = String()
-        msg.data = str(name)
-        self.fractal_config_pub.publish(msg)
-
-    def publish_face_task(self, task_id):
-        """发布人脸下游任务名 (config.FACE_TASKS 键), 供 face_detect_node
-        运行中切换 FaceXFormer 任务 (下一帧生效)。"""
-        msg = String()
-        msg.data = str(task_id)
-        self.face_task_pub.publish(msg)
-
-    def publish_face_topk(self, topk):
-        """发布人脸任务张数 (config.FACE_TOPKS 键: '1'/'2'/.../'0'=全部),
-        供 face_detect_node 运行中切换 FaceXFormer 批量张数 (下一帧生效)。"""
-        msg = String()
-        msg.data = str(topk)
-        self.face_topk_pub.publish(msg)
+        抓取线程已采纳相机真实 FOV, 节点启动即能同步。周期重发兜底由
+        main_window 的 LatchedKeepalive 负责。"""
+        if deg is not None:
+            self._latched.publish('camera_fov', deg)
 
     def publish_track_roi(self, x, y, w, h):
         """发布追踪目标框选区域 (显示帧像素, 与转发帧同一坐标系),
@@ -638,20 +507,6 @@ class GroundStationNode(Node):
         msg = String()
         msg.data = json.dumps({'reset': True})
         self.track_roi_pub.publish(msg)
-
-    def publish_track_pitch(self, deg):
-        """发布追踪俯视角度 (度, 向下正): 反控接管中追踪节点高度环据此
-        控制飞机升降, 使云台以该俯视角注视目标 (未动过输入框不发布)。"""
-        msg = Float64()
-        msg.data = float(deg)
-        self.track_pitch_pub.publish(msg)
-
-    def publish_track_dist(self, dist):
-        """发布追踪跟随距离 (米): 机体跟随-水平时追踪节点距离环据此控制
-        飞机水平收放, 保持该水平距离 (未动过输入框不发布)。"""
-        msg = Float64()
-        msg.data = float(dist)
-        self.track_dist_pub.publish(msg)
 
     def set_display_frame(self, arr):
         """把当前显示的帧 (BGR ndarray) 交给转发线程 (O(1) 引用传递)。

@@ -39,6 +39,7 @@ from . import config
 from .algo_output_panel import AlgoOutputPanel
 from .camera_widget import CameraViewWidget
 from .compass import Compass
+from .latched_sync import LatchedKeepalive
 from .log_panel import LogPanel
 from .map_view import MapView
 from .panels import ui_style
@@ -135,9 +136,10 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.camera_tab.video.set_depth_provider(self.node.get_depth_at)
         # 相机机体系姿态发布节流 (10Hz, 供 aruco_landing 云台泛化映射)
         self._cam_ori_last = 0.0
-        # 视场角同步: 上次已发布的 FOV 值 (变化才发布, None=尚未发布过)
-        self._fov_pub_last = None
-        self._fov_pub_t = 0.0   # 上次发布时刻 (周期重发, 兜底 latched 漏收)
+        # 视场角同步: 变化即发布 + 2s 周期重发兜底 (策略见
+        # latched_sync.LatchedKeepalive —— latched 只在匹配瞬间投递,
+        # 周期重发保证漏收的节点最终同步到当前 FOV)
+        self._fov_sync = LatchedKeepalive(2.0)
         # ULG 日志分析窗口 (独立非模态, 见 ulg_window.py; 首次点开创建)
         self.ulg_win = None
 
@@ -169,17 +171,12 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         self.camera_tab.add_side_widget(self.camera_tab.gimbal_box)
         self.camera_tab.add_side_widget(self._build_teleop_panel())
         # 算法信息面板 (右栏底部): 默认空白, 运行中算法动态显示对应分组
-        # (config.ALGORITHMS 的 'panel' 键 + 视觉反控降落); 带码边长滑杆,
-        # 拖动经 latched 话题同步 aruco_node / aruco_landing_node
+        # (config.ALGORITHMS 的 'panel' 键 + 视觉反控降落); 顶部调节行
+        # (码边长/朝向偏置/字典/人脸任务/追踪俯角距离) 由
+        # latched_sync.LATCHED_PARAMS 声明表驱动, 发布统一走
+        # node.publish_param
         self.algo_panel = AlgoOutputPanel(
-            self.node.get_algo_info, self.node.publish_marker_length,
-            self.node.publish_landing_yaw_offset,
-            set_aruco_dict=self.node.publish_aruco_dict,
-            set_face_task=self.node.publish_face_task,
-            set_face_topk=self.node.publish_face_topk,
-            set_fractal_config=self.node.publish_fractal_config,
-            set_track_pitch=self.node.publish_track_pitch,
-            set_track_dist=self.node.publish_track_dist,
+            self.node.get_algo_info, self.node.publish_param,
             get_gimbal_pitch=self.camera_tab.grabber.get_gimbal_down_deg)
         self.camera_tab.add_side_widget(self.algo_panel)
 
@@ -324,11 +321,8 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 每 2s 周期重发兜底: latched 只在匹配瞬间投递一次, 任何漏收
         # (DDS 匹配前发布/订阅端短暂掉线) 都会让节点停留在 yaml 默认 FOV
         fov = self.camera_tab.grabber.get_fov_applied()
-        if fov is not None and (fov != self._fov_pub_last or
-                now_mono - self._fov_pub_t >= 2.0):
-            self._fov_pub_last = fov
-            self._fov_pub_t = now_mono
-            self.node.publish_camera_fov(fov)
+        if fov is not None:
+            self._fov_sync.sync(self.node.publish_camera_fov, fov)
 
     # ---------- 会话重置 (连接纪元 0->1, 见 camera_tab.session_reset) ----------
 

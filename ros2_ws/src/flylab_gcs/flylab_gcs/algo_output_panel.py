@@ -7,7 +7,10 @@
 
 职责分工: "算法 JSON -> 显示文本" 的提取逻辑与分组注册表 (SECTIONS) 在
 panel_sections.py —— 新算法接入只改注册表, 不碰框架; 本文件只做 Qt 渲染
-(字段行 / 表格模式 / 图片行 / 超时置灰 / 顶部调节行显隐)。
+(字段行 / 表格模式 / 图片行 / 超时置灰 / 顶部调节行显隐)。顶部调节行
+(码边长/朝向偏置/字典/人脸任务/追踪俯角距离等参数控件) 由
+latched_sync.LATCHED_PARAMS 声明表驱动 (见 _ParamControl) —— 新增同步
+参数只改声明表, 不碰本文件。
 
 分组 spec 契约 (注册表项, 本框架按其渲染):
   title     分组标题 (必填)
@@ -27,7 +30,7 @@ from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, \
     QHBoxLayout, QFormLayout, QGroupBox, QLabel, QSlider, QSpinBox, \
     QSizePolicy, QWidget
 
-from . import config
+from .latched_sync import LATCHED_PARAMS
 from .panel_sections import HIDE_ROW, SECTIONS, landing_spec
 
 INFO_TIMEOUT = 1.2   # 秒: 超时视为该来源无输出 (节点端 10Hz 发布, 留足裕量)
@@ -241,15 +244,145 @@ class _Section(QGroupBox):
             self.setStyleSheet(style)
 
 
+class _ParamControl:
+    """latched 声明表驱动的顶部调节控件 (QGroupBox 包装)。
+    按条目的 kind 字段构造四种控件之一, 值域/候选/文案全部来自声明表;
+    修改即经 publish(key, value) 下发 (latched)。
+
+    各控件共同遵守 "未动过不发布" 约定: 初始值在 connect 之前设置,
+    不触发发布 —— 节点用各自 yaml/ROS 参数默认值。
+      slider  索引式量程 (0~N 档, 每档 = 一个 step): QSlider 直接用
+              物理值时拖动按像素细步, 索引式保证只落在步长档位上
+      spin    QSpinBox (整数, keyboardTracking 关闭: 键入过程不发布,
+              步进/回车/失焦才生效)
+      spin_f  QDoubleSpinBox (小数, 同上)
+      combo   QComboBox, choices 为 list (候选即发布值) 或 dict
+              (键=发布值, 值=显示名); activated 信号只响应用户选择,
+              含重复选择
+
+    auto_sync 参数 (追踪俯视角度): 用户未动过 (touched=False) 时程序
+    持续把显示值同步为云台当前俯角 (set_programmatic, blockSignals
+    屏蔽, 不发布不置 touched) —— 首次点悬停跟拍时伺服要把云台转到
+    注视目标的角度, 只在分组显示瞬间取值会拿到"调整前"的旧角度。
+    """
+
+    def __init__(self, param, publish):
+        self.param = param
+        self.touched = False   # 用户动过输入 (仅 auto_sync 用)
+        self._publish = publish   # (key, value) -> 发布
+        box = QGroupBox(param.title)
+        if param.tooltip:
+            box.setToolTip(param.tooltip)
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        build = {'slider': self._build_slider, 'spin': self._build_spin,
+                 'spin_f': self._build_spin_f, 'combo': self._build_combo}
+        build[param.kind](box, lay)
+        self.box = box
+
+    def _on_change(self, value):
+        if self.param.auto_sync:
+            self.touched = True
+        self._publish(self.param.key, value)
+
+    # ---------- 各 kind 的构造 ----------
+
+    def _build_slider(self, box, lay):
+        p = self.param
+        lo, step = float(p.lo), float(p.step)
+        n_steps = max(1, int(round((float(p.hi) - lo) / step)))
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, n_steps)
+        val = QLabel()
+        val.setStyleSheet('font-family: monospace;')
+        val.setMinimumWidth(44)
+
+        def on_change(idx):
+            v = round(lo + idx * step, p.decimals)
+            val.setText(f'{v:.{p.decimals}f}')
+            self._on_change(v)
+
+        slider.valueChanged.connect(on_change)
+        # 初始占位不发默认值 (未拖动不发布)
+        idx = int(round((float(p.default) - lo) / step))
+        slider.blockSignals(True)
+        slider.setValue(max(0, min(n_steps, idx)))
+        slider.blockSignals(False)
+        val.setText(f'{round(lo + slider.value() * step, p.decimals):.{p.decimals}f}')
+        lay.addWidget(slider, 1)
+        lay.addWidget(val)
+
+    def _build_spin(self, box, lay):
+        p = self.param
+        spin = QSpinBox()
+        spin.setRange(int(p.lo), int(p.hi))
+        spin.setSingleStep(int(p.step))
+        spin.setSuffix(p.suffix)
+        spin.setKeyboardTracking(False)
+        spin.setFixedWidth(p.width)
+        # 初始显示默认值不发 (setValue 放在 connect 之前, 不触发
+        # valueChanged)
+        spin.setValue(int(p.default))
+        spin.valueChanged.connect(self._on_change)
+        self._spin = spin   # auto_sync 程序同步用 (set_programmatic)
+        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
+        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
+
+    def _build_spin_f(self, box, lay):
+        p = self.param
+        spin = QDoubleSpinBox()
+        spin.setRange(float(p.lo), float(p.hi))
+        spin.setSingleStep(float(p.step))
+        spin.setDecimals(p.decimals)
+        spin.setSuffix(p.suffix)
+        spin.setKeyboardTracking(False)
+        spin.setFixedWidth(p.width)
+        # 初始显示默认值不发 (setValue 放在 connect 之前, 不触发
+        # valueChanged)
+        spin.setValue(float(p.default))
+        spin.valueChanged.connect(self._on_change)
+        self._spin = spin   # auto_sync 程序同步用 (set_programmatic)
+        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
+        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
+
+    def _build_combo(self, box, lay):
+        p = self.param
+        combo = QComboBox()
+        if isinstance(p.choices, dict):
+            # 键 = 发布值, 值 = 显示名; 显示名反查发布值
+            combo.addItems(list(p.choices.values()))
+            name_to_key = {v: k for k, v in p.choices.items()}
+            default = p.choices.get(
+                p.default, next(iter(p.choices.values())))
+            combo.setCurrentText(default)
+            combo.activated[str].connect(   # 用户选择才发布 (含重复选择)
+                lambda name: self._on_change(
+                    name_to_key.get(name, p.default)))
+        else:
+            combo.addItems(p.choices)
+            combo.setCurrentText(p.default)
+            combo.activated[str].connect(self._on_change)
+        lay.addWidget(combo, 1)
+
+    # ---------- auto_sync 支持 ----------
+
+    def set_programmatic(self, value):
+        """程序同步显示值 (跟随云台俯角): 屏蔽信号, 不发布、不置
+        touched —— 用户动输入框才发布, 节点契约不变。"""
+        spin = self._spin
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
+
+    def visible_for(self, keys, landing_kind):
+        return self.param.visible_for(keys, landing_kind)
+
+
 class AlgoOutputPanel(QGroupBox):
     """右栏算法信息面板: set_active() 决定显示哪些分组 (随运行中算法变化),
     refresh() 按各分组最新数据刷新 (33ms 轮询驱动, 内部去重)。"""
 
-    def __init__(self, get_info, set_marker_length=None,
-                 set_landing_yaw=None, set_aruco_dict=None,
-                 set_face_task=None, set_face_topk=None,
-                 set_fractal_config=None, set_track_pitch=None,
-                 set_track_dist=None,
+    def __init__(self, get_info, publish_param,
                  get_gimbal_pitch=None, parent=None):
         super().__init__('算法信息', parent)
         self._get_info = get_info   # -> ros_node.algo_info ({src: {data, t}})
@@ -262,321 +395,46 @@ class AlgoOutputPanel(QGroupBox):
         self._lay = QGridLayout(self)
         self._lay.setContentsMargins(0, 2, 0, 0)
         self._lay.setSpacing(4)
-        # ArUco 码边长滑杆 (跟随 ArUco 分组显隐, 分组网格上方一整行): 场景含
-        # 多种尺寸码时运行中同步节点 marker_length (位姿解算尺度)
-        self._marker_box = None
-        if set_marker_length is not None:
-            self._build_marker_slider(set_marker_length)
-        # 降落朝向选择 (仅降落分组激活时显示): 机头相对码 0° 方向的落点
-        # 偏置, 视觉反控降落时运行中同步 aruco_landing_node yaw_offset_deg
-        self._yaw_box = None
-        if set_landing_yaw is not None:
-            self._build_yaw_spin(set_landing_yaw)
-        # 字典切换 (跟随 ArUco 分组显隐): 运行中同步 aruco_node /
-        # aruco_landing_node 的 dict_name (下一帧检测生效)
-        self._dict_box = None
-        if set_aruco_dict is not None:
-            self._build_dict_combo(set_aruco_dict)
-        # 人脸任务切换 (跟随 face 分组显隐): 运行中同步 face_detect_node 的
-        # FaceXFormer 任务 (下一帧生效)
-        self._face_task_box = None
-        if set_face_task is not None:
-            self._build_face_task_combo(set_face_task)
-        # 人脸任务张数 (跟随 face 分组显隐): 置信度前 N 张 / 全部批量跑任务
-        self._face_topk_box = None
-        if set_face_topk is not None:
-            self._build_face_topk_combo(set_face_topk)
-        # 分形配置切换 (跟随 fractal 分组显隐): 运行中同步 fractal_node 的
-        # fractal_config (重建检测器, 下一帧检测生效)
-        self._fractal_box = None
-        if set_fractal_config is not None:
-            self._build_fractal_combo(set_fractal_config)
-        # 目标追踪俯视角度 (跟随 track 分组显隐): 反控接管中设置云台俯视
-        # 角度, 追踪节点高度环控制飞机升降收敛到该角度; 未动过时持续同步
-        # 为云台当前俯角 (见 _update_top_visibility / refresh)
-        self._track_pitch_box = None
-        self._track_pitch_touched = False   # 用户改过则不再自动同步
-        if set_track_pitch is not None:
-            self._build_track_pitch_spin(set_track_pitch)
-        # 目标追踪跟随距离 (跟随 track 分组显隐): 机体跟随-水平时距离环
-        # 保持的水平距离, 修改即发布 (无自动同步, 节点默认 = 参数默认值)
-        self._track_dist_box = None
-        if set_track_dist is not None:
-            self._build_track_dist_spin(set_track_dist)
-        # track 分组激活期间画面框选常开 (主窗口控制), 拖出矩形松开即
-        # 自动开始追踪, 停止靠工具栏"停止算法"
-        # 顶部调节行 (码边长滑杆 + 降落朝向选择 + 字典切换 + 分形配置并排):
-        # 装进一个横向容器, 整行横跨全部分组列, 置于算法分组上方 (见 _relayout);
-        # 可见性跟随激活分组 (见 _update_top_visibility), 无相关算法运行时整行隐藏
+        # 顶部调节行 (latched 声明表驱动): 按声明表顺序生成有控件条目
+        # (kind != None), 发布统一走 publish_param(key, value); 装进
+        # 一个横向容器整行横跨全部分组列, 置于算法分组上方 (见 _relayout);
+        # 可见性随激活分组 (声明表的 groups 字段, 见 _update_top_visibility),
+        # 无相关算法运行时整行隐藏
+        self._controls = {
+            p.key: _ParamControl(p, publish_param)
+            for p in LATCHED_PARAMS if p.kind is not None}
         top = None
-        if self._marker_box is not None or self._yaw_box is not None or \
-                self._dict_box is not None or self._face_task_box is not None or \
-                self._face_topk_box is not None or \
-                self._fractal_box is not None or \
-                self._track_pitch_box is not None or \
-                self._track_dist_box is not None:
+        if self._controls:
             top = QWidget()
             row = QHBoxLayout(top)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(4)
-            if self._marker_box is not None:
-                row.addWidget(self._marker_box, 2)   # 滑杆占更宽
-            if self._yaw_box is not None:
-                row.addWidget(self._yaw_box, 1)
-            if self._dict_box is not None:
-                row.addWidget(self._dict_box, 1)
-            if self._face_task_box is not None:
-                row.addWidget(self._face_task_box, 1)
-            if self._face_topk_box is not None:
-                row.addWidget(self._face_topk_box, 1)
-            if self._fractal_box is not None:
-                row.addWidget(self._fractal_box, 1)
-            if self._track_pitch_box is not None:
-                row.addWidget(self._track_pitch_box, 1)
-            if self._track_dist_box is not None:
-                row.addWidget(self._track_dist_box, 1)
+            for p in LATCHED_PARAMS:
+                if p.kind is not None:
+                    row.addWidget(self._controls[p.key].box, p.stretch)
         self._top_row = top
         self._update_top_visibility([])   # 初始无分组, 整行隐藏
 
-    def _build_marker_slider(self, publish):
-        """码边长滑杆: 值域/步进取 config; 拖动才发布 (未动过节点用
-        aruco.yaml 的 marker_length, 与视场角同步同一约定)。
-        索引式量程 (0~N 档, 每档=一个步长): QSlider 直接用物理值时拖动
-        按像素细步 (1px=0.01m), 索引式保证拖动只会落在步长档位上。"""
-        box = QGroupBox('ArUco 码边长 (m)')
-        box.setToolTip(
-            '场景含多种尺寸码时拖动同步算法节点; 先把码摆到已知距离,\n'
-            "调到面板\"实际宽度\"≈码的真实边长, 此时\"码位置\"\n"
-            '的 z 分量 (末位) 即准确距离')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        lo_cm = int(round(config.ARUCO_MARKER_LENGTH_MIN * 100))
-        step_cm = max(1, int(round(config.ARUCO_MARKER_LENGTH_STEP * 100)))
-        n_steps = max(1, (int(round(config.ARUCO_MARKER_LENGTH_MAX * 100)) -
-                          lo_cm) // step_cm)
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, n_steps)
-        val = QLabel()
-        val.setStyleSheet('font-family: monospace;')
-        val.setMinimumWidth(44)
-
-        def on_change(idx):
-            cm = lo_cm + idx * step_cm
-            val.setText(f'{cm / 100.0:.2f}')
-            publish(cm / 100.0)
-
-        slider.valueChanged.connect(on_change)
-        # 初始占位不发默认值 (未拖动不发布, 节点用 aruco.yaml 的值)
-        default_cm = int(round(config.ARUCO_MARKER_LENGTH_DEFAULT * 100))
-        slider.blockSignals(True)
-        slider.setValue(max(0, min(n_steps, (default_cm - lo_cm) // step_cm)))
-        slider.blockSignals(False)
-        val.setText(f'{(lo_cm + slider.value() * step_cm) / 100.0:.2f}')
-        lay.addWidget(slider, 1)
-        lay.addWidget(val)
-        self._marker_box = box
-
-    def _build_yaw_spin(self, publish):
-        """降落朝向选择 (QSpinBox): 机头相对码 0° 方向 (码角点 0→1) 的
-        落点朝向偏置 (度, 右正), 修改即发布 (latched); 未动过不发布,
-        节点用 aruco.yaml 的 yaw_offset_deg (与码边长同步同一约定)。
-        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
-        box = QGroupBox('朝向偏置 (°)')
-        box.setToolTip(
-            '视觉反控降落时机头相对码 0° 方向 (码角点 0→1, 即码图案 x 轴)\n'
-            '的落点朝向, 右转为正; 0 = 机头对齐码 0° 方向。\n'
-            '运行中修改立即生效: 飞机会悬停转到新朝向再继续下降')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        spin = QSpinBox()
-        spin.setRange(config.LANDING_YAW_OFFSET_MIN, config.LANDING_YAW_OFFSET_MAX)
-        spin.setSingleStep(config.LANDING_YAW_OFFSET_STEP)
-        spin.setSuffix('°')
-        spin.setKeyboardTracking(False)
-        spin.setFixedWidth(78)   # 收窄: 三位数 + ° 足够, 省出底部行宽度给滑杆
-        # 初始显示默认值不发 (未动过不发布, 节点用 aruco.yaml 的值;
-        # setValue 放在 connect 之前, 不触发 valueChanged)
-        spin.setValue(config.LANDING_YAW_OFFSET_DEFAULT)
-        spin.valueChanged.connect(publish)
-        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
-        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
-        self._yaw_box = box
-
-    def _build_track_pitch_spin(self, publish):
-        """目标追踪俯视角度 (QSpinBox): 云台注视目标的俯视角 (度, 向下正),
-        反控接管中修改即发布 (latched), 追踪节点高度环控制飞机升降收敛;
-        未动过不发布, 节点维持悬停 (与朝向偏置同步同一约定)。
-        未动过时程序持续把显示值同步为云台当前俯角 (见 _sync_track_pitch):
-        首次点悬停跟拍时伺服要把云台转到注视目标的角度, 只在分组显示瞬间
-        取值会拿到"调整前"的旧角度 —— 持续跟随到云台收敛, 输入框自然停在
-        调整后的角度。
-        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
-        box = QGroupBox('俯视角度 (°)')
-        box.setToolTip(
-            '反控接管中云台注视目标的俯视角 (向下为正, 水平=0):\n'
-            '设置后飞机自动升降, 直到以该俯视角注视目标;\n'
-            '未设置时反控保持原地悬停。运行中修改立即生效')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        spin = QSpinBox()
-        spin.setRange(config.TRACK_PITCH_MIN, config.TRACK_PITCH_MAX)
-        spin.setSingleStep(config.TRACK_PITCH_STEP)
-        spin.setSuffix('°')
-        spin.setKeyboardTracking(False)
-        spin.setFixedWidth(78)
-        # 初始显示默认值不发 (未动过不发布, 节点维持悬停;
-        # setValue 放在 connect 之前, 不触发 valueChanged)
-        spin.setValue(config.TRACK_PITCH_DEFAULT)
-        spin.valueChanged.connect(
-            lambda v: (setattr(self, '_track_pitch_touched', True),
-                       publish(v))[-1])
-        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
-        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
-        self._track_pitch_box = box
-        self._track_pitch_spin = spin
-
-    def _build_track_dist_spin(self, publish):
-        """目标追踪跟随距离 (QDoubleSpinBox, 米): 机体跟随-水平时距离环
-        保持的水平距离, 反控接管中修改即发布 (latched), 追踪节点距离环
-        控制飞机水平收放收敛; 未动过不发布, 节点用参数默认值
-        bodyfollow_dist_m (与俯视角度同步同一约定, 无自动跟随显示)。
-        keyboardTracking 关闭: 键入过程不发布, 步进/回车/失焦才生效。"""
-        box = QGroupBox('跟随距离 (m)')
-        box.setToolTip(
-            '机体跟随 (水平跟随) 时飞机保持与目标的水平距离 (米):\n'
-            '设置后飞机自动前进/后退, 直到距离收敛到该值;\n'
-            '未设置时用节点默认值 10m。运行中修改立即生效')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        spin = QDoubleSpinBox()
-        spin.setRange(config.TRACK_DIST_MIN, config.TRACK_DIST_MAX)
-        spin.setSingleStep(config.TRACK_DIST_STEP)
-        spin.setDecimals(1)
-        spin.setSuffix('m')
-        spin.setKeyboardTracking(False)
-        spin.setFixedWidth(86)
-        # 初始显示默认值不发 (未动过不发布, 节点用参数默认值;
-        # setValue 放在 connect 之前, 不触发 valueChanged)
-        spin.setValue(config.TRACK_DIST_DEFAULT)
-        spin.valueChanged.connect(publish)
-        lay.addWidget(spin)   # 固定宽度, 不随行宽拉伸 (加入布局防游离不显示)
-        lay.addStretch(1)     # 剩余宽度留白, 分组框收窄到内容宽度
-        self._track_dist_box = box
-
-    def _sync_track_pitch(self):
-        """俯视角度同步为云台当前俯角 (限幅): 仅用户未动过时调用
-        (refresh 轮询 + track 分组显示时, 见 _update_top_visibility);
-        云台不可用/非 AirSim 源跳过保持现值。程序同步是"跟随显示"
-        而非用户输入: blockSignals 屏蔽 valueChanged, 不触发发布、
-        不置 touched 标记 (用户动输入框才发布, 节点契约不变)。"""
+    def _sync_auto_controls(self):
+        """auto_sync 参数 (追踪俯视角度) 同步为云台当前俯角 (限幅):
+        仅用户未动过 (touched=False) 且控件可见时调用 (refresh 轮询 +
+        track 分组显示时, 见 _update_top_visibility); 云台不可用/非
+        AirSim 源跳过保持现值。程序同步是"跟随显示"而非用户输入:
+        set_programmatic 屏蔽信号, 不发布、不置 touched (用户动输入框
+        才发布, 节点契约不变)。首次点悬停跟拍时伺服要把云台转到注视
+        目标的角度, 只在分组显示瞬间取值会拿到"调整前"的旧角度 ——
+        轮询里持续同步到云台收敛, 输入框自然停在调整后的角度。"""
         if self._get_gimbal_pitch is None:
             return
         p = self._get_gimbal_pitch()
         if p is None:
             return
-        v = int(round(max(config.TRACK_PITCH_MIN,
-                          min(config.TRACK_PITCH_MAX, p))))
-        spin = self._track_pitch_spin
-        spin.blockSignals(True)
-        spin.setValue(v)
-        spin.blockSignals(False)
-
-    def _build_dict_combo(self, publish):
-        """ArUco 字典切换 (QComboBox): 候选取 config.ARUCO_DICTS, 选择即
-        发布 (latched); 未动过不发布, 节点用 aruco.yaml 的 dict_name
-        (与码边长同步同一约定)。激活信号过滤: 程序设初值不触发发布。"""
-        box = QGroupBox('ArUco 字典')
-        box.setToolTip(
-            '场景换了码的字典 (如 4x4 换 6x6) 时下拉切换, 运行中同步\n'
-            '检测/降落节点, 下一帧检测生效; 降落中切换会重新选择目标')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        combo = QComboBox()
-        combo.addItems(config.ARUCO_DICTS)
-        # 初始显示默认值不发 (未选择不发布, 节点用 aruco.yaml 的值;
-        # setCurrentText 放在 connect 之前, 不触发 activated)
-        combo.setCurrentText(config.ARUCO_DICT_DEFAULT)
-        combo.activated[str].connect(publish)   # 用户选择才发布 (含重复选择, 传字典名)
-        lay.addWidget(combo, 1)
-        self._dict_box = box
-
-    def _build_face_task_combo(self, publish):
-        """人脸下游任务切换 (QComboBox): 候选取 config.FACE_TASKS (键=发
-        给节点的任务名, 值=显示名), 选择即发布 (latched); 未动过不发布,
-        节点用 facex_task 参数的值 (与 ArUco 字典同步同一约定)。激活信号
-        过滤: 程序设初值不触发发布。"""
-        box = QGroupBox('人脸任务')
-        box.setToolTip(
-            'FaceXFormer 对检出人脸跑的下游分析任务 (张数见"人脸数量"),\n'
-            '下拉运行中切换, 下一帧生效:\n'
-            '人像分割/68 关键点/头部姿态/人脸属性/年龄性别/点可见性')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        combo = QComboBox()
-        combo.addItems(list(config.FACE_TASKS.values()))
-        # 初始显示默认值不发 (未选择不发布, 节点用 facex_task 参数的值;
-        # setCurrentText 放在 connect 之前, 不触发 activated)
-        default_name = config.FACE_TASKS.get(
-            config.FACE_TASK_DEFAULT, config.FACE_TASK_DEFAULT)
-        combo.setCurrentText(default_name)
-        # 用户选择才发布 (含重复选择, 传任务名 -> 显示名反查任务 id)
-        name_to_id = {v: k for k, v in config.FACE_TASKS.items()}
-
-        def on_activated(name):
-            publish(name_to_id.get(name, config.FACE_TASK_DEFAULT))
-
-        combo.activated[str].connect(on_activated)
-        lay.addWidget(combo, 1)
-        self._face_task_box = box
-
-    def _build_face_topk_combo(self, publish):
-        """人脸任务张数切换 (QComboBox): 候选取 config.FACE_TOPKS (键=发给
-        节点的数值字符串 '0'=全部, 值=显示名), 选择即发布 (latched); 未动
-        过不发布, 节点用 facex_topk 参数的值。激活信号过滤: 程序设初值不
-        触发发布。"""
-        box = QGroupBox('人脸数量')
-        box.setToolTip(
-            'FaceXFormer 批量跑任务的人脸张数 (按置信度排序):\n'
-            '前 1/2/3/5 张或全部检出脸; 脸多时拼批一次推理,\n'
-            '下拉运行中切换, 下一帧生效')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        combo = QComboBox()
-        combo.addItems(list(config.FACE_TOPKS.values()))
-        # 初始显示默认值不发 (未选择不发布, 节点用 facex_topk 参数的值)
-        combo.setCurrentText(config.FACE_TOPKS.get(
-            config.FACE_TOPK_DEFAULT,
-            next(iter(config.FACE_TOPKS.values()))))
-        # 用户选择才发布 (含重复选择, 显示名反查数值字符串)
-        name_to_key = {v: k for k, v in config.FACE_TOPKS.items()}
-
-        def on_activated(name):
-            publish(int(name_to_key.get(name, config.FACE_TOPK_DEFAULT)))
-
-        combo.activated[str].connect(on_activated)
-        lay.addWidget(combo, 1)
-        self._face_topk_box = box
-
-    def _build_fractal_combo(self, publish):
-        """fractal 分形配置切换 (QComboBox): 候选取 config.FRACTAL_CONFIGS
-        (内置 2L~5L 四档), 选择即发布 (latched), 节点重建检测器下一帧生效;
-        未动过不发布, 节点用 aruco.yaml 的 fractal_config (与 ArUco 字典
-        同步同一约定)。激活信号过滤: 程序设初值不触发发布。"""
-        box = QGroupBox('fractal 配置')
-        box.setToolTip(
-            '分形码嵌套层数 (2L~5L, 数字越大层数越多, 远距/遮挡越鲁棒,\n'
-            '内层码越小), 场景换了码时下拉切换, 运行中同步 fractal_node,\n'
-            '下一帧检测生效')
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(6, 2, 6, 4)
-        combo = QComboBox()
-        combo.addItems(config.FRACTAL_CONFIGS)
-        # 初始显示默认值不发 (未选择不发布, 节点用 aruco.yaml 的值;
-        # setCurrentText 放在 connect 之前, 不触发 activated)
-        combo.setCurrentText(config.FRACTAL_CONFIG_DEFAULT)
-        combo.activated[str].connect(publish)   # 用户选择才发布 (含重复选择)
-        lay.addWidget(combo, 1)
-        self._fractal_box = box
+        for ctrl in self._controls.values():
+            if ctrl.param.auto_sync and ctrl.box.isVisible() \
+                    and not ctrl.touched:
+                v = int(round(max(ctrl.param.lo,
+                                  min(ctrl.param.hi, p))))
+                ctrl.set_programmatic(v)
 
     def set_active(self, keys, landing_kind=None):
         """切换显示的分组: keys 里的动态创建 (未注册的忽略), 其余移除;
@@ -600,53 +458,34 @@ class AlgoOutputPanel(QGroupBox):
         self._update_top_visibility(keys)
 
     def _update_top_visibility(self, keys):
-        """顶部调节行随激活分组显隐: 字典切换属于 ArUco 检测 / aruco 降落;
-        分形配置属于 fractal 检测 / fractal 降落 —— 两者互斥, 靠
-        _landing_kind (反控降落的检测器类型, 见 set_active) 区分 landing
-        分组归属, 不同时出现。码边长滑杆对两条链路都有意义 (同一降落坪);
-        降落朝向偏置属于任何反控降落与 fractal 检测; 人脸任务只属于 face;
-        全无则整行隐藏。"""
-        landing_on = 'landing' in keys
+        """顶部调节行随激活分组显隐: 每个参数控件的归属由声明表 groups
+        字段声明 (见 _ParamControl.visible_for) —— 字典切换属于 ArUco
+        检测 / aruco 降落; 分形配置属于 fractal 检测 / fractal 降落,
+        landing 分组的归属靠 _landing_kind (反控降落的检测器类型, 见
+        set_active) 区分, 不同时出现。全无则整行隐藏。"""
         landing_kind = self._landing_kind or 'aruco'
-        face_on = 'face' in keys
-        aruco_on = 'aruco' in keys or (landing_on and landing_kind == 'aruco')
-        fractal_on = 'fractal' in keys or (landing_on and landing_kind == 'fractal')
-        track_on = 'track' in keys
-        if self._marker_box is not None:
-            self._marker_box.setVisible(aruco_on or fractal_on)
-        if self._yaw_box is not None:
-            self._yaw_box.setVisible(landing_on or fractal_on)
-        if self._dict_box is not None:
-            self._dict_box.setVisible(aruco_on)
-        if self._face_task_box is not None:
-            self._face_task_box.setVisible(face_on)
-        if self._face_topk_box is not None:
-            self._face_topk_box.setVisible(face_on)
-        if self._fractal_box is not None:
-            self._fractal_box.setVisible(fractal_on)
-        if self._track_pitch_box is not None:
-            self._track_pitch_box.setVisible(track_on)
-            if track_on and not self._track_pitch_touched:
-                self._sync_track_pitch()   # 默认跟云台当前俯角 (持续同步见 refresh)
-        if self._track_dist_box is not None:
-            self._track_dist_box.setVisible(track_on)
+        any_on = False
+        for ctrl in self._controls.values():
+            on = ctrl.visible_for(keys, landing_kind)
+            ctrl.box.setVisible(on)
+            any_on = any_on or on
         if self._top_row is not None:
-            self._top_row.setVisible(
-                aruco_on or face_on or fractal_on or track_on)
+            self._top_row.setVisible(any_on)
+        # auto_sync 参数 (俯视角度) 显示即跟云台当前俯角 (持续同步见
+        # refresh): 须在整行可见性确定之后同步 —— _sync_auto_controls
+        # 以 isVisible() 为守卫, top_row 还隐藏时同步会被跳过
+        if any_on:
+            self._sync_auto_controls()
 
     def refresh(self):
         info = self._get_info() or {}
         now_m = time.monotonic()
         for key, section in self._sections.items():
             section.update_entry(info.get(key), now_m)
-        # 俯视角度持续跟随云台当前俯角 (未动过且 track 分组显示时): 首次
-        # 点悬停跟拍, 伺服把云台转向注视目标的角度需要时间, 分组显示瞬间
-        # 同步只能拿到"调整前"的旧角度 —— 轮询里持续同步, 云台收敛后输入
-        # 框即停在调整后的角度; 用户一动输入框 (touched) 即停止跟随
-        if self._track_pitch_box is not None and \
-                self._track_pitch_box.isVisible() and \
-                not self._track_pitch_touched:
-            self._sync_track_pitch()
+        # auto_sync 参数 (俯视角度) 持续跟随云台当前俯角 (未动过且控件
+        # 显示时): 云台收敛后输入框即停在调整后的角度; 用户一动输入框
+        # (touched) 即停止跟随
+        self._sync_auto_controls()
 
     def _add(self, key):
         # landing 分组标题随反控降落的检测器类型 (ArUco 降落 / fractal 降落)
@@ -666,8 +505,8 @@ class AlgoOutputPanel(QGroupBox):
         self._relayout()
 
     def _relayout(self):
-        """按当前顺序重排网格: 顶部调节行 (码边长滑杆 + 降落朝向选择 +
-        字典切换 + 分形配置并排) 在第 0 行横跨全部分组列, 算法分组在其下
+        """按当前顺序重排网格: 顶部调节行 (latched 声明表生成的参数控件,
+        见 __init__) 在第 0 行横跨全部分组列, 算法分组在其下
         (第 1 行) —— 可选项在上、算法输出在下; 每列等宽拉伸, 多余列拉伸
         清零; 可见性由 _update_top_visibility 决定 (隐藏的组件不占布局空间)。
         跨列数用 len(_order) 而非 _lay.columnCount(): 后者是布局当前状态,
