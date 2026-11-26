@@ -77,6 +77,9 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
         # 视频源视图 (画面/底部日志框挂载点/右栏挂载点)
         self.camera_tab = CameraViewWidget(
             self.log.info, host, config.AIRSIM_RPC_PORT, side_panel=True)
+        # 连接纪元 (0->1) 会话重置: 断连再连上 (切机型/UE 重启) 视为新
+        # 会话, 清空旧飞机残留的界面状态 (见 _on_session_reset)
+        self.camera_tab.session_reset.connect(self._on_session_reset)
         # 航向跟随的算法通道转发 (反控算法 → 云台指令/跟随请求, 通道约定
         # 见 config; 回调在 GUI 线程执行, 复用摇杆速率通道的锁)
         self.node.set_gimbal_algo_forwarders(
@@ -325,6 +328,22 @@ class MainWindow(Px4PanelMixin, LinkPanelMixin, VehiclePanelMixin,
             self._fov_pub_last = fov
             self._fov_pub_t = now_mono
             self.node.publish_camera_fov(fov)
+
+    # ---------- 会话重置 (连接纪元 0->1, 见 camera_tab.session_reset) ----------
+
+    def _on_session_reset(self):
+        """断连后重新连上视为新会话 (切机型/UE 重启, 判据: 全体拉图
+        worker 都断过, 单 worker 抖动不触发): 清空旧飞机残留的界面状态。
+        云台侧 (角度回中/跟随退出/FOV 重采/基准校验) 在
+        GimbalController.on_connected 内完成, 这里只清显示层残留:
+        航迹/起飞点/遥测归零 (新心跳 0.5s 内重采)、算法标注与深度悬停
+        缓存清空、目标追踪状态复位。追踪/接管的算法侧状态节点自会经
+        状态话题回传重同步, 不在此强改勾选。"""
+        self.veh_ctrl.reset_session()
+        self.node.reset_session()
+        self._track_tracking = False
+        self.log.info('已建立新连接会话: 界面状态已重置 '
+                      '(云台回中/航迹/遥测/标注/追踪)')
 
     # ---------- ULG 日志分析 (独立窗口, 见 ulg_window.py / config.ULG_LOG_ROOT) ----------
 

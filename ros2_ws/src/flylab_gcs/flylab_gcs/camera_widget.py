@@ -43,11 +43,16 @@ FILE_SPEEDS = (0.5, 1.0, 2.0, 4.0)   # 播放倍速循环档位
 class CameraViewWidget(QWidget):
     # 本机摄像头扫描完成 (菜单在展开状态下也能即时补上新设备)
     cams_found = pyqtSignal()
+    # 连接纪元 (0->1) 会话重置: 全体拉图 worker 断过再连上 (切机型/UE
+    # 重启) 触发, main_window 据此清空旧飞机残留的界面状态
+    session_reset = pyqtSignal()
 
     def __init__(self, log, host, port, side_panel=False, parent=None):
         super().__init__(parent)
         self.log = log
         self.grabber = Grabber(log, host, port)
+        # 会话重置钩子先挂再启动 (emit 跨线程投递, 主窗口 connect 后才消费)
+        self.grabber.session_hook = self.session_reset.emit
         self.grabber.start()
         self._file_map = {}    # 显示名 -> 视频文件完整路径
         self._scanning = False

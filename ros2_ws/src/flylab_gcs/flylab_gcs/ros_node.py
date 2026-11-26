@@ -507,6 +507,14 @@ class GroundStationNode(Node):
             self.anno_fps = self._anno_count / (now - self._anno_t)
             self._anno_count = 0
             self._anno_t = now
+
+    def reset_session(self):
+        """连接纪元 (0->1) 会话重置 (界面线程调用): 清算法标注缓存与深度
+        悬停缓存。断连再连上视为换了飞机/UE 重启, 上一架飞机的叠加标注
+        继续显示会误导; 新标注随算法节点输出自动回填。"""
+        self.anno_groups.clear()
+        self.anno_fps = 0.0
+        self._depth_map = None
         self._anno_last_rx = now
 
     # ---------- 供界面调用 ----------

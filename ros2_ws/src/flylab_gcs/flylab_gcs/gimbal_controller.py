@@ -143,11 +143,13 @@ class GimbalController(threading.Thread):
 
     def on_connected(self):
         """连接纪元 (连接数 0->1) 通知: 云台状态复核 + FOV 重采 + 基准校验。
-        云台状态复核: 保留基准/角度, 复位跟随 + 限位标红, 重下发恢复视角
-        (重采会污染安装基准, 见 _reset_gimbal)。FOV 置 dirty 触发
-        _apply_fov —— 用户未动过滑杆时清空 _fov 走查询相机真实 FOV 采纳
-        路径 (机型切换重建 SimMode 后新相机 FOV 可能不同, 必须重采纳),
-        动过则保留用户值重下发; 算法节点启动即同步。
+        连接纪元即新会话: 全体拉图 worker 都断过才会计数归零 (切机型/
+        UE 重启必经此路, 单 worker 网络抖动不会), 旧飞机的云台角属于
+        上一架飞机 —— 复位为回中 (0,0) 并清下发记录强制重下发 (新机型
+        相机按新 settings 全新生成, 在安装位, 回中下发即安装视角)。
+        FOV 置 dirty 触发 _apply_fov —— 用户未动过滑杆时清空 _fov 走
+        查询相机真实 FOV 采纳路径 (机型切换重建 SimMode 后新相机 FOV
+        可能不同, 必须重采纳), 动过则保留用户值重下发; 算法节点启动即同步。
         安装基准不直接重采 (纯断连时相机可能动过, 直接重采会污染基准),
         置 _resync_mounts 由 _resync_mounts_if_due 校验后决定保留或替换。"""
         self._reset_gimbal()
@@ -506,17 +508,23 @@ class GimbalController(threading.Thread):
         return q_b
 
     def _reset_gimbal(self):
-        """连接建立时云台状态复核 (重连/重 play): 复位跟随/动画/限位标红,
-        置 dirty 触发重下发。安装基准、云台角与下发记录保留 —— RPC 断连
-        不会移动 UE 端相机, 保留的状态仍与实际一致, 重下发即恢复原视角
-        (无跳变, 降落中云台姿态也不会中断); 若按旧逻辑清基准重采, 会把
-        重连前已被转动的相机位姿污染进安装基准 —— 错位视觉上无感, 却让
-        跟随收敛到偏移的航向。UE 重 play 场景: 相机自己回到安装位, 保留
-        的基准仍然正确, 重下发同样一致。航向跟随一并退出 (重连后航向/
-        锚点均失效, 界面按钮随状态同步弹起)。"""
+        """连接纪元 (重连/重 play/切机型) 云台状态复核: 复位跟随/动画/
+        限位标红, 云台角回中并清下发记录, 置 dirty 触发重下发。
+        云台角回中 (0,0): 连接纪元即新会话 (全体拉图 worker 都断过,
+        典型为切机型/UE 重启), 旧角度属于上一架飞机, 保留只会把新相机
+        转到旧视角 —— 新相机关机重建后在安装位, 回中下发即安装视角。
+        安装基准仍保留: 重采会把重连前已被转动的相机位姿污染进基准
+        (错位视觉上无感, 却让跟随收敛到偏移的航向), 由
+        _resync_mounts_if_due 校验后决定保留或替换。
+        清 _gimbal_last/_gimbal_apply_key: 下发记录与新相机无关, 强制
+        全相机重下发。航向跟随一并退出 (重连后航向/锚点均失效, 界面
+        按钮随状态同步弹起)。"""
         with self.lock:
             self._gimbal_anim = None
             self._gimbal_rate = (0.0, 0.0)
+            self._gimbal = (0.0, 0.0)
+            self._gimbal_last = {}
+            self._gimbal_apply_key = None
             self._gimbal_dirty = True
             self._gimbal_blocked = {k: False
                                     for k in self._gimbal_blocked}

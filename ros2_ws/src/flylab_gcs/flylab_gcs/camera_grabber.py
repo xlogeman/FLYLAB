@@ -83,6 +83,10 @@ class Grabber(threading.Thread):
         self._conn_gate = threading.Lock()
         self._conn_count = 0          # 已连接的 worker 数
         self._conn_last_log = 0.0     # 上次"等待 AirSim"日志时刻 (10s 节流)
+        # 连接纪元 (0->1) 会话重置钩子: 全体 worker 断过再连上视为新会话
+        # (切机型/UE 重启), 界面层据此清空旧飞机残留状态。由 camera_widget
+        # 挂到 Qt 信号 (抓取线程只调 emit, 跨线程投递到 GUI 线程执行)
+        self.session_hook = None
         # 本机摄像头/视频文件设备 IO (见 camera_sources.LocalFileReader;
         # 设备仅在抓取线程访问, 播放控制标志位由界面线程设置)
         self.reader = LocalFileReader(log)
@@ -399,9 +403,16 @@ class Grabber(threading.Thread):
         self.gimbal.set_connected(True)
         self.log(f'已连接 AirSim {self.host}:{self.port}')
         if first:
-            # 云台状态复核 + FOV 重采 (云台侧保留基准/角度, 见
+            # 云台状态复核 + FOV 重采 (云台侧回中重下发, 见
             # GimbalController.on_connected)
             self.gimbal.on_connected()
+            # 通知界面层会话重置 (清航迹/遥测/标注/追踪等旧飞机残留)
+            hook = self.session_hook
+            if hook is not None:
+                try:
+                    hook()
+                except Exception as e:
+                    self.log(f'会话重置通知失败: {e}')
         return client
 
     def _airsim_fetch_loop(self, worker_id):

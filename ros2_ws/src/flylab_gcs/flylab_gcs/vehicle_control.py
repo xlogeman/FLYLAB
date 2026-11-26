@@ -75,6 +75,18 @@ class VehicleController(threading.Thread):
         with self._lock:
             return list(self._track), self._home
 
+    def reset_session(self):
+        """连接纪元 (0->1) 会话重置 (界面线程调用): 清航迹/起飞点与遥测
+        显示值。断连再连上视为换了飞机/UE 重启, 旧航迹/行程对新飞机
+        无意义 —— 全部清零, 界面归 "--"/空图, 新心跳 0.5s 内重采。"""
+        with self._lock:
+            self._track = []
+            self._home = None
+            self._tele_t = 0.0
+            self._tele_prev = None
+            for k in ('alt', 'hs', 'vs', 'hdg', 'dist', 'ftime'):
+                self._tele[k] = None
+
     def request(self, key):
         """请求执行飞控命令, 置入队列立即返回 (执行在本线程)。"""
         with self._lock:
