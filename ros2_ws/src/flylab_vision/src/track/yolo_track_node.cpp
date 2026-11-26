@@ -12,9 +12,10 @@
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/algo_info (~30Hz 限频)
 ///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start[/stop]
 ///      (可带模式后缀 " dive_curve"=曲线打击 / " dive_straight"=直线打击 /
-///      " bodyfollow_horiz"=机体跟随-水平, 不带=云台追踪悬停跟拍); 接管 offboard
-///      拿到飞机控制权 (悬停跟拍/曲线打击/直线打击/机体跟随 + 机头跟随,
-///      见 control/track/track_takeover.hpp),
+///      " bodyfollow_horiz"=机体跟随-水平 / " bodyfollow_slant"=机体跟随-直线,
+///      不带=云台追踪悬停跟拍); 接管 offboard
+///      拿到飞机控制权 (悬停跟拍/曲线打击/直线打击/水平跟随/直线跟随 +
+///      机头跟随, 见 control/track/track_takeover.hpp),
 ///      同时云台
 ///      伺服按追踪框相对画面中心的偏移发 /flylab/gimbal_cmd 反控软云台,
 ///      让目标保持在画面中央 (control/track/gimbal_servo.hpp)
@@ -247,19 +248,19 @@ private:
     } else if (msg.data.rfind("track_takeover_start", 0) == 0) {
       // 目标追踪反控 (接管控制菜单): 可带模式后缀 "track_takeover_start
       // dive_curve"=曲线打击 / " dive_straight"=直线打击 / " bodyfollow_horiz"=
-      // 机体跟随-水平 (保持水平距离; bodyfollow_slant=直线跟随预留, 暂按
-      // 悬停跟拍), 不带 = 云台追踪 (悬停跟拍); 四串互不包含, 顺序无关;
-      // 先开亦可, 框选锁定目标后伺服自动介入; 已接管时为模式切换
+      // 机体跟随-水平 (保持水平距离) / " bodyfollow_slant"=机体跟随-直线
+      // (斜距半径+俯角观察角球面跟随), 不带 = 云台追踪 (悬停跟拍); 五串互不包含,
+      // 顺序无关; 先开亦可, 框选锁定目标后伺服自动介入; 已接管时为模式切换
       servo_->set_enabled(true);
       takeover_->activate(
         msg.data.find("bodyfollow_slant") != std::string::npos ?
-        TrackTakeover::Mode::Gimbal :
+        TrackTakeover::Mode::BodyfollowSlant :
         msg.data.find("bodyfollow_horiz") != std::string::npos ?
-        TrackTakeover::Mode::Bodyfollow :
+        TrackTakeover::Mode::BodyfollowHoriz :
         msg.data.find("dive_straight") != std::string::npos ?
-        TrackTakeover::Mode::Straight :
+        TrackTakeover::Mode::DiveStraight :
         msg.data.find("dive_curve") != std::string::npos ?
-        TrackTakeover::Mode::Dive : TrackTakeover::Mode::Gimbal);
+        TrackTakeover::Mode::DiveCurve : TrackTakeover::Mode::Gimbal);
     } else if (msg.data == "track_takeover_stop") {
       servo_->set_enabled(false);
       takeover_->deactivate("地面站取消");

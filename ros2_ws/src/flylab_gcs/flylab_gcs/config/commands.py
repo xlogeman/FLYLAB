@@ -38,13 +38,12 @@ TRACK_BEGIN_CMD = 'track_begin'
 TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
 # 目标追踪反控模式 (菜单子项; 随 track_takeover_start 以模式后缀下发
-# 节点, 如 "track_takeover_start dive_curve", 同 landing_mode 的传参约定)。
-# 悬停跟拍/曲线/直线打击/机体跟随(水平) 为现役功能, 直线跟随为预留接口
-TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 悬停跟拍 (现役)
-TRACK_TAKEOVER_DIVE = 'dive_curve'        # 曲线打击: 两相制导定速撞击 (现役)
-TRACK_TAKEOVER_STRAIGHT = 'dive_straight'  # 直线打击: 全程沿视线不分相 (现役)
-TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow_horiz'  # 机体跟随-水平: 保持水平距离跟随 (现役)
-TRACK_TAKEOVER_BODYFOLLOW_SLANT = 'bodyfollow_slant'  # 机体跟随-直线: 保持斜距跟随 (预留)
+# 节点, 如 "track_takeover_start dive_curve", 同 landing_mode 的传参约定)
+TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 悬停跟拍 (悬停/高度环 + 机头跟随)
+TRACK_TAKEOVER_DIVE_CURVE = 'dive_curve'          # 曲线打击: 两相制导定速撞击
+TRACK_TAKEOVER_DIVE_STRAIGHT = 'dive_straight'    # 直线打击: 全程沿视线不分相
+TRACK_TAKEOVER_BODYFOLLOW_HORIZ = 'bodyfollow_horiz'  # 机体跟随-水平: 保持水平距离跟随
+TRACK_TAKEOVER_BODYFOLLOW_SLANT = 'bodyfollow_slant'  # 机体跟随-直线: 斜距半径 + 俯角观察角球面跟随
 
 # ---------- 手动遥控 (双摇杆 → offboard 速度, 执行节点 flylab_vision/teleop_node) ----------
 TELEOP_START_CMD = 'teleop_start'

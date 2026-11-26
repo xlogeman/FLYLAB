@@ -158,24 +158,28 @@ LATCHED_PARAMS = [
         groups=[('fractal', None), ('landing', 'fractal')]),
     # 目标追踪俯视角度 (度, 向下正): 反控接管中追踪节点高度环据此控制
     # 飞机升降使云台以该俯角注视目标; 未动过不发布 = 不启用高度环。
+    # 直线跟随中该角度即观察角度 (调整时飞机沿斜距半径球面滑动)。
     # auto_sync: 未动过时显示值持续跟随云台当前俯角 (用户一动即停)
     LatchedParam(
         'track_pitch', config.TRACK_PITCH_TOPIC, Float64,
         kind='spin', title='俯视角度 (°)',
         tooltip='反控接管中云台注视目标的俯视角 (向下为正, 水平=0):\n'
                 '设置后飞机自动升降, 直到以该俯视角注视目标;\n'
-                '未设置时反控保持原地悬停。运行中修改立即生效',
+                '未设置时反控保持原地悬停。运行中修改立即生效;\n'
+                '直线跟随时即观察角度 (调整时沿半径球面滑动)',
         lo=config.TRACK_PITCH_MIN, hi=config.TRACK_PITCH_MAX,
         step=config.TRACK_PITCH_STEP, default=config.TRACK_PITCH_DEFAULT,
         suffix='°', width=78, auto_sync=True,
         groups=[('track', None)]),
-    # 目标追踪跟随距离 (米): 机体跟随-水平时距离环保持的水平距离;
-    # 未动过不发布, 节点用参数默认值 bodyfollow_dist_m
+    # 目标追踪跟随距离 (米): 机体跟随时距离环保持的距离 (水平跟随 =
+    # 水平距, 直线跟随 = 斜距半径); 未动过不发布, 节点用参数默认值
+    # bodyfollow_dist_m
     LatchedParam(
         'track_dist', config.TRACK_DIST_TOPIC, Float64,
         kind='spin_f', title='跟随距离 (m)',
-        tooltip='机体跟随 (水平跟随) 时飞机保持与目标的水平距离 (米):\n'
-                '设置后飞机自动前进/后退, 直到距离收敛到该值;\n'
+        tooltip='机体跟随时飞机保持与目标的距离 (米): 水平跟随 = 水平距,\n'
+                '直线跟随 = 斜距半径 (俯角未设 = 保持当前角度只锁半径)。\n'
+                '设置后飞机自动收放, 直到距离收敛到该值;\n'
                 '未设置时用节点默认值 10m。运行中修改立即生效',
         lo=config.TRACK_DIST_MIN, hi=config.TRACK_DIST_MAX,
         step=config.TRACK_DIST_STEP, default=config.TRACK_DIST_DEFAULT,

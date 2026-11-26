@@ -35,6 +35,12 @@ namespace flylab_vision
 ///     近似直线收口; 陡角自动降速是直线打击的固有代价 —— 曲线打击用
 ///     拉角段绕弯换末段全速); 目标方向缺失超过 dive_lost_timeout_sec
 ///     均交还
+///   机体跟随 (Bodyfollow): 保持设定水平距离跟随目标水平移动, 高度环
+///     维持俯视角度 (见 bodyfollow_velocity);
+///   机体跟随-直线 (BodyfollowSlant): 以"跟随距离"为斜距半径 d、
+///     "俯视角度"为观察角度的双环解耦跟随 —— 高度环维持俯视角, 水平环
+///     保持 L = d·cos(p), 调整观察角度时飞机沿半径球面滑动到新观察点
+///     (俯角未设 = 保持当前角度只锁半径), 摆脱贴视线尾随形态
 ///
 /// 与 aruco_landing_node 同一套组件与流程 (px4_offboard_client, offboard
 /// 单写者原则 —— 接管期间偏航指令由本节点注入, 地面站遥控必须退出):
@@ -62,16 +68,18 @@ public:
   /// 地面站 config TRACK_TAKEOVER_* 一致)
   enum class Mode
   {
-    Gimbal,      // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
-    Dive,        // 曲线打击: 两相制导沿视线撞击 (拉角段收敛到撞击带)
-    Straight,    // 直线打击: 全程沿视线飞 (合速度 min(V, D/sinθ), 不分相)
-    Bodyfollow   // 机体跟随 (水平): 保持设定水平距离跟随目标移动
+    Gimbal,          // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随, 无后缀指令)
+    DiveCurve,       // 曲线打击: 两相制导沿视线撞击 (拉角段收敛到撞击带)
+    DiveStraight,    // 直线打击: 全程沿视线飞 (合速度 min(V, D/sinθ), 不分相)
+    BodyfollowHoriz, // 机体跟随 (水平): 保持设定水平距离跟随目标移动
+    BodyfollowSlant  // 机体跟随 (直线): 斜距半径 + 俯角观察角球面跟随
   };
   static const char * mode_name(Mode m)
   {
-    return m == Mode::Dive ? "曲线打击" :
-      m == Mode::Straight ? "直线打击" :
-      m == Mode::Bodyfollow ? "机体跟随" : "云台追踪";
+    return m == Mode::DiveCurve ? "曲线打击" :
+      m == Mode::DiveStraight ? "直线打击" :
+      m == Mode::BodyfollowSlant ? "直线跟随" :
+      m == Mode::BodyfollowHoriz ? "水平跟随" : "云台追踪";
   }
 
   explicit TrackTakeover(rclcpp::Node & node)
@@ -216,8 +224,10 @@ public:
         }
       });
     // 跟随距离目标 (latched, 地面站"跟随距离"输入框): 米, 机体跟随-水平
-    // 时距离环保持的水平距离; 未动过不发布 = 用 bodyfollow_dist_m 参数
-    // 默认值 (与俯视角度同步同一约定)。接管中修改立即生效
+    // 时距离环保持的水平距离; 直线跟随时同一输入框语义为斜距半径 (节点
+    // 经 cos(俯角) 折算成水平距目标, 值域共用); 未动过不发布 = 用
+    // bodyfollow_dist_m 参数默认值 (与俯视角度同步同一约定)。接管中
+    // 修改立即生效
     const auto dist_target_topic = node.declare_parameter<std::string>(
       "dist_target_topic", "/flylab/track_dist");
     dist_target_sub_ = node.create_subscription<std_msgs::msg::Float64>(
@@ -440,17 +450,17 @@ private:
       return;
     }
     // 已接管: 机头跟随 + 模式速度指令 (云台追踪 = 悬停/高度环升降;
-    // 曲线/直线打击 = 沿目标方向, 机体跟随 = 保持水平距离收放; 测量
+    // 曲线/直线打击 = 沿目标方向, 机体跟随 = 保持水平距/斜距半径收放; 测量
     // 缺失超时交还), 心跳随 setpoint 持续发
     follow_->request(true);
-    if (mode_ == Mode::Dive || mode_ == Mode::Straight) {
+    if (mode_ == Mode::DiveCurve || mode_ == Mode::DiveStraight) {
       if (!dive_velocity()) {
         deactivate("打击目标方向丢失");
       }
       return;
     }
-    if (mode_ == Mode::Bodyfollow) {
-      if (!bodyfollow_velocity()) {
+    if (mode_ == Mode::BodyfollowHoriz || mode_ == Mode::BodyfollowSlant) {
+      if (!bodyfollow_velocity(mode_ == Mode::BodyfollowSlant)) {
         deactivate("跟随目标丢失");
       }
       return;
@@ -535,7 +545,7 @@ private:
     const double s_max = std::min(
       1.0, dive_down_max_ms_ / dive_speed_ms_);   // sin(φ_max)
     double v_dn, vh;
-    if (mode_ == Mode::Straight) {
+    if (mode_ == Mode::DiveStraight) {
       // 直线打击: 全程沿视线, 不分相 —— 合速度 = min(V, D/sinθ) 使垂直
       // 分量恒 ≤ 垂直域 D, 航迹始终贴合视线方向 (θ 在锁定时冻结, 纯追踪
       // 直线收口); 陡角自动降速是直线打击的固有代价 (曲线打击用拉角段
@@ -599,27 +609,42 @@ private:
     return true;
   }
 
-  /// 机体跟随速度指令 (水平跟随): 保持设定水平距离 bodyfollow_dist_m
-  /// 跟随目标水平移动。水平速度 = 水平距离误差 P 律 (死区回差 + 中心
-  /// 减速抑摆, 同 alt_vz 手法) + 接近段制动距离限幅 (按剩余误差平方根
-  /// 提前减速, 防冲过设定距离后倒退拉回的极限环), 方向 = 视线方位快闭环
-  /// (同 dive_velocity: 视轴方位 + 像素偏角, sendVelocityFRD 按航向旋
-  /// 水平分量); 垂直维持高度环 alt_vz (俯视角度收敛后两环解耦: 高度保持
-  /// 视线角 θ, 水平收放水平距离)。测量复用俯冲视线状态 (低通/限加速度
-  /// 共用, activate 切模式时统一复位)。丢失三段式 (跟随与打击语义不同:
-  /// 打击丢目标 = 任务终止, 跟随丢目标 = 等追踪器重捕获):
+  /// 机体跟随速度指令 (水平跟随 slant=false / 直线跟随 slant=true):
+  /// 保持设定距离 bodyfollow_dist_m 跟随目标移动 (水平距/斜距半径, 同一
+  /// 地面站"跟随距离"输入框按模式解释)。速度标量 = 距离误差 P 律
+  /// (死区回差 + 中心减速抑摆, 同 alt_vz 手法) + 接近段制动距离限幅
+  /// (按剩余误差平方根提前减速, 防冲过设定距离后倒退拉回的极限环),
+  /// 方向 = 视线方位快闭环 (同 dive_velocity: 视轴方位 + 像素偏角,
+  /// sendVelocityFRD 按航向旋水平分量); 垂直通道随模式:
+  ///   水平跟随: 高度环 alt_vz 独立维持俯视角度 (俯角收敛后两环解耦:
+  ///     高度保持视线角 θ, 水平收放水平距离);
+  ///   直线跟随: "跟随距离"语义 = 斜距半径 d, "俯视角度"作为观察角度
+  ///     —— 高度环照常维持俯视角 (未设置 = 保持当前视角悬停), 水平环
+  ///     保持 L = d·cos(p) (p = 俯视角度设定, 未设用滤波视线角 θ 兜底,
+  ///     即只锁半径观察角自由)。两环与水平跟随同一双环解耦结构, 平衡
+  ///     态 L = d·cosθ ⇔ 斜距 = d 一致收敛; 调整观察角度时飞机沿半径
+  ///     d 的球面滑动到新观察点 (高度与水平距同时改, 半径不变) ——
+  ///     摆脱"贴视线尾随"形态 (尾随来自视线分解把飞机锁在云台-目标
+  ///     连线上, 高度不可控)。方位维度仍自由 (目标直线移动时自然拖到
+  ///     其运动方向后方), 固定方位/绕飞需目标航向估计, 未实现。
+  /// 测量复用俯冲视线状态 (低通/限加速度共用, activate 切模式时统一
+  /// 复位)。丢失三段式 (跟随与打击语义不同: 打击丢目标 = 任务终止,
+  /// 跟随丢目标 = 等追踪器重捕获):
   ///   1. < dive_lost_timeout_sec: 沿最近滤波值惯性跟随 (单帧漏检不刹车)
-  ///   2. < bodyfollow_lost_timeout_sec: 原地跟随 (水平速度经限加速度
-  ///      收到 0, 高度环/机头跟随维持, 等追踪器重捕获 —— 机体不动则目标
-  ///      外观稳定, ReID 相似度回升自动回 TRACK)
+  ///   2. < bodyfollow_lost_timeout_sec: 原地跟随 (速度经限加速度收到 0,
+  ///      机头跟随维持, 等追踪器重捕获 —— 机体不动则目标外观稳定, ReID
+  ///      相似度回升自动回 TRACK)
   ///   3. 曾跟住后持续丢失超长窗: 返回 false 由调用方交还 (不盲飞);
   ///      尚无有效测量 (未框选目标) 时始终悬停等待, 不交还
-  /// 水平距 = h / tanθ (θ = 视轴俯角 + 像素偏角 + 机体俯仰补偿 = 世界系
-  /// 视线角, h = localPosition NED z 取负, 假定 EKF 原点在地面/目标同平面),
-  /// θ ≥ 3° 才可信 (视线近水平反演发散, 视为缺失)
-  bool bodyfollow_velocity()
+  /// 距离 = h / tanθ (θ = 视轴俯角 + 像素偏角 + 机体俯仰补偿 = 世界系
+  /// 视线角, h = localPosition NED z 取负, 假定 EKF 原点在地面/目标同
+  /// 平面), θ ≥ 3° 才可信 (视线近水平反演发散, 视为缺失)。直线跟随的
+  /// 半径语义在目标端折算 (err 对水平距), 面板显示的斜距由
+  /// measure_distance 另行提供, 不走本函数
+  bool bodyfollow_velocity(bool slant)
   {
     double az_raw = 0.0, dist_raw = 0.0, dist_target = 0.0;
+    double pitch_target = std::numeric_limits<double>::quiet_NaN();
     bool fresh = false, stale = false;
     {
       std::lock_guard<std::mutex> lk(mutex_);
@@ -639,9 +664,14 @@ private:
         const auto pos = px4_->localPosition();
         if (pos.z_valid && pos.z < 0.0f && th >= 3.0) {
           dive_az_raw_deg_ = a;
+          // 控制用量统一为水平距 h/tanθ (直线跟随的半径语义在目标端经
+          // cos(p) 折算, 见下 err 计算)
           bodyfollow_dist_raw_m_ =
             -static_cast<double>(pos.z) / std::tan(th * M_PI / 180.0);
           dive_los_t_ = std::chrono::steady_clock::now();
+          if (slant) {
+            dive_theta_raw_deg_ = th;   // 直线跟随: 世界系视线角进滤波
+          }
           fresh = true;
         }
       }
@@ -658,6 +688,7 @@ private:
       az_raw = dive_az_raw_deg_;
       dist_raw = bodyfollow_dist_raw_m_;
       dist_target = bodyfollow_dist_m_;
+      pitch_target = pitch_target_;   // 直线跟随观察角 (度, 下正, NaN=未设)
     }
     // 低通 (同 dive 闸 2): 像素偏角噪声经 1/tanθ 反演放大进距离测量,
     // 方位抖动同样进水平方向; tc 可调, 0 = 不过滤
@@ -666,6 +697,14 @@ private:
     const double az_f = az_raw * M_PI / 180.0;
     dive_az_f_rad_ = std::isnan(dive_az_f_rad_) ? az_f :
       dive_az_f_rad_ + alpha * (az_f - dive_az_f_rad_);
+    if (slant) {
+      // 直线跟随: 世界系视线俯角一并低通 (观察角兜底折算的方向输入;
+      // 状态复用俯冲 dive_theta_f_rad_, activate 切模式统一复位; raw
+      // 与方位/距离一样取最近有效值 —— 惯性跟随段方向不突变)
+      const double tr = dive_theta_raw_deg_ * M_PI / 180.0;
+      dive_theta_f_rad_ = std::isnan(dive_theta_f_rad_) ? tr :
+        dive_theta_f_rad_ + alpha * (tr - dive_theta_f_rad_);
+    }
     bodyfollow_dist_f_m_ = std::isnan(bodyfollow_dist_f_m_) ? dist_raw :
       bodyfollow_dist_f_m_ + alpha * (dist_raw - bodyfollow_dist_f_m_);
     if (std::isnan(bodyfollow_dist_f_m_) || std::isnan(dive_az_f_rad_)) {
@@ -684,9 +723,22 @@ private:
       return true;
     }
     // 距离环 P 律: err > 0 = 目标比设定远 → 前进接近, err < 0 = 太近 →
-    // 倒退拉开; 死区回差 + 中心减速段防测量噪声在零附近推速度抖动
+    // 倒退拉开; 死区回差 + 中心减速段防测量噪声在零附近推速度抖动。
+    // 直线跟随: 跟随距离语义 = 斜距半径, 折算成水平距目标 L = d·cos(p)
+    // (p = 俯视角度设定; 未设用滤波视线角 θ —— 只锁半径观察角自由);
+    // 平衡态 L = d·cosθ ⇔ 斜距 = d, 与高度环 (维持俯角 p) 一致收敛,
+    // 结构同水平跟随的双环解耦 (俯角未收敛期间两环同时动作, 飞机沿
+    // 半径球面滑向新观察点, P 增益 + 制动限幅约束瞬态)
+    double dist_target_eff = dist_target;
+    if (slant) {
+      const double ang = std::isnan(pitch_target) ?
+        dive_theta_f_rad_ : pitch_target * M_PI / 180.0;
+      if (!std::isnan(ang)) {
+        dist_target_eff = dist_target * std::cos(ang);
+      }
+    }
     double vh = 0.0;
-    const double err = bodyfollow_dist_f_m_ - dist_target;
+    const double err = bodyfollow_dist_f_m_ - dist_target_eff;
     const double abs_err = std::fabs(err);
     if (bodyfollow_in_deadband_) {
       if (abs_err < bodyfollow_deadband_m_ * 1.5) {
@@ -723,7 +775,10 @@ private:
       std::clamp(vh, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
     vh = dive_vh_cmd_ms_;
     // 方位快闭环 (同 dive_velocity): 水平速度直接指向视线方位, 机头
-    // 跟随仍运行把 nose 拉回视线; ±45° 限幅 = 云台方位限位
+    // 跟随仍运行把 nose 拉回视线; ±45° 限幅 = 云台方位限位。
+    // 垂直统一走高度环 alt_vz (水平跟随维持俯视角度 / 直线跟随维持
+    // 观察角度, 未设置 = 悬停) —— 直线跟随不再做视线分解, 半径由
+    // "水平环 L = d·cos(p) + 高度环俯角 p" 的几何关系间接保证
     const double a = std::clamp(
       dive_az_f_rad_, -45.0 * M_PI / 180.0, 45.0 * M_PI / 180.0);
     px4_->sendVelocityFRDYawRate(
