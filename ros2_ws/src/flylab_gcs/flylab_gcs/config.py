@@ -235,13 +235,14 @@ TRACK_BEGIN_CMD = 'track_begin'
 # 让目标保持在画面中央; 再点菜单项或停止算法即交还控制权
 TRACK_TAKEOVER_START_CMD = 'track_takeover_start'
 TRACK_TAKEOVER_STOP_CMD = 'track_takeover_stop'
-# 目标追踪反控模式 (菜单三态; 随 track_takeover_start 以模式后缀下发
+# 目标追踪反控模式 (菜单子项; 随 track_takeover_start 以模式后缀下发
 # 节点, 如 "track_takeover_start dive", 同 landing_mode 的传参约定)。
-# 悬停跟拍/曲线/直线打击为现役功能, 机体跟随为预留接口 (节点侧行为待实现)
+# 悬停跟拍/曲线/直线打击/机体跟随(水平) 为现役功能, 直线跟随为预留接口
 TRACK_TAKEOVER_GIMBAL = 'gimbal'          # 悬停跟拍 (现役)
 TRACK_TAKEOVER_DIVE = 'curve_dive'        # 曲线打击: 两相制导定速撞击 (现役)
 TRACK_TAKEOVER_STRAIGHT = 'straight_dive'  # 直线打击: 全程沿视线不分相 (现役)
-TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随: 预留
+TRACK_TAKEOVER_BODYFOLLOW = 'bodyfollow'  # 机体跟随-水平: 保持水平距离跟随 (现役)
+TRACK_TAKEOVER_BODYFOLLOW_SLANT = 'bodyfollow_slant'  # 机体跟随-直线: 保持斜距跟随 (预留)
 # 反控节点状态回传 (engaged=接管成功 / idle=已交还 / failed=接管失败),
 # 地面站据此联动菜单项 (同降落/遥控状态回传模式)
 TRACK_STATUS_TOPIC = '/flylab/track_status'

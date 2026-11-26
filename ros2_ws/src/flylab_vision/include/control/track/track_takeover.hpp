@@ -41,7 +41,8 @@ namespace flylab_vision
 ///   激活: takeoverReset → 定时 tick 跑接管状态机 (心跳预热 → 周期请求 →
 ///         确认), ENGAGED 后持续 sendVelocityFRDYawRate 维持 offboard
 ///         心跳 (云台追踪: 速度=悬停/高度环升降; 俯冲打击: 速度=沿目标
-///         方向定速; yaw 均为机头跟随); 已激活时 activate 即模式切换
+///         方向定速; 机体跟随: 保持设定水平距离收放; yaw 均为机头跟随);
+///         已激活时 activate 即模式切换
 ///   交还: requestLoiter 切回 AUTO.LOITER; 上锁 / OFFBOARD 被外部切换 /
 ///         图像断流 / 接管超时 自动交还并回 idle
 /// 机头跟随: 经 GimbalFollow 组件 (control/common/gimbal_follow.hpp, 通道
@@ -61,14 +62,16 @@ public:
   /// 地面站 config TRACK_TAKEOVER_* 一致)
   enum class Mode
   {
-    Gimbal,     // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
-    Dive,       // 曲线打击: 两相制导沿视线撞击 (拉角段收敛到撞击带)
-    Straight    // 直线打击: 全程沿视线飞 (合速度 min(V, D/sinθ), 不分相)
+    Gimbal,      // 云台追踪: 悬停跟拍 (悬停/高度环 + 机头跟随)
+    Dive,        // 曲线打击: 两相制导沿视线撞击 (拉角段收敛到撞击带)
+    Straight,    // 直线打击: 全程沿视线飞 (合速度 min(V, D/sinθ), 不分相)
+    Bodyfollow   // 机体跟随 (水平): 保持设定水平距离跟随目标移动
   };
   static const char * mode_name(Mode m)
   {
     return m == Mode::Dive ? "曲线打击" :
-      m == Mode::Straight ? "直线打击" : "云台追踪";
+      m == Mode::Straight ? "直线打击" :
+      m == Mode::Bodyfollow ? "机体跟随" : "云台追踪";
   }
 
   explicit TrackTakeover(rclcpp::Node & node)
@@ -180,6 +183,20 @@ public:
       "dive_band_hysteresis_deg", 3.0);   // 撞击带段切换迟滞角 (度)
     dive_vh_accel_ms2_ = node.declare_parameter<double>(
       "dive_vh_accel_ms2", 3.0);    // 水平指令限加速度 (m/s²)
+    // 机体跟随 (水平跟随: 水平距离 P 律 + 视线方位快闭环; 视线滤波/
+    // 限加速度/丢失超时复用俯冲状态)
+    bodyfollow_dist_m_ = node.declare_parameter<double>(
+      "bodyfollow_dist_m", 10.0);   // 保持水平距离 (m)
+    bodyfollow_kp_ = node.declare_parameter<double>(
+      "bodyfollow_kp", 0.5);        // 距离环 P 增益 (m/s 每 m)
+    bodyfollow_speed_max_ms_ = node.declare_parameter<double>(
+      "bodyfollow_speed_max_ms", 4.0);   // 水平速度限幅 (m/s)
+    bodyfollow_deadband_m_ = node.declare_parameter<double>(
+      "bodyfollow_deadband_m", 1.0);     // 距离死区 (m, 回差 1.5×)
+    bodyfollow_slow_m_ = node.declare_parameter<double>(
+      "bodyfollow_slow_m", 5.0);         // 中心减速段宽度 (m)
+    bodyfollow_lost_timeout_sec_ = node.declare_parameter<double>(
+      "bodyfollow_lost_timeout_sec", 5.0);   // 曾跟住后持续丢失交还超时 (s)
     // 俯视角度目标 (latched): 度, 向下正; 未动过不发布 = NaN 不启用
     // (维持悬停)。接管中修改立即生效, 未接管先设置则接管时生效
     const auto pitch_target_topic = node.declare_parameter<std::string>(
@@ -226,7 +243,8 @@ public:
   }
 
   /// 激活反控 (vision_cmd track_takeover_start [mode]): 幂等; 未激活时
-  /// 完整接管, 已激活时仅切换模式 (云台追踪↔俯冲打击, 接管状态不断)
+  /// 完整接管, 已激活时仅切换模式 (云台追踪↔俯冲打击↔机体跟随, 接管
+  /// 状态不断)
   void activate(Mode mode)
   {
     if (active_) {
@@ -234,9 +252,10 @@ public:
         return;
       }
       mode_ = mode;
-      {   // 俯冲方向状态复位: 丢失超时窗口从切换时刻重新起算
+      {   // 视线/距离状态复位 (俯冲/跟随共用): 丢失超时窗口从切换时刻
+          // 重新起算
         std::lock_guard<std::mutex> lk(mutex_);
-        reset_dive_locked();
+        reset_los_locked();
       }
       RCLCPP_INFO(
         node_.get_logger(), "\033[32m目标追踪反控切换模式: %s\033[0m",
@@ -249,7 +268,7 @@ public:
     {   // 死区迟滞复位 (重新收敛; 与 alt_vz 同一把锁, 纪律一致)
       std::lock_guard<std::mutex> lk(mutex_);
       alt_in_deadband_ = false;
-      reset_dive_locked();
+      reset_los_locked();
     }
     px4_->takeoverReset(node_.now());
     notify_frame();
@@ -336,15 +355,18 @@ public:
   }
 
 private:
-  /// 俯冲方向状态复位 (调用方持锁): 丢失超时窗口从复位时刻重新起算;
-  /// 滤波/迟滞/限斜率状态一并复位 (重新激活时飞机近悬停, 水平指令从 0
-  /// 起坡是安全方向)
-  void reset_dive_locked()
+  /// 视线/距离状态复位 (调用方持锁; 俯冲打击与机体跟随共用): 丢失超时
+  /// 窗口从复位时刻重新起算; 滤波/迟滞/限斜率状态一并复位 (重新激活时
+  /// 飞机近悬停, 水平指令从 0 起坡是安全方向)
+  void reset_los_locked()
   {
     dive_theta_raw_deg_ = std::numeric_limits<double>::quiet_NaN();
     dive_az_raw_deg_ = std::numeric_limits<double>::quiet_NaN();
     dive_theta_f_rad_ = std::numeric_limits<double>::quiet_NaN();
     dive_az_f_rad_ = std::numeric_limits<double>::quiet_NaN();
+    bodyfollow_dist_raw_m_ = std::numeric_limits<double>::quiet_NaN();
+    bodyfollow_dist_f_m_ = std::numeric_limits<double>::quiet_NaN();
+    bodyfollow_in_deadband_ = false;
     dive_los_t_ = std::chrono::steady_clock::now();
     dive_in_plunge_ = false;
     dive_vh_cmd_ms_ = 0.0;
@@ -397,11 +419,18 @@ private:
       return;
     }
     // 已接管: 机头跟随 + 模式速度指令 (云台追踪 = 悬停/高度环升降;
-    // 曲线/直线打击 = 沿目标方向, 方向缺失超时交还), 心跳随 setpoint 持续发
+    // 曲线/直线打击 = 沿目标方向, 机体跟随 = 保持水平距离收放; 测量
+    // 缺失超时交还), 心跳随 setpoint 持续发
     follow_->request(true);
     if (mode_ == Mode::Dive || mode_ == Mode::Straight) {
       if (!dive_velocity()) {
         deactivate("打击目标方向丢失");
+      }
+      return;
+    }
+    if (mode_ == Mode::Bodyfollow) {
+      if (!bodyfollow_velocity()) {
+        deactivate("跟随目标丢失");
       }
       return;
     }
@@ -546,6 +575,140 @@ private:
     const double a = std::clamp(az, -45.0 * M_PI / 180.0, 45.0 * M_PI / 180.0);
     px4_->sendVelocityFRDYawRate(
       vh * std::cos(a), vh * std::sin(a), v_dn, follow_yaw_rate());
+    return true;
+  }
+
+  /// 机体跟随速度指令 (水平跟随): 保持设定水平距离 bodyfollow_dist_m
+  /// 跟随目标水平移动。水平速度 = 水平距离误差 P 律 (死区回差 + 中心
+  /// 减速抑摆, 同 alt_vz 手法) + 接近段制动距离限幅 (按剩余误差平方根
+  /// 提前减速, 防冲过设定距离后倒退拉回的极限环), 方向 = 视线方位快闭环
+  /// (同 dive_velocity
+  /// —— 视轴方位 + 像素偏角, sendVelocityFRD 按航向旋水平分量); 垂直
+  /// 维持高度环 alt_vz (俯视角度收敛后两环解耦: 高度保持视线角 θ, 水平
+  /// 收放水平距离)。测量复用俯冲视线状态 (低通/限加速度共用, activate
+  /// 切模式时统一复位)。丢失三段式 (跟随与打击语义不同: 打击丢目标 =
+  /// 任务终止, 跟随丢目标 = 等追踪器重捕获, 不因单次 LOST 弹出交还):
+  ///   1. < dive_lost_timeout_sec: 沿最近滤波值惯性跟随 (单帧漏检不刹车)
+  ///   2. < bodyfollow_lost_timeout_sec: 原地跟随 (水平速度经限加速度
+  ///      收到 0, 高度环/机头跟随维持, 等追踪器重捕获 —— 机体不动则目标
+  ///      外观稳定, ReID 相似度回升自动回 TRACK)
+  ///   3. 曾跟住后持续丢失超长窗: 返回 false 由调用方交还 (不盲飞);
+  ///      尚无有效测量 (未框选目标) 时始终悬停等待, 不交还
+  /// 水平距 = h / tanθ (θ = 视轴俯角 + 像素偏角 + 机体俯仰补偿 = 世界系
+  /// 视线角, h = localPosition NED z 取负, 假定 EKF 原点在地面/目标同平面),
+  /// θ ≥ 3° 才可信 (视线近水平反演发散, 视为缺失)
+  bool bodyfollow_velocity()
+  {
+    double az_raw = 0.0, dist_raw = 0.0;
+    bool fresh = false, stale = false;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      double th = 0.0, a = 0.0;
+      if (measure_locked(&th, &a)) {
+        // 机体俯仰补偿 (同 dive_velocity 的教训): 测量是机体相对量,
+        // 前飞时机体前倾使相对俯角浅于真实视线角 → h/tanθ 把距离高估
+        // (θ=30° 前倾 12° 时高估 ~1.8 倍) → 距离环误判"目标还远"继续
+        // 加速 → 前倾更大 → 正反馈撞上目标。补偿成世界系视线角后距离
+        // 才可信 (悬停时补偿 ≈ 0)
+        const auto att = px4_->attitudeNED();
+        if (att.valid) {
+          th += std::asin(
+            std::clamp(2.0 * (att.x * att.z + att.w * att.y), -1.0, 1.0)) *
+            180.0 / M_PI;
+        }
+        const auto pos = px4_->localPosition();
+        if (pos.z_valid && pos.z < 0.0f && th >= 3.0) {
+          dive_theta_raw_deg_ = th;
+          dive_az_raw_deg_ = a;
+          bodyfollow_dist_raw_m_ =
+            -static_cast<double>(pos.z) / std::tan(th * M_PI / 180.0);
+          dive_los_t_ = std::chrono::steady_clock::now();
+          fresh = true;
+        }
+      }
+      if (!fresh) {
+        // 丢失处理 (见函数头三段式); had = 曾有效测量过
+        const double miss = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - dive_los_t_).count();
+        const bool had = !std::isnan(bodyfollow_dist_raw_m_);
+        if (had && miss > bodyfollow_lost_timeout_sec_) {
+          return false;   // 持续丢失超长窗: 交还 (不盲飞)
+        }
+        stale = had && miss > dive_lost_timeout_sec_;
+      }
+      az_raw = dive_az_raw_deg_;
+      dist_raw = bodyfollow_dist_raw_m_;
+    }
+    // 低通 (同 dive 闸 2): 像素偏角噪声经 1/tanθ 反演放大进距离测量,
+    // 方位抖动同样进水平方向; tc 可调, 0 = 不过滤
+    const double alpha = dive_theta_filter_tc_ > 0.0 ?
+      dt_ / (dive_theta_filter_tc_ + dt_) : 1.0;
+    const double az_f = az_raw * M_PI / 180.0;
+    dive_az_f_rad_ = std::isnan(dive_az_f_rad_) ? az_f :
+      dive_az_f_rad_ + alpha * (az_f - dive_az_f_rad_);
+    bodyfollow_dist_f_m_ = std::isnan(bodyfollow_dist_f_m_) ? dist_raw :
+      bodyfollow_dist_f_m_ + alpha * (dist_raw - bodyfollow_dist_f_m_);
+    if (std::isnan(bodyfollow_dist_f_m_) || std::isnan(dive_az_f_rad_)) {
+      // 尚无有效测量 (未框选目标/丢失窗口内首拍): 悬停保持, 不盲飞
+      px4_->sendVelocityFRDYawRate(0.0, 0.0, alt_vz(), follow_yaw_rate());
+      return true;
+    }
+    // 丢失长窗内 stale = 原地跟随: 水平速度指令经限加速度平滑归零并保持
+    // (斜率状态同步衰减, 重捕获后距离环从 0 附近起坡, 无速度跳变),
+    // 高度环/机头跟随维持, 等追踪器重捕获
+    if (stale) {
+      const double dv_max = dive_vh_accel_ms2_ * dt_;
+      dive_vh_cmd_ms_ = std::clamp(
+        0.0, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+      px4_->sendVelocityFRDYawRate(
+        0.0, 0.0, alt_vz(), follow_yaw_rate());
+      return true;
+    }
+    // 距离环 P 律: err > 0 = 目标比设定远 → 前进接近, err < 0 = 太近 →
+    // 倒退拉开; 死区回差 + 中心减速段防测量噪声在零附近推速度抖动
+    double vh = 0.0;
+    const double err = bodyfollow_dist_f_m_ - bodyfollow_dist_m_;
+    const double abs_err = std::fabs(err);
+    if (bodyfollow_in_deadband_) {
+      if (abs_err < bodyfollow_deadband_m_ * 1.5) {
+        vh = 0.0;
+      } else {
+        bodyfollow_in_deadband_ = false;
+      }
+    } else if (abs_err <= bodyfollow_deadband_m_) {
+      bodyfollow_in_deadband_ = true;
+    }
+    if (!bodyfollow_in_deadband_) {
+      const double u = std::min(1.0, abs_err / bodyfollow_slow_m_);
+      vh = std::clamp(
+        bodyfollow_kp_ * err * u,
+        -bodyfollow_speed_max_ms_, bodyfollow_speed_max_ms_);
+      // 制动距离限幅 (接近段, err > 0): 允许速度 ≤ √(2·a·(err − 余量)),
+      // 即按剩余误差平方根提前减速, 到设定距离前自然减到停 —— 否则全速
+      // 冲进死区后动量+滤波滞后刹不住, 冲过头再触发倒退拉回, 往复成
+      // 极限环。余量含低通滞后补偿: 测量滞后 ≈ 当前指令速度 × tc, 一并
+      // 扣掉 (用斜率状态当前值作速度估计)。后退方向 (err < 0) 远离目标
+      // 无撞风险, 不加限幅
+      if (err > 0.0) {
+        const double margin = bodyfollow_deadband_m_ +
+          dive_vh_cmd_ms_ * dive_theta_filter_tc_;
+        const double brake = std::sqrt(std::max(
+          0.0, 2.0 * dive_vh_accel_ms2_ * (err - margin)));
+        vh = std::min(vh, brake);
+      }
+    }
+    // 限加速度 (同 dive 闸 4, 复用斜率状态): 测量缺失/恢复切换与距离环
+    // 输出的指令阶跃平滑, 实际速度贴指令走
+    const double dv_max = dive_vh_accel_ms2_ * dt_;
+    dive_vh_cmd_ms_ =
+      std::clamp(vh, dive_vh_cmd_ms_ - dv_max, dive_vh_cmd_ms_ + dv_max);
+    vh = dive_vh_cmd_ms_;
+    // 方位快闭环 (同 dive_velocity): 水平速度直接指向视线方位, 机头
+    // 跟随仍运行把 nose 拉回视线; ±45° 限幅 = 云台方位限位
+    const double a = std::clamp(
+      dive_az_f_rad_, -45.0 * M_PI / 180.0, 45.0 * M_PI / 180.0);
+    px4_->sendVelocityFRDYawRate(
+      vh * std::cos(a), vh * std::sin(a), alt_vz(), follow_yaw_rate());
     return true;
   }
 
@@ -699,6 +862,18 @@ private:
     std::numeric_limits<double>::quiet_NaN();  // 滤波后视线方位 (rad, 右正)
   double dive_vh_cmd_ms_ = 0.0;        // 水平指令斜率状态 (m/s)
   std::chrono::steady_clock::time_point dive_los_t_;  // 最近有效方向时刻
+  // ---------- 机体跟随 (水平: 距离环; 滤波/限加速度/丢失复用俯冲状态) ----------
+  double bodyfollow_dist_m_ = 10.0;    // 保持水平距离 (m)
+  double bodyfollow_kp_ = 0.5;         // 距离环 P 增益 (m/s 每 m)
+  double bodyfollow_speed_max_ms_ = 4.0;   // 水平速度限幅 (m/s)
+  double bodyfollow_deadband_m_ = 1.0;     // 距离死区 (m, 回差 1.5×)
+  double bodyfollow_slow_m_ = 5.0;         // 中心减速段宽度 (m)
+  double bodyfollow_lost_timeout_sec_ = 5.0;   // 持续丢失交还超时 (s)
+  bool bodyfollow_in_deadband_ = false;    // 死区状态 (回差迟滞)
+  double bodyfollow_dist_raw_m_ =
+    std::numeric_limits<double>::quiet_NaN();  // 最近有效原始水平距 (m)
+  double bodyfollow_dist_f_m_ =
+    std::numeric_limits<double>::quiet_NaN();  // 滤波后水平距 (m)
 };
 
 }  // namespace flylab_vision

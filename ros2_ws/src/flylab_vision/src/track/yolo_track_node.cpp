@@ -11,9 +11,10 @@
 ///   5. 画面叠加: 检测/目标框转 JSON 标注发 /flylab/annotations (组名 "track")
 ///   6. 面板数据: {"src":"track", ...} 发 /flylab/algo_info (~30Hz 限频)
 ///   7. 目标追踪反控: /flylab/vision_cmd 收 track_takeover_start[/stop]
-///      (可带模式后缀 " curve_dive"=曲线打击 / " straight_dive"=直线打击,
-///      不带=云台追踪悬停跟拍); 接管 offboard 拿到飞机控制权 (悬停跟拍/
-///      曲线打击/直线打击 + 机头跟随, 见 control/track/track_takeover.hpp),
+///      (可带模式后缀 " curve_dive"=曲线打击 / " straight_dive"=直线打击 /
+///      " bodyfollow"=机体跟随-水平, 不带=云台追踪悬停跟拍); 接管 offboard
+///      拿到飞机控制权 (悬停跟拍/曲线打击/直线打击/机体跟随 + 机头跟随,
+///      见 control/track/track_takeover.hpp),
 ///      同时云台
 ///      伺服按追踪框相对画面中心的偏移发 /flylab/gimbal_cmd 反控软云台,
 ///      让目标保持在画面中央 (control/track/gimbal_servo.hpp)
@@ -245,11 +246,16 @@ private:
       begin_req_ = true;
     } else if (msg.data.rfind("track_takeover_start", 0) == 0) {
       // 目标追踪反控 (接管控制菜单): 可带模式后缀 "track_takeover_start
-      // curve_dive"=曲线打击 / " straight_dive"=直线打击 (straight_dive
-      // 含 dive 子串, 须先判), 不带 = 云台追踪 (悬停跟拍); 先开亦可,
-      // 框选锁定目标后伺服自动介入; 已接管时为模式切换
+      // curve_dive"=曲线打击 / " straight_dive"=直线打击 / " bodyfollow"=
+      // 机体跟随-水平 (保持水平距离; bodyfollow_slant=直线跟随预留, 暂按
+      // 悬停跟拍 —— 含 bodyfollow 子串, 须先判长串), 不带 = 云台追踪
+      // (悬停跟拍); 先开亦可, 框选锁定目标后伺服自动介入; 已接管时为模式切换
       servo_->set_enabled(true);
       takeover_->activate(
+        msg.data.find("bodyfollow_slant") != std::string::npos ?
+        TrackTakeover::Mode::Gimbal :
+        msg.data.find("bodyfollow") != std::string::npos ?
+        TrackTakeover::Mode::Bodyfollow :
         msg.data.find("straight_dive") != std::string::npos ?
         TrackTakeover::Mode::Straight :
         msg.data.find("curve_dive") != std::string::npos ?
