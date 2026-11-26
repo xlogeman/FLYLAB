@@ -402,6 +402,12 @@ class GimbalController(threading.Thread):
         self._rate_t_prev = now
         yaw, pitch = self._gimbal
         if self._follow:
+            # 锚点未快照 (跟随刚开启, 世界方位锚点待 _follow_tick 首拍
+            # 测航向后生成) 时先只动俯仰 —— 偏航输入此刻无处写, 直接对
+            # None 锚点做加法会把云台 RPC 线程整个打崩 (None + float),
+            # gimbal_state 断流连带降落/追踪反控的视轴测量失效
+            if self._az_target is None:
+                ry = 0.0
             self._az_target = _wrap180(self._az_target + ry * dt)
             npitch = clamp_gimbal(yaw, pitch + rp * dt)[1]
             if rp > 0:

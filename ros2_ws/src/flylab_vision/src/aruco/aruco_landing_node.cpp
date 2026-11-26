@@ -686,9 +686,6 @@ private:
     yaw_offset_deg_ = msg.data;
     // 偏置变化即重新对齐: 解锁航向、清滤波与计数 (IDLE 中仅存值)
     yaw_aligner_->setOffset(msg.data);
-    RCLCPP_INFO(
-      get_logger(),
-      "降落朝向偏置同步: %.1f° (来自地面站, 将按新朝向重新对齐)", msg.data);
   }
 
   // ---------------- 地面站视场角同步 ----------------

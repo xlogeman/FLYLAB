@@ -365,9 +365,18 @@ private:
     // 当前俯角测量 (度, 下正; 缺失 = null 面板隐藏"俯角"行)
     const double pitch_meas = takeover_->measure_down_deg();
     if (std::isnan(pitch_meas)) {
-      os << ",\"pitch\":null}";
+      os << ",\"pitch\":null";
     } else {
-      os << ",\"pitch\":" << num(pitch_meas) << "}";
+      os << ",\"pitch\":" << num(pitch_meas);
+    }
+    // 当前目标距离 (米; 斜距 dist + 水平距 dist_h, 缺失 = null 面板隐藏行)
+    double dist_h = 0.0;
+    const double dist_meas = takeover_->measure_distance(&dist_h);
+    if (std::isnan(dist_meas)) {
+      os << ",\"dist\":null,\"dist_h\":null}";
+    } else {
+      os << ",\"dist\":" << num(dist_meas)
+         << ",\"dist_h\":" << num(dist_h) << "}";
     }
     std_msgs::msg::String out;
     out.data = os.str();

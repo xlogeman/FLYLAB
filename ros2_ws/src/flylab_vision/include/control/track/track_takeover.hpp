@@ -195,9 +195,6 @@ public:
         std::lock_guard<std::mutex> lk(mutex_);
         if (v != pitch_target_) {
           pitch_target_ = v;
-          RCLCPP_INFO(
-            node_.get_logger(),
-            "\033[32m俯视角度目标: %.0f° (高度环控制飞机升降收敛)\033[0m", v);
         }
       });
     // 云台姿态 (地面站实际下发的相机机体系位姿, 10Hz): 视轴转到机体 FRD
@@ -308,6 +305,34 @@ public:
     double v = 0.0;
     return measure_locked(&v) ? v :
       std::numeric_limits<double>::quiet_NaN();
+  }
+
+  /// 当前目标距离测量 (米): 斜距 = h / sinθ, 水平距离 = h / tanθ;
+  /// θ = 视轴俯角 + 目标像素偏角 (下正), h = localPosition NED z 取负
+  /// (假定 EKF 原点在地面)。返回斜距; horiz_out 非 null 时回写水平距离
+  /// (始终回写, 失败时 NaN)。测量缺失 (云台姿态过期/目标丢失/位置无效/
+  /// 在地面以下) 或 θ < 3° (视线近水平, 反演发散, 数值不可信) 返回 NaN
+  /// —— 面板显示用, 帧上下文调用 (与 measure_down_deg 同约定)
+  double measure_distance(double * horiz_out = nullptr) const
+  {
+    if (horiz_out != nullptr) {
+      *horiz_out = std::numeric_limits<double>::quiet_NaN();
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    double deg = 0.0;
+    if (!measure_locked(&deg) || deg < 3.0) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const auto pos = px4_->localPosition();
+    if (!pos.z_valid || pos.z >= 0.0f) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double h = -static_cast<double>(pos.z);
+    const double rad = deg * M_PI / 180.0;
+    if (horiz_out != nullptr) {
+      *horiz_out = h / std::tan(rad);
+    }
+    return h / std::sin(rad);
   }
 
 private:
