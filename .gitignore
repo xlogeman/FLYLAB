@@ -32,6 +32,9 @@ __pycache__/
 *.swp
 .DS_Store
 
+# ---- CodeBuddy skill 打包产物 (源文件追踪, zip 可由打包脚本再生) ----
+.codebuddy/skills/*.zip
+
 # ---- 超过 GitHub 100MB 限制的大文件 (可重新下载) ----
 px4.1.15.2/gcc-arm-none-eabi-9-2020-q2-update-linux.tar.bz2
 
