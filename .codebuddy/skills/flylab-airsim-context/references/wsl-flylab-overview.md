@@ -17,7 +17,7 @@
 ## 三大自研包（`ros2_ws/src/`）
 
 ### flylab_flight（飞行链路）
-分层设计：`src/sensors/` 传感器层（`airsim_camera`/`airsim_imu`/`airsim_odom`/`airsim_nav`/`airsim_lidar`，统一经 `SimClockSync` 映射到同一时间轴）→ `src/bridges/` 桥接层（坐标系 NED↔FLU 转换、断桨门控、时间对齐、点云去畸变）→ `src/control/` 轨迹跟踪（`tracker_mavros`/`tracker_uxrce` 双链路）。
+分层设计：`src/sensors/` 传感器层（`airsim_camera`/`airsim_imu`/`airsim_odom`/`airsim_nav`/`airsim_lidar`，统一经 `SimClockSync` 映射到同一时间轴；`airsim_lidar` 优先调自研碰撞射线雷达 RPC `getRaycastLidarData`（UE 端 SensorType 12，点云 5 floats/点与 GPULidar 同布局），服务端不可用时自动回退 `getGPULidarData`，走快照时间模型）→ `src/bridges/` 桥接层（坐标系 NED↔FLU 转换、断桨门控、时间对齐、点云去畸变）→ `src/control/` 轨迹跟踪（`tracker_mavros`/`tracker_uxrce` 双链路）。
 
 一键 launch（`ros2 launch flylab_flight <名>`）：
 

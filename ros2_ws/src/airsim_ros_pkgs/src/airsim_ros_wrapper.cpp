@@ -351,6 +351,20 @@ void AirsimROSWrapper::create_ros_pubs_from_settings_json()
                     gpulidar_cnt += 1;
                     break;
                 }
+                // BEIMING patch: 自研碰撞射线雷达（SensorType 12），复用 gpulidar 发布管线与话题，下游零改动
+                case SensorBase::SensorType::RaycastLidar: {
+                    auto raycast_lidar_setting = *static_cast<GPULidarSetting*>(sensor_setting.get());
+                    msr::airlib::GPULidarSimpleParams raycast_params;
+                    raycast_params.initializeFromSettings(raycast_lidar_setting);
+                    append_static_raycastlidar_tf(vehicle_ros.get(), sensor_name, raycast_params);
+
+                    SensorPublisher<sensor_msgs::msg::PointCloud2> sensor_publisher =
+                        create_sensor_publisher<sensor_msgs::msg::PointCloud2>("RaycastLidar sensor", sensor_setting->sensor_name, sensor_setting->sensor_type, curr_vehicle_name + "/gpulidar/points/" + sensor_name, 10);
+                    vehicle_ros->gpulidar_pubs_.emplace_back(sensor_publisher);
+                    raycast_lidar_names_.insert(curr_vehicle_name + "/" + sensor_name);
+                    gpulidar_cnt += 1;
+                    break;
+                }
                 case SensorBase::SensorType::Echo: {
                     auto echo_setting = *static_cast<EchoSetting*>(sensor_setting.get());
                     msr::airlib::EchoSimpleParams params;
@@ -1702,6 +1716,21 @@ void AirsimROSWrapper::append_static_lidar_tf(VehicleROS* vehicle_ros, const std
     vehicle_ros->static_tf_msg_vec_.emplace_back(lidar_tf_msg);
 }
 
+// BEIMING patch: RaycastLidar 静态 TF（external/位姿语义与 GPULidar 一致，数据走新 RPC）
+void AirsimROSWrapper::append_static_raycastlidar_tf(VehicleROS* vehicle_ros, const std::string& raycast_lidar_name, const msr::airlib::GPULidarSimpleParams& raycast_lidar_setting)
+{
+    geometry_msgs::msg::TransformStamped raycast_lidar_tf_msg;
+    if (raycast_lidar_setting.external)
+        raycast_lidar_tf_msg.header.frame_id = world_frame_id_;
+    else
+        raycast_lidar_tf_msg.header.frame_id = vehicle_ros->vehicle_name_;
+    raycast_lidar_tf_msg.child_frame_id = vehicle_ros->vehicle_name_ + "/" + raycast_lidar_name;
+    auto raycast_lidar_data = airsim_client_gpulidar_.getRaycastLidarData(raycast_lidar_name, vehicle_ros->vehicle_name_);
+    raycast_lidar_tf_msg.transform = get_transform_msg_from_airsim(raycast_lidar_data.pose.position, raycast_lidar_data.pose.orientation);
+    convert_tf_msg_to_ros(raycast_lidar_tf_msg);
+    vehicle_ros->static_tf_msg_vec_.emplace_back(raycast_lidar_tf_msg);
+}
+
 void AirsimROSWrapper::append_static_gpulidar_tf(VehicleROS* vehicle_ros, const std::string& gpulidar_name, const msr::airlib::GPULidarSimpleParams& gpulidar_setting)
 {
     geometry_msgs::msg::TransformStamped gpulidar_tf_msg;
@@ -1835,7 +1864,17 @@ void AirsimROSWrapper::gpulidar_timer_cb()
         for (auto& vehicle_name_ptr_pair : vehicle_name_ptr_map_) {
             if (!vehicle_name_ptr_pair.second->gpulidar_pubs_.empty()) {
                 for (auto& gpulidar_publisher : vehicle_name_ptr_pair.second->gpulidar_pubs_) {
-                    auto gpulidar_data = airsim_client_gpulidar_.getGPULidarData(gpulidar_publisher.sensor_name, vehicle_name_ptr_pair.first);
+                    // BEIMING patch: RaycastLidar 走新 RPC，字段搬运到 GPULidarData 后复用原有去重/转换/发布管线
+                    msr::airlib::GPULidarData gpulidar_data;
+                    if (raycast_lidar_names_.count(vehicle_name_ptr_pair.first + "/" + gpulidar_publisher.sensor_name) > 0) {
+                        const auto raycast_data = airsim_client_gpulidar_.getRaycastLidarData(gpulidar_publisher.sensor_name, vehicle_name_ptr_pair.first);
+                        gpulidar_data.time_stamp = raycast_data.time_stamp;
+                        gpulidar_data.point_cloud = raycast_data.point_cloud;
+                        gpulidar_data.pose = raycast_data.pose;
+                    }
+                    else {
+                        gpulidar_data = airsim_client_gpulidar_.getGPULidarData(gpulidar_publisher.sensor_name, vehicle_name_ptr_pair.first);
+                    }
 
                 
                     const std::string key = vehicle_name_ptr_pair.first + "/" + gpulidar_publisher.sensor_name;

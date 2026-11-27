@@ -760,6 +760,42 @@ namespace airlib_rpclib
             }
         };
 
+        // BEIMING patch: 自研碰撞射线雷达数据序列化
+        struct RaycastLidarData {
+
+            msr::airlib::TTimePoint time_stamp;    // timestamp
+            std::vector<float> point_cloud;        // data
+
+            Pose pose;
+
+            MSGPACK_DEFINE_MAP(time_stamp, point_cloud, pose);
+
+            RaycastLidarData()
+            {}
+
+            RaycastLidarData(const msr::airlib::RaycastLidarData& s)
+            {
+                time_stamp = s.time_stamp;
+                point_cloud = s.point_cloud;
+
+                //TODO: remove bug workaround for https://github.com/rpclib/rpclib/issues/152
+                if (point_cloud.size() == 0)
+                    point_cloud.push_back(0);
+                pose = s.pose;
+            }
+
+            msr::airlib::RaycastLidarData to() const
+            {
+                msr::airlib::RaycastLidarData d;
+
+                d.time_stamp = time_stamp;
+                d.point_cloud = point_cloud;
+                d.pose = pose.to();
+
+                return d;
+            }
+        };
+
         struct EchoData {
 
             msr::airlib::TTimePoint time_stamp;    // timestamp

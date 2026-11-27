@@ -186,6 +186,12 @@ __pragma(warning(disable : 4239))
             return pimpl_->client.call("getGPULidarData", lidar_name, vehicle_name).as<RpcLibAdaptorsBase::GPULidarData>().to();
         }
 
+        // BEIMING patch: 自研碰撞射线雷达客户端 API
+        msr::airlib::RaycastLidarData RpcLibClientBase::getRaycastLidarData(const std::string& lidar_name, const std::string& vehicle_name) const
+        {
+            return pimpl_->client.call("getRaycastLidarData", lidar_name, vehicle_name).as<RpcLibAdaptorsBase::RaycastLidarData>().to();
+        }
+
         msr::airlib::EchoData RpcLibClientBase::getEchoData(const std::string& echo_name, const std::string& vehicle_name) const
         {
             return pimpl_->client.call("getEchoData", echo_name, vehicle_name).as<RpcLibAdaptorsBase::EchoData>().to();

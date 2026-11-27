@@ -76,6 +76,7 @@ STRICT_MODE_OFF //todo what does this do?
 #include <tf2_ros/transform_listener.h>
 #include <tf2/convert.h>
 #include <unordered_map>
+#include <set>  // BEIMING patch
 #include <memory>
 
 struct PointXYZRGBI
@@ -319,6 +320,9 @@ private:
     void append_static_camera_tf(VehicleROS* vehicle_ros, const std::string& camera_name, const CameraSetting& camera_setting);
     void append_static_lidar_tf(VehicleROS* vehicle_ros, const std::string& lidar_name, const msr::airlib::LidarSimpleParams& lidar_setting);
     void append_static_gpulidar_tf(VehicleROS* vehicle_ros, const std::string& gpulidar_name, const msr::airlib::GPULidarSimpleParams& gpulidar_setting);
+
+    // BEIMING patch: RaycastLidar 静态 TF（参数复用 GPULidarSimpleParams，external/位姿语义一致）
+    void append_static_raycastlidar_tf(VehicleROS* vehicle_ros, const std::string& raycast_lidar_name, const msr::airlib::GPULidarSimpleParams& raycast_lidar_setting);
     void append_static_echo_tf(VehicleROS* vehicle_ros, const std::string& echo_name, const msr::airlib::EchoSimpleParams& echo_setting);
     void append_static_vehicle_tf(VehicleROS* vehicle_ros, const VehicleSetting& vehicle_setting);
     void set_nans_to_zeros_in_pose(VehicleSetting& vehicle_setting) const;
@@ -453,6 +457,9 @@ private:
     std::unordered_map<std::string, msr::airlib::TTimePoint> lidar_last_timestamps_;
     std::unordered_map<std::string, msr::airlib::TTimePoint> lidar_labels_last_timestamps_;
     std::unordered_map<std::string, msr::airlib::TTimePoint> gpulidar_last_timestamps_;
+
+    // BEIMING patch: RaycastLidar 传感器（vehicle/sensor 名）标记，发布管线复用 gpulidar
+    std::set<std::string> raycast_lidar_names_;
     std::unordered_map<std::string, msr::airlib::TTimePoint> barometer_last_timestamps_;
     std::unordered_map<std::string, msr::airlib::TTimePoint> imu_last_timestamps_;
     std::unordered_map<std::string, msr::airlib::TTimePoint> distance_last_timestamps_;

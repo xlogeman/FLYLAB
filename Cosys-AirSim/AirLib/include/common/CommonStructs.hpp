@@ -463,6 +463,20 @@ namespace airlib
         {}
     };
 
+    // BEIMING patch: 自研碰撞射线雷达（UE SceneQuery 射线，非渲染深度路线）。
+    // point_cloud 每 5 个 float 一个点：x, y, z（传感器系 NED，米）+
+    // rgb（0xRRGGBB 打包进 float，groundtruth 关闭时为 0）+ intensity；
+    // 未命中点补 5 个 0，与 GPULidarData 布局保持一致。
+    struct RaycastLidarData {
+
+        TTimePoint time_stamp = 0;
+        vector<real_T> point_cloud;
+        Pose pose;
+
+        RaycastLidarData()
+        {}
+    };
+
     struct EchoData {
 
         TTimePoint time_stamp = 0;

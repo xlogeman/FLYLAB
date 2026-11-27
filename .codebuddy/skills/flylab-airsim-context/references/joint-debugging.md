@@ -13,6 +13,8 @@
 
 连接方向：WSL → Windows（4560/41451 主动连出）；Windows `ControlIp` → WSL（UE 以 1Hz 向该地址发心跳，抢占 onboard 实例）。
 
+**雷达数据链路（2026-11-27 起）**：UE 端 Lidar1 已切自研碰撞射线雷达 SensorType 12（RaycastLidar，Windows 端 UE 插件实现，浮点精确碰撞射线，无渲染深度精度问题）。WSL 侧 `airsim_lidar` 节点优先调 RPC `getRaycastLidarData`（服务端无此方法/传感器时自动回退 `getGPULidarData`）；`/airsim/lidar/points_raw` 话题格式不变（x,y,z NED + intensity,ring,time）。RaycastLidar 无段级渲染时刻，逐点时间退化为快照模型。若 UE 日志/回退警告出现，先确认 Windows 端 settings.json Lidar1 SensorType=12 且 UE 已重启。
+
 **ControlIp 双通道机制**（`MavLinkMultirotorApi.hpp`）：PX4 模式下 HIL 链路（TCP 4560）只传 HIL_SENSOR 物理数据，其余全部指令走 `ControlIp` 指向的第二条独立 UDP 控制通道（settings 每载具段，**默认 127.0.0.1 仅同机有效**）。跨机时 ControlIp 必须填 PX4 所在机器（WSL）可达 IP，否则出现"HIL 有数据但收不到指令"的半连接假象。
 
 ## 故障 → 责任侧速查

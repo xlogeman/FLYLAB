@@ -124,6 +124,9 @@ namespace airlib
         // sensor APIs
         msr::airlib::LidarData getLidarData(const std::string& lidar_name = "", const std::string& vehicle_name = "") const;
         msr::airlib::GPULidarData getGPULidarData(const std::string& lidar_name = "", const std::string& vehicle_name = "") const;
+
+        // BEIMING patch: 自研碰撞射线雷达客户端 API
+        msr::airlib::RaycastLidarData getRaycastLidarData(const std::string& lidar_name = "", const std::string& vehicle_name = "") const;
         msr::airlib::EchoData getEchoData(const std::string& echo_name = "", const std::string& vehicle_name = "") const;
         msr::airlib::SensorTemplateData getSensorTemplateData(const std::string& echo_name = "", const std::string& vehicle_name = "") const;
         msr::airlib::MarLocUwbSensorData getMarLocUwbSensorData(const std::string& echo_name = "", const std::string& vehicle_name = "") const;

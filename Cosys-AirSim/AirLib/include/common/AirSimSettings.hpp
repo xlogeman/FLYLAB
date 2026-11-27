@@ -361,6 +361,11 @@ namespace airlib
         {
         };
 
+        // BEIMING patch: 自研碰撞射线雷达传感器类型（SensorType 12）
+        struct RaycastLidarSetting : SensorSetting
+        {
+        };
+
 	    struct EchoSetting : SensorSetting
         {
         };
@@ -1796,6 +1801,10 @@ namespace airlib
                 break;
             case SensorBase::SensorType::GPULidar:
                 sensor_setting = std::unique_ptr<SensorSetting>(new GPULidarSetting());
+                break;
+            // BEIMING patch: 自研碰撞射线雷达传感器类型
+            case SensorBase::SensorType::RaycastLidar:
+                sensor_setting = std::unique_ptr<SensorSetting>(new RaycastLidarSetting());
                 break;
             case SensorBase::SensorType::Echo:
                 sensor_setting = std::unique_ptr<SensorSetting>(new EchoSetting());

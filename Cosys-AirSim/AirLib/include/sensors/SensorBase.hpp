@@ -35,7 +35,9 @@ namespace airlib
             GPULidar = 8,
             SensorTemplate = 9,
             MarlocUwb = 10,
-            Wifi = 11
+            Wifi = 11,
+            // BEIMING patch: 自研碰撞射线雷达（Windows 端 UE 插件实现，本端仅客户端解析/RPC）
+            RaycastLidar = 12
         };
 
         SensorBase(const std::string& sensor_name = "")

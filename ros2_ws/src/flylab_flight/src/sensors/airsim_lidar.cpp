@@ -11,6 +11,8 @@
 //     用插件逐段上报的真实渲染时刻生成逐点时间, 下游据此去畸变;
 //     无段数据时回退 CPU 雷达快照模型。
 //   未命中的 (0,0,0) 占位点被过滤。
+//   - 自研碰撞射线雷达 (SensorType 12, getRaycastLidarData): 无段级渲染
+//     时刻, 走 CPU 雷达同款快照时间模型; 首次调用失败自动回退 GPU 雷达。
 // 时间戳: header 经 SimClockSync 统一映射, 与 airsim_imu/airsim_odom
 // 同一时间轴 (详见 airsim_common.hpp)。
 // 参数 (须与 UE 端 settings.json 的 Lidar1 配置一致):
@@ -104,12 +106,40 @@ private:
             std::vector<float> points;
             std::vector<SegStamp> seg_stamps;
             if (use_gpu_lidar_) {
-                auto d = client_->getGPULidarData(lidar_name_, vehicle_name_);
-                sim_stamp = d.time_stamp;
-                points = std::move(d.point_cloud);
-                seg_stamps.reserve(d.segment_stamps.size());
-                for (const auto& s : d.segment_stamps) {
-                    seg_stamps.push_back({s.start_angle, s.sweep_angle, s.time_stamp});
+                // BEIMING patch: UE 端 Lidar1 已切自研碰撞射线雷达 (SensorType 12),
+                // 优先走新 RPC, 服务端不可用时自动回退 getGPULidarData
+                bool fetched = false;
+                if (raycast_mode_ != 0) {
+                    try {
+                        auto d = client_->getRaycastLidarData(lidar_name_, vehicle_name_);
+                        sim_stamp = d.time_stamp;
+                        points = std::move(d.point_cloud);
+                        raycast_mode_ = 1;
+                        fetched = true;
+                    } catch (const rpc::rpc_error& e) {
+                        if (raycast_mode_ == 1) {
+                            throw;
+                        }
+                        raycast_mode_ = 0;
+                        RCLCPP_WARN(this->get_logger(),
+                                    "getRaycastLidarData 不可用 (%s), 回退 getGPULidarData", e.what());
+                    }
+                }
+                if (!fetched) {
+                    try {
+                        auto d = client_->getGPULidarData(lidar_name_, vehicle_name_);
+                        sim_stamp = d.time_stamp;
+                        points = std::move(d.point_cloud);
+                        seg_stamps.reserve(d.segment_stamps.size());
+                        for (const auto& s : d.segment_stamps) {
+                            seg_stamps.push_back({s.start_angle, s.sweep_angle, s.time_stamp});
+                        }
+                    } catch (const rpc::rpc_error& e) {
+                        // BEIMING patch: gpulidar 也拿不到时重置探测状态,
+                        // 下个 tick 重试 raycast, 避免永久锁死在错误通道
+                        raycast_mode_ = -1;
+                        throw;
+                    }
                 }
             } else {
                 auto d = client_->getLidarData(lidar_name_, vehicle_name_);
@@ -240,6 +270,8 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     std::string vehicle_name_, lidar_name_, cloud_frame_;
     bool use_gpu_lidar_ = false;
+    // BEIMING patch: -1 未知(下次尝试 raycast) / 1 raycast 可用 / 0 已回退 gpulidar
+    int raycast_mode_ = -1;
     uint16_t num_channels_ = 16;
     double rotation_hz_ = 10.0, intensity_ = 100.0;
     flylab::SimClockSync clock_sync_;
