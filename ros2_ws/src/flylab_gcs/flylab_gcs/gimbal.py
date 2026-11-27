@@ -4,7 +4,8 @@
 云台运行时状态 (当前角/动画/摇杆角速度/下发指纹/跟随锚点等) 在
 GimbalController (独立线程 + 独立锁, 见 gimbal_controller.py); 本模块
 只放可独立描述的部分: 限位夹紧、相机安装位姿采集。无持久化: 进程重启
-后重新采集 (重连/重 play 保留安装基准不重采, 见 _reset_gimbal)。
+后重新采集 (瞬态重连保留安装基准与云台状态, 仅相机重建判定成立才
+重采/复位, 见 gimbal_controller._classify_epoch)。
 """
 import math
 

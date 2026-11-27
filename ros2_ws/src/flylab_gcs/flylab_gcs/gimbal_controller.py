@@ -86,9 +86,11 @@ class GimbalController(threading.Thread):
         self._gimbal_last = {}     # 最近一批成功下发的机体系姿态 (切相机补发判定用)
         # 各相机最近一次成功下发的机体系位姿 (跨批次累计): 安装基准校验的参照
         self._gimbal_applied_all = {}
-        # 连接纪元待办的安装基准校验标记 (机型切换重建 SimMode 后相机全新生成)
-        self._resync_mounts = True
-        self._resync_retry_t = 0.0    # 校验重试退避 (MountNotReady 时 1s 重试)
+        # 连接纪元待裁决标记: 全体拉图 worker 断开重连 (机型切换/UE 重启/
+        # 瞬态断连都会) 后, 须先用相机位姿比对裁决成因 —— 瞬态断连保留
+        # 云台状态, 相机重建才复位回中; 裁决期间暂停下发 (见 _classify_epoch)
+        self._epoch_pending = True
+        self._epoch_retry_t = 0.0     # 裁决重试退避 (MountNotReady 时 1s 重试)
         self._fov = None           # 全局视场角 (度): 所有相机共用
         # (None=尚未采纳; 连接后查询相机真实 FOV 采纳, 见 _adopt_camera_fov)
         self._fov_user = False     # 用户手动设定过 FOV (True=重连保留用户值)
@@ -142,22 +144,21 @@ class GimbalController(threading.Thread):
             self._connected = bool(ok)
 
     def on_connected(self):
-        """连接纪元 (连接数 0->1) 通知: 云台状态复核 + FOV 重采 + 基准校验。
-        连接纪元即新会话: 全体拉图 worker 都断过才会计数归零 (切机型/
-        UE 重启必经此路, 单 worker 网络抖动不会), 旧飞机的云台角属于
-        上一架飞机 —— 复位为回中 (0,0) 并清下发记录强制重下发 (新机型
-        相机按新 settings 全新生成, 在安装位, 回中下发即安装视角)。
+        """连接纪元 (连接数 0->1) 通知: FOV 重采 + 云台状态待裁决。
+        连接纪元只说明"全体拉图 worker 都断过重连" (机型切换/UE 重启必经
+        此路; UE 侧卡顿令全体 RPC 同时超时的瞬态断连也会), 成因不能只凭
+        断连断定 —— 旧实现一律回中清跟随, 会把正常飞行中的云台误转回
+        安装位 (画面突变)。故置 _epoch_pending, 由云台线程下一拍用相机
+        位姿比对裁决 (_classify_epoch): 相机未重建则原样保留云台角/跟随/
+        锚点并恢复下发, 判定重建才复位回中。
         FOV 置 dirty 触发 _apply_fov —— 用户未动过滑杆时清空 _fov 走
         查询相机真实 FOV 采纳路径 (机型切换重建 SimMode 后新相机 FOV
-        可能不同, 必须重采纳), 动过则保留用户值重下发; 算法节点启动即同步。
-        安装基准不直接重采 (纯断连时相机可能动过, 直接重采会污染基准),
-        置 _resync_mounts 由 _resync_mounts_if_due 校验后决定保留或替换。"""
-        self._reset_gimbal()
+        可能不同, 必须重采纳), 动过则保留用户值重下发; 算法节点启动即同步。"""
         with self.lock:
             if not self._fov_user:
                 self._fov = None
             self._fov_dirty = True
-            self._resync_mounts = True
+            self._epoch_pending = True
 
     def stop(self):
         self.running = False
@@ -513,34 +514,31 @@ class GimbalController(threading.Thread):
                 self._gimbal_dirty = True
         return q_b
 
-    def _reset_gimbal(self):
-        """连接纪元 (重连/重 play/切机型) 云台状态复核: 复位跟随/动画/
-        限位标红, 云台角回中并清下发记录, 置 dirty 触发重下发。
-        云台角回中 (0,0): 连接纪元即新会话 (全体拉图 worker 都断过,
-        典型为切机型/UE 重启), 旧角度属于上一架飞机, 保留只会把新相机
-        转到旧视角 —— 新相机关机重建后在安装位, 回中下发即安装视角。
-        安装基准仍保留: 重采会把重连前已被转动的相机位姿污染进基准
-        (错位视觉上无感, 却让跟随收敛到偏移的航向), 由
-        _resync_mounts_if_due 校验后决定保留或替换。
+    def _reset_gimbal_locked(self):
+        """相机重建判定成立 (机型切换/UE 重启) 后的云台状态复位 (仅云台
+        线程在已持锁时调用): 复位跟随/动画/限位标红, 云台角回中并清
+        下发记录, 置 dirty 触发重下发。
+        云台角回中 (0,0): 相机重建即新会话, 旧角度属于上一架飞机/上一
+        机型, 保留只会把新相机转到旧视角 —— 新相机按 settings 重建后在
+        安装位, 回中下发即安装视角。
         清 _gimbal_last/_gimbal_apply_key: 下发记录与新相机无关, 强制
-        全相机重下发。航向跟随一并退出 (重连后航向/锚点均失效, 界面
+        全相机重下发。航向跟随一并退出 (重建后航向/锚点均失效, 界面
         按钮随状态同步弹起)。"""
-        with self.lock:
-            self._gimbal_anim = None
-            self._gimbal_rate = (0.0, 0.0)
-            self._gimbal = (0.0, 0.0)
-            self._gimbal_last = {}
-            self._gimbal_apply_key = None
-            self._gimbal_dirty = True
-            self._gimbal_blocked = {k: False
-                                    for k in self._gimbal_blocked}
-            self._follow = False
-            self._follow_src = 'ui'
-            self._algo_cmd_t = None
-            self._az_target = None
-            self._veh_yaw_t = None
-            self._veh_yaw_prev = None
-            self._user_yaw_t = None
+        self._gimbal_anim = None
+        self._gimbal_rate = (0.0, 0.0)
+        self._gimbal = (0.0, 0.0)
+        self._gimbal_last = {}
+        self._gimbal_apply_key = None
+        self._gimbal_dirty = True
+        self._gimbal_blocked = {k: False
+                                for k in self._gimbal_blocked}
+        self._follow = False
+        self._follow_src = 'ui'
+        self._algo_cmd_t = None
+        self._az_target = None
+        self._veh_yaw_t = None
+        self._veh_yaw_prev = None
+        self._user_yaw_t = None
 
     def _pose_diff(self, a, b):
         """两个机体系位姿 (位置 Vector3r, 四元数 Vector3r) 的差:
@@ -554,27 +552,32 @@ class GimbalController(threading.Thread):
         ang = 2.0 * math.degrees(math.acos(min(1.0, dot)))
         return dist, ang
 
-    def _resync_mounts_if_due(self, client):
-        """连接纪元后的安装基准校验 (仅云台线程调用, 须在指纹判定前执行)。
+    def _classify_epoch(self, client):
+        """连接纪元后的相机身份裁决 (仅云台线程调用): 用相机"当前位姿"
+        (机体系) 区分瞬态断连与相机重建, 返回 'transient' / 'rebuild' /
+        None (无法裁决, 下拍重试)。
 
-        背景: 机型热切换在 UE 侧整体重建 SimMode, 相机按新机型 settings
-        全新生成 (安装位姿/FOV 可能都不同), 而本模块的基准按会话缓存。
-        重连瞬间机体静止、下发指纹仍命中, 旧基准不会立刻写坏新相机
-        (切换后画面暂时正确); 直到指纹失配 (典型为起飞时机体姿态一变)
-        才把旧机型的安装位姿写到新相机上 —— 表现为"起飞瞬间画面突变
-        成上一个机型的相机视角"。故校验必须先于指纹判定执行, 让基准
-        在起飞前就替换为新机型的安装位姿。
-
-        判定: 新采基准与参照 (缓存基准 / 最近一次成功下发位姿) 一致
-        (姿态差 ≤2° 且位置差 ≤5cm) 视为相机未被重建 (纯断连/UE 重 play,
-        含云台转过情形), 保留旧基准; 都不匹配 => 相机已被重建 => 采纳
-        新基准并失效指纹强制重下发。机体未稳 (MountNotReady) 不阻塞
-        本拍下发, 带 1s 退避置回标记下一拍重试。"""
+        背景: 连接纪元有两种成因, 旧实现一律回中清跟随, 瞬态断连 (如 UE
+        游戏线程卡顿令全体 RPC 同时超时重连, 典型为 UE 侧切操控对象瞬间)
+        会把正常飞行中的云台误转回安装位 (画面突变)。而 GCS 是这些相机
+        位姿的唯一写者 (UE 原生云台稳定已关闭), 故相机当前位姿可精确反映
+        其身份, 且机体系位姿与机体姿态无关, 比对不受飞行姿态影响:
+        - 未被重建: 当前位姿 == 最近一次成功下发位姿 (_gimbal_applied_all)
+          => 瞬态断连, 保留云台状态不回中;
+        - 已被重建 (机型切换/UE 重启): 相机按 settings 在安装位重生,
+          当前位姿 != 最近下发位姿 => 采纳新基准并令调用方复位云台状态
+          (旧角度属于旧相机);
+        - 与安装基准一致但 != 最近下发位姿, 或两者都不匹配 => 同样按
+          重建处理 (保守); 无任何比对参照 (从未下发过, 如首个会话) =>
+          直接按重建处理 (无状态可保留)。
+        任一相机判定重建即整机重建 (重建是原子事件)。None: 机体未稳
+        (MountNotReady, 带 1s 退避) 或全部相机采集失败 —— 调用方暂停
+        下发, 相机保持现状, 下拍重试。"""
         with self.lock:
-            due = self._resync_mounts
-            self._resync_mounts = False
-        if not due:
-            return
+            has_history = bool(self._gimbal_mount) and bool(self._gimbal_applied_all)
+        if not has_history:
+            return 'rebuild'   # 从未下发过: 无状态可保留, 直接按新会话处理
+        verdicts = []
         adopted = False
         for cam, cached in list(self._gimbal_mount.items()):
             if cached is None:
@@ -583,27 +586,31 @@ class GimbalController(threading.Thread):
                 fresh = capture_mount(client, cam)
             except MountNotReady:
                 with self.lock:
-                    if time.monotonic() - self._resync_retry_t >= 1.0:
-                        self._resync_mounts = True
-                        self._resync_retry_t = time.monotonic()
-                continue
+                    if time.monotonic() - self._epoch_retry_t >= 1.0:
+                        self._epoch_retry_t = time.monotonic()
+                return None   # 机体未稳: 本拍不裁决, 下拍重试
             except Exception:
-                continue   # 采集失败: 保留旧基准 (与 per-cam 采集异常同语义)
+                continue   # 采集失败: 该相机跳过 (与 per-cam 采集异常同语义)
             with self.lock:
                 last_applied = self._gimbal_applied_all.get(cam)
-            refs = [cached] + ([last_applied] if last_applied is not None else [])
-            unchanged = any(
-                dist <= MOUNT_RESYNC_POS_M and ang <= MOUNT_RESYNC_ANGLE_DEG
-                for dist, ang in (self._pose_diff(fresh, ref) for ref in refs))
-            if unchanged:
-                continue
+            if last_applied is not None:
+                dist, ang = self._pose_diff(fresh, last_applied)
+                if dist <= MOUNT_RESYNC_POS_M and ang <= MOUNT_RESYNC_ANGLE_DEG:
+                    verdicts.append('transient')   # 位姿与下发记录一致: 相机未被重建
+                    continue
+            verdicts.append('rebuild')
             self._gimbal_mount[cam] = fresh   # 相机已被重建: 采纳新基准
             with self.lock:
                 self._gimbal_last.pop(cam, None)   # 强制该相机重下发
             adopted = True
-        if adopted:
-            with self.lock:
-                self._gimbal_apply_key = None   # 指纹失效: 下一拍立即重下发
+        if not verdicts:
+            return None   # 无可校验相机 (全部采集失败): 下拍重试
+        if 'rebuild' in verdicts:
+            if adopted:
+                with self.lock:
+                    self._gimbal_apply_key = None   # 指纹失效: 下一拍立即重下发
+            return 'rebuild'
+        return 'transient'
 
     def _apply_gimbal(self, client, yaw_deg, pitch_deg, cam_cur, q_b=None):
         """把云台角度经 simSetCameraPose 同步写到 AirSim 相机。
@@ -622,7 +629,27 @@ class GimbalController(threading.Thread):
         仰角 = 安装仰角 + 云台俯仰, roll=0。视线钉在世界系, 方向键与机体
         姿态完全无关。"""
         try:
-            self._resync_mounts_if_due(client)
+            # 连接纪元裁决先于一切下发: 期间相机保持断连前位姿 (暂停下发)
+            with self.lock:
+                epoch = self._epoch_pending
+            if epoch:
+                verdict = self._classify_epoch(client)
+                if verdict == 'transient':
+                    # 瞬态断连: 云台角/跟随/锚点原样保留, 相机停在断连前
+                    # 位姿, 本拍不下发 —— 下一拍按指纹/周期逻辑照常恢复
+                    # 下发, 画面无跳变
+                    with self.lock:
+                        self._epoch_pending = False
+                    return
+                if verdict == 'rebuild':
+                    # 相机已被重建: 复位回中 (清指纹强制全相机重下发),
+                    # 本拍即以 (0,0) + 新安装基准下发安装视角
+                    with self.lock:
+                        self._epoch_pending = False
+                        self._reset_gimbal_locked()
+                        yaw_deg, pitch_deg = self._gimbal
+                else:
+                    return   # 裁决未完成 (机体未稳/采集失败): 下拍重试
             if q_b is None:
                 q_b = client.simGetGroundTruthKinematics(VEHICLE).orientation
             # 指纹 = (机体姿态, 云台角, 当前相机), 姿态按四元数夹角容差判定

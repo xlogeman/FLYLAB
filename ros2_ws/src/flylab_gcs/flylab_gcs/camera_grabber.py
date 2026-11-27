@@ -403,8 +403,8 @@ class Grabber(threading.Thread):
         self.gimbal.set_connected(True)
         self.log(f'已连接 AirSim {self.host}:{self.port}')
         if first:
-            # 云台状态复核 + FOV 重采 (云台侧回中重下发, 见
-            # GimbalController.on_connected)
+            # FOV 重采 + 云台状态待裁决 (云台线程下一拍按相机位姿比对
+            # 区分瞬态断连/相机重建, 瞬态不回中, 见 GimbalController.on_connected)
             self.gimbal.on_connected()
             # 通知界面层会话重置 (清航迹/遥测/标注/追踪等旧飞机残留)
             hook = self.session_hook
